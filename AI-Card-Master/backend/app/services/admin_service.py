@@ -81,7 +81,14 @@ class AdminService:
         )
         total_users_stmt: Select[tuple[int]] = select(func.count(User.id))
         active_pro_stmt: Select[tuple[int]] = select(func.count(User.id)).where(
-            User.subscription_status == SubscriptionStatus.PRO
+            User.subscription_status.in_(
+                [
+                    SubscriptionStatus.START,
+                    SubscriptionStatus.PRO,
+                    SubscriptionStatus.HALF_YEAR,
+                    SubscriptionStatus.YEAR,
+                ]
+            )
         )
 
         generations_today_result = await self._db_session.scalar(generations_today_stmt)

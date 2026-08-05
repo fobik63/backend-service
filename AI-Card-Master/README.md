@@ -206,3 +206,58 @@ curl -X POST "http://127.0.0.1:8000/api/v1/images/upload" \
   -H "Content-Type: multipart/form-data" \
   -F "file=@./sample.jpg"
 ```
+
+## Durable Generation Pipeline (Celery + Redis)
+
+The production generation path is DB-backed and does not wait for image
+providers inside an HTTP request:
+
+- `POST /api/v1/generations` returns HTTP `202` with a stable `task_id`.
+- `GET /api/v1/generations/{task_id}` returns canonical PostgreSQL state.
+- `POST /api/v1/webhooks/midjourney/{provider}` persists an authenticated,
+  idempotent callback and acknowledges it before post-processing.
+- PostgreSQL outbox rows survive Redis/broker restarts. Celery Beat dispatches
+  committed rows and performs one-shot recovery checks for missed callbacks.
+- Paid generation tries configured Midjourney-compatible webhook adapters in
+  order, then degrades to Stable Diffusion with a warning.
+
+`useapi.net` ended Midjourney support on 24 June 2026 and is not a production
+default. Configure an active proxy through `MIDJOURNEY_PROVIDERS`; the exact
+adapter contract and credentials are deployment-specific.
+
+### Backend processes
+
+```bash
+cd backend
+python -m venv .venv
+# activate the virtual environment, then:
+python -m pip install -r requirements.txt
+alembic upgrade head
+
+# API
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+# Linux production worker (prefork)
+celery -A app.infrastructure.celery_app:celery_app worker \
+  --loglevel=INFO \
+  -Q generation.submit,generation.finalize,generation.recovery
+
+# Durable outbox dispatcher and missed-webhook recovery schedule
+celery -A app.infrastructure.celery_app:celery_app beat --loglevel=INFO
+```
+
+For local Windows development, add `--pool=solo` to the worker command. Run
+Redis and PostgreSQL before API/worker/beat. `/health/live` checks the process;
+`/health/ready` reports PostgreSQL, Redis, and S3 readiness independently.
+
+### Clean Architecture boundaries
+
+- `app/domain`: strict Pydantic v2 state and error contracts.
+- `app/application`: generation use cases and dependency-inversion ports.
+- `app/infrastructure`: SQLAlchemy, Redis, Celery, and provider adapters.
+- `app/api`: thin HTTP validation/authentication and response mapping.
+- `app/services`: preserved AI/image services wrapped by application ports.
+
+Image post-processing keeps the original product pixels, creates deterministic
+contact/ambient shadows, blends only the edge ring, and applies pixel-hash
+verified lossless optimisation before S3/ZIP storage.

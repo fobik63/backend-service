@@ -1,6 +1,6 @@
 """Service layer: AI and image processing business logic."""
 
-from app.services.ai_engine import generate_product_image
+from app.services.ai_engine import generate_product_image, generate_product_image_for_tariff
 from app.services.admin_service import (
     AdminErrorLogView,
     AdminNotFoundError,
@@ -9,6 +9,15 @@ from app.services.admin_service import (
     AdminStatistics,
     AdminUserView,
     AdminValidationError,
+)
+from app.services.billing_service import (
+    BillingError,
+    BillingNotFoundError,
+    BillingResult,
+    BillingService,
+    BillingValidationError,
+    compute_subscription_end,
+    describe_tariff,
 )
 from app.services.infographic_service import (
     InfographicPackage,
@@ -20,16 +29,45 @@ from app.services.infographic_service import (
     TextPlacement,
     generate_infographic_package,
 )
+from app.services.s3_storage import (
+    S3StorageConfigurationError,
+    S3StorageError,
+    S3UploadResult,
+    SelectelS3Storage,
+    get_s3_storage,
+)
 from app.services.series_generator import (
+    DEFAULT_SLIDE_OVERLAY_TEXTS,
+    SeriesArchiveResult,
     SeriesGenerationError,
     SeriesResult,
     SeriesTask,
+    apply_text_overlays_to_series,
     build_series_tasks,
+    build_series_zip_bytes,
     generate_slide_series,
+    generate_slide_series_archive,
+    package_series_archive_to_s3,
+    save_series_images_locally,
+)
+from app.services.tariffs import (
+    TARIFF_CATALOG,
+    TariffPlan,
+    get_tariff_plan,
+    list_tariff_plans,
+)
+from app.services.yookassa_service import (
+    YooKassaConfigurationError,
+    YooKassaError,
+    YooKassaPaymentCreated,
+    YooKassaService,
+    YooKassaUpstreamError,
+    get_yookassa_service,
 )
 
 __all__ = [
     "generate_product_image",
+    "generate_product_image_for_tariff",
     "AdminService",
     "AdminServiceError",
     "AdminNotFoundError",
@@ -37,6 +75,13 @@ __all__ = [
     "AdminStatistics",
     "AdminUserView",
     "AdminErrorLogView",
+    "BillingService",
+    "BillingError",
+    "BillingNotFoundError",
+    "BillingValidationError",
+    "BillingResult",
+    "compute_subscription_end",
+    "describe_tariff",
     "LLMConfig",
     "TextPlacement",
     "InfographicPackage",
@@ -45,9 +90,31 @@ __all__ = [
     "InfographicValidationError",
     "LLMIntegrationError",
     "generate_infographic_package",
+    "SelectelS3Storage",
+    "S3StorageError",
+    "S3StorageConfigurationError",
+    "S3UploadResult",
+    "get_s3_storage",
     "SeriesTask",
     "SeriesResult",
+    "SeriesArchiveResult",
     "SeriesGenerationError",
+    "DEFAULT_SLIDE_OVERLAY_TEXTS",
     "build_series_tasks",
+    "build_series_zip_bytes",
     "generate_slide_series",
+    "generate_slide_series_archive",
+    "package_series_archive_to_s3",
+    "save_series_images_locally",
+    "apply_text_overlays_to_series",
+    "TARIFF_CATALOG",
+    "TariffPlan",
+    "get_tariff_plan",
+    "list_tariff_plans",
+    "YooKassaService",
+    "YooKassaError",
+    "YooKassaConfigurationError",
+    "YooKassaUpstreamError",
+    "YooKassaPaymentCreated",
+    "get_yookassa_service",
 ]

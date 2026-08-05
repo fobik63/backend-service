@@ -1,0 +1,123 @@
+{
+  "version": 1,
+  "description": "Niche prompt formulas for marketplace card series (perfume, clothing, electronics).",
+  "niches": {
+    "perfume": {
+      "title": "Парфюмерия",
+      "aliases": ["perfume", "fragrance", "parfum", "парфюмерия", "парфюм", "духи"],
+      "negative_prompt": "extra bottles, plastic cheap look, cluttered shelf, watermark, text artifacts, deformed glass",
+      "color_palette": ["#F5E6D3", "#2C1810", "#C9A86C", "#FFFFFF"],
+      "lifestyle_scene": "stylish marble vanity or walnut shelf in a premium home interior, soft golden-hour window light",
+      "slides": {
+        "cover": {
+          "style": "studio hero bottle",
+          "prompt_formula": "Centered perfume bottle hero shot, crystal glass reflections, soft gradient mist, luxury studio lighting, clean negative space at the top for headline, photorealistic, 8k",
+          "overlay_style": "Luxury",
+          "default_overlay_text": "Аромат, который запоминают"
+        },
+        "macro": {
+          "style": "macro glass and liquid",
+          "prompt_formula": "Extreme macro of perfume bottle glass, engraved cap details, shimmering liquid inside, micro-contrast, premium material close-up, photorealistic",
+          "overlay_style": "Minimal",
+          "default_overlay_text": "Премиальное стекло"
+        },
+        "lifestyle": {
+          "style": "vanity lifestyle",
+          "prompt_formula": "Perfume bottle placed on {lifestyle_scene}, shallow depth of field, aspirational beauty lifestyle, natural reflections, no clutter",
+          "overlay_style": "Luxury",
+          "default_overlay_text": "Ваш ритуал красоты"
+        },
+        "technical": {
+          "style": "specs neutral",
+          "prompt_formula": "Perfume bottle on clean neutral seamless background, even softbox light, safe empty zones for volume/notes specs overlay, catalogue accuracy",
+          "overlay_style": "Minimal",
+          "default_overlay_text": "Стойкость • Шлейф • Ноты"
+        },
+        "trust": {
+          "style": "trust seal aesthetic",
+          "prompt_formula": "Elegant perfume composition with soft bokeh, premium gift-unboxing mood, space for authenticity badge, calm luxury palette",
+          "overlay_style": "Bold",
+          "default_overlay_text": "Оригинал • Гарантия"
+        }
+      }
+    },
+    "clothing": {
+      "title": "Одежда",
+      "aliases": ["clothing", "apparel", "fashion", "одежда", "худи", "платье", "куртка"],
+      "negative_prompt": "deformed body, extra limbs, wrinkled cheap fabric, wrong proportions, watermark, logo copy, messy background",
+      "color_palette": ["#F7F4EF", "#1A1A1A", "#8B7355", "#E8E4DE"],
+      "lifestyle_scene": "bright minimal loft apartment or clean urban street, soft daylight, fashion editorial mood",
+      "slides": {
+        "cover": {
+          "style": "apparel hero flat/ghost",
+          "prompt_formula": "E-commerce clothing hero: garment perfectly centered, crisp fabric texture, professional catalog lighting, clean negative space for title, photorealistic marketplace card",
+          "overlay_style": "Bold",
+          "default_overlay_text": "Новая коллекция"
+        },
+        "macro": {
+          "style": "fabric texture macro",
+          "prompt_formula": "Macro close-up of clothing fabric weave, stitching quality, zipper or button detail, tactile premium textile realism",
+          "overlay_style": "Minimal",
+          "default_overlay_text": "Плотность ткани"
+        },
+        "lifestyle": {
+          "style": "street/interior lookbook",
+          "prompt_formula": "Clothing item styled in {lifestyle_scene}, natural pose-friendly composition, fashion lookbook lighting, believable shadows",
+          "overlay_style": "Luxury",
+          "default_overlay_text": "Стиль на каждый день"
+        },
+        "technical": {
+          "style": "size and material specs",
+          "prompt_formula": "Garment on neutral seamless background, front-facing, even light, reserved zones for size chart and material composition overlays",
+          "overlay_style": "Minimal",
+          "default_overlay_text": "Состав • Размеры • Уход"
+        },
+        "trust": {
+          "style": "quality trust",
+          "prompt_formula": "Premium apparel presentation emphasizing neat seams and finish, soft studio light, space for quality guarantee badge",
+          "overlay_style": "Bold",
+          "default_overlay_text": "Качественный пошив"
+        }
+      }
+    },
+    "electronics": {
+      "title": "Электроника",
+      "aliases": ["electronics", "gadgets", "tech", "электроника", "гаджет", "наушники", "смартфон"],
+      "negative_prompt": "cheap plastic glare, wrong ports, melted edges, extra buttons, watermark, unreadable screens, clutter",
+      "color_palette": ["#0B0F14", "#00D1FF", "#E6EEF5", "#5B6B7A"],
+      "lifestyle_scene": "modern desk setup with soft LED accent light, clean tech workspace, subtle reflections on matte surfaces",
+      "slides": {
+        "cover": {
+          "style": "tech product hero",
+          "prompt_formula": "Centered electronics product hero shot, precise edges, controlled specular highlights, dark-to-light gradient studio, space for headline, ultra-sharp photorealism",
+          "overlay_style": "Bold",
+          "default_overlay_text": "Технологии нового уровня"
+        },
+        "macro": {
+          "style": "ports and materials macro",
+          "prompt_formula": "Macro detail of device materials, ports, buttons, antenna lines or mesh, engineering precision close-up, crisp micro-contrast",
+          "overlay_style": "Minimal",
+          "default_overlay_text": "Точная сборка"
+        },
+        "lifestyle": {
+          "style": "desk lifestyle",
+          "prompt_formula": "Device placed in {lifestyle_scene}, believable scale, soft ambient tech lighting, lifestyle usability scene without clutter",
+          "overlay_style": "Luxury",
+          "default_overlay_text": "В вашем пространстве"
+        },
+        "technical": {
+          "style": "specs sheet ready",
+          "prompt_formula": "Electronics product on clean neutral background, orthographic-friendly angle, even light, large safe zones for battery/CPU/spec callouts",
+          "overlay_style": "Minimal",
+          "default_overlay_text": "Характеристики"
+        },
+        "trust": {
+          "style": "warranty trust",
+          "prompt_formula": "Premium tech still-life with confident minimal composition, soft rim light, reserved area for warranty and authenticity badge",
+          "overlay_style": "Bold",
+          "default_overlay_text": "Гарантия производителя"
+        }
+      }
+    }
+  }
+}

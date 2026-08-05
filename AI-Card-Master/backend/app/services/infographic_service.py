@@ -169,24 +169,46 @@ class InfographicPackage:
 class InfographicService:
     """Main service class for copy generation and visual text placement."""
 
-    def __init__(self, llm_config: LLMConfig | None = None) -> None:
-        self._llm_config = llm_config or LLMConfig.from_env()
+    def __init__(
+        self,
+        llm_config: LLMConfig | None = None,
+        *,
+        enable_llm: bool = True,
+    ) -> None:
+        """Create service.
 
-        self._client = httpx.AsyncClient(
-            base_url=self._llm_config.base_url.rstrip("/"),
-            timeout=httpx.Timeout(self._llm_config.timeout_seconds),
-            limits=httpx.Limits(
-                max_connections=self._llm_config.max_connections,
-                max_keepalive_connections=self._llm_config.max_keepalive_connections,
-                keepalive_expiry=30.0,
-            ),
-            http2=True,
-        )
+        Args:
+            llm_config: Explicit LLM config. When omitted and `enable_llm=True`,
+                config is loaded from environment (original behavior).
+            enable_llm: Set False for Pillow-only overlay workflows that must not
+                require `LLM_API_KEY` (used by 5-slide text overlay pipeline).
+        """
+
+        if llm_config is not None:
+            self._llm_config: LLMConfig | None = llm_config
+        elif enable_llm:
+            self._llm_config = LLMConfig.from_env()
+        else:
+            self._llm_config = None
+
+        self._client: httpx.AsyncClient | None = None
+        if self._llm_config is not None:
+            self._client = httpx.AsyncClient(
+                base_url=self._llm_config.base_url.rstrip("/"),
+                timeout=httpx.Timeout(self._llm_config.timeout_seconds),
+                limits=httpx.Limits(
+                    max_connections=self._llm_config.max_connections,
+                    max_keepalive_connections=self._llm_config.max_keepalive_connections,
+                    keepalive_expiry=30.0,
+                ),
+                http2=True,
+            )
 
     async def aclose(self) -> None:
         """Close underlying HTTP resources."""
 
-        await self._client.aclose()
+        if self._client is not None:
+            await self._client.aclose()
 
     async def generate_infographic_package(
         self,
@@ -243,6 +265,41 @@ class InfographicService:
             variants=variants,
         )
 
+    async def overlay_text_on_image(
+        self,
+        product_image: bytes,
+        text: str,
+        style_name: Literal["Minimal", "Bold", "Luxury"] = "Bold",
+    ) -> bytes:
+        """Overlay advertising text onto a product slide (Pillow).
+
+        Public helper used by the 5-slide series pipeline. Detects a free
+        background region and renders the given text with the selected style.
+        """
+
+        if not isinstance(product_image, (bytes, bytearray)) or not product_image:
+            raise InfographicValidationError("product_image must be non-empty bytes.")
+        if not isinstance(text, str) or not text.strip():
+            raise InfographicValidationError("text cannot be empty.")
+
+        placement = await asyncio.to_thread(self._detect_free_text_area, product_image)
+        presets = {preset.name: preset for preset in self._get_style_presets()}
+        preset = presets.get(style_name) or presets["Bold"]
+
+        try:
+            return await asyncio.to_thread(
+                self._render_preview_with_style,
+                product_image,
+                text.strip(),
+                placement,
+                preset,
+            )
+        except InfographicServiceError:
+            raise
+        except Exception as exc:
+            raise InfographicServiceError("Failed to overlay text on image.") from exc
+
+
     def _validate_input(self, product_image: bytes, thesis_ru: str) -> None:
         """Validate request payload before external calls."""
 
@@ -259,6 +316,11 @@ class InfographicService:
 
     async def _expand_thesis_to_headline(self, thesis_ru: str) -> str:
         """Use selected LLM provider to transform thesis into ad headline."""
+
+        if self._llm_config is None or self._client is None:
+            raise LLMIntegrationError(
+                "LLM is not configured. Pass llm_config or set enable_llm=True."
+            )
 
         try:
             if self._llm_config.provider == "openai":
@@ -399,6 +461,9 @@ class InfographicService:
         payload: dict[str, object],
     ) -> httpx.Response:
         """POST request with retry on transient failures."""
+
+        if self._client is None or self._llm_config is None:
+            raise LLMIntegrationError("LLM HTTP client is not initialized.")
 
         attempts = self._llm_config.max_retries + 1
         last_error: Exception | None = None
@@ -964,6 +1029,7 @@ def _env_float(key: str, default: float) -> float:
 
 # Lazy singleton for app-wide reuse.
 _default_infographic_service: InfographicService | None = None
+_overlay_only_service: InfographicService | None = None
 
 
 def get_infographic_service() -> InfographicService:
@@ -975,13 +1041,25 @@ def get_infographic_service() -> InfographicService:
     return _default_infographic_service
 
 
+def get_overlay_service() -> InfographicService:
+    """Get Pillow-only overlay service (no LLM_API_KEY required)."""
+
+    global _overlay_only_service
+    if _overlay_only_service is None:
+        _overlay_only_service = InfographicService(enable_llm=False)
+    return _overlay_only_service
+
+
 async def close_infographic_service() -> None:
     """Close singleton resources (recommended during app shutdown)."""
 
-    global _default_infographic_service
+    global _default_infographic_service, _overlay_only_service
     if _default_infographic_service is not None:
         await _default_infographic_service.aclose()
         _default_infographic_service = None
+    if _overlay_only_service is not None:
+        await _overlay_only_service.aclose()
+        _overlay_only_service = None
 
 
 async def generate_infographic_package(product_image: bytes, thesis_ru: str) -> InfographicPackage:

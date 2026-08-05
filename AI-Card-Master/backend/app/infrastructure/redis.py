@@ -1,0 +1,129 @@
+"""Async Redis client used as an expendable cache and circuit-breaker store."""
+
+from __future__ import annotations
+
+import json
+import logging
+from typing import Any
+
+from redis.asyncio import Redis
+from redis.exceptions import RedisError
+
+from app.core.config import get_settings
+
+logger = logging.getLogger(__name__)
+
+
+class RedisUnavailableError(RuntimeError):
+    """Redis operation failed; callers may fall back to PostgreSQL/local data."""
+
+
+_redis_client: Redis | None = None
+
+
+def get_redis_client() -> Redis:
+    """Return the process-local lazy async Redis client."""
+
+    global _redis_client
+    if _redis_client is None:
+        _redis_client = Redis.from_url(
+            get_settings().redis_url,
+            encoding="utf-8",
+            decode_responses=True,
+            health_check_interval=30,
+            socket_connect_timeout=2,
+            socket_timeout=3,
+            retry_on_timeout=True,
+        )
+    return _redis_client
+
+
+async def close_redis_client() -> None:
+    """Close the process-local Redis connection pool."""
+
+    global _redis_client
+    if _redis_client is not None:
+        await _redis_client.aclose()
+        _redis_client = None
+
+
+async def redis_healthcheck() -> bool:
+    """Return Redis availability without raising into a health endpoint."""
+
+    try:
+        return bool(await get_redis_client().ping())
+    except RedisError:
+        logger.warning("Redis health check failed", exc_info=True)
+        return False
+
+
+async def cache_json(key: str, payload: dict[str, Any], ttl_seconds: int) -> None:
+    """Store compact JSON with a TTL."""
+
+    try:
+        encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        await get_redis_client().set(key, encoded, ex=ttl_seconds)
+    except (RedisError, TypeError, ValueError) as exc:
+        raise RedisUnavailableError("Redis JSON write failed.") from exc
+
+
+async def get_cached_json(key: str) -> dict[str, Any] | None:
+    """Read a cached JSON object."""
+
+    try:
+        raw = await get_redis_client().get(key)
+    except RedisError as exc:
+        raise RedisUnavailableError("Redis JSON read failed.") from exc
+    if raw is None:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError) as exc:
+        await get_redis_client().delete(key)
+        raise RedisUnavailableError("Redis JSON value is invalid.") from exc
+    return parsed if isinstance(parsed, dict) else None
+
+
+async def is_provider_circuit_open(provider_name: str) -> bool:
+    """Return whether a provider is temporarily removed from the pool."""
+
+    try:
+        value = await get_redis_client().get(f"provider:circuit:{provider_name}:open")
+        return value is not None
+    except RedisError:
+        # Redis failure must not take generation down. Try the provider.
+        return False
+
+
+async def record_provider_success(provider_name: str) -> None:
+    """Reset provider failure counters after a successful operation."""
+
+    try:
+        await get_redis_client().delete(
+            f"provider:circuit:{provider_name}:failures",
+            f"provider:circuit:{provider_name}:open",
+        )
+    except RedisError:
+        logger.warning("Could not reset provider circuit for %s", provider_name)
+
+
+async def record_provider_failure(provider_name: str) -> None:
+    """Increment failures and open the circuit when the threshold is reached."""
+
+    settings = get_settings()
+    failures_key = f"provider:circuit:{provider_name}:failures"
+    open_key = f"provider:circuit:{provider_name}:open"
+    try:
+        client = get_redis_client()
+        failures = int(await client.incr(failures_key))
+        await client.expire(
+            failures_key, settings.midjourney_circuit_breaker_ttl_seconds
+        )
+        if failures >= settings.midjourney_circuit_breaker_failures:
+            await client.set(
+                open_key,
+                "1",
+                ex=settings.midjourney_circuit_breaker_ttl_seconds,
+            )
+    except RedisError:
+        logger.warning("Could not update provider circuit for %s", provider_name)
