@@ -29,12 +29,39 @@ class OptimizedImage(BaseModel):
     optimized: bool
 
 
+class ThumbnailImage(BaseModel):
+    """Small durable preview safe to keep for generation history."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    image_bytes: bytes
+    mime_type: Literal["image/jpeg"]
+    extension: Literal[".jpg"]
+    size_bytes: int = Field(ge=1, le=100 * 1024)
+    width: int = Field(ge=1)
+    height: int = Field(ge=1)
+
+
 async def optimize_image_lossless(image_bytes: bytes) -> OptimizedImage:
     """Optimise in a worker thread and reject any pixel-changing candidate."""
 
     if not image_bytes:
         raise ImageOptimizationError("Image payload cannot be empty.")
     return await asyncio.to_thread(_optimize_sync, bytes(image_bytes))
+
+
+async def create_generation_thumbnail(
+    image_bytes: bytes,
+    *,
+    max_bytes: int = 100 * 1024,
+) -> ThumbnailImage:
+    """Create a lightweight JPEG preview with a strict size cap."""
+
+    if not image_bytes:
+        raise ImageOptimizationError("Image payload cannot be empty.")
+    if max_bytes <= 0 or max_bytes > 100 * 1024:
+        raise ImageOptimizationError("Thumbnail limit must be in the 1-102400 byte range.")
+    return await asyncio.to_thread(_create_thumbnail_sync, bytes(image_bytes), max_bytes)
 
 
 def detect_image_format(image_bytes: bytes) -> tuple[str, str]:
@@ -83,6 +110,60 @@ def _optimize_sync(image_bytes: bytes) -> OptimizedImage:
         pixel_sha256=accepted_hash,
         optimized=accepted is not image_bytes and accepted != image_bytes,
     )
+
+
+def _create_thumbnail_sync(image_bytes: bytes, max_bytes: int) -> ThumbnailImage:
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as source:
+            source.load()
+            rgba = source.convert("RGBA")
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise ImageOptimizationError(
+            "Image is malformed or cannot be decoded."
+        ) from exc
+
+    background = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+    background.alpha_composite(rgba)
+    source_rgb = background.convert("RGB")
+
+    best_payload: bytes | None = None
+    best_size = (0, 0)
+    for edge in (512, 448, 384, 320, 256, 192, 160, 128, 96):
+        candidate = source_rgb.copy()
+        candidate.thumbnail((edge, edge), Image.Resampling.LANCZOS)
+        for quality in (82, 76, 70, 64, 58, 52, 46, 40, 34):
+            output = io.BytesIO()
+            candidate.save(
+                output,
+                format="JPEG",
+                quality=quality,
+                optimize=True,
+                progressive=True,
+            )
+            payload = output.getvalue()
+            if best_payload is None or len(payload) < len(best_payload):
+                best_payload = payload
+                best_size = candidate.size
+            if len(payload) <= max_bytes:
+                return ThumbnailImage(
+                    image_bytes=payload,
+                    mime_type="image/jpeg",
+                    extension=".jpg",
+                    size_bytes=len(payload),
+                    width=candidate.width,
+                    height=candidate.height,
+                )
+
+    if best_payload is not None and len(best_payload) <= max_bytes:
+        return ThumbnailImage(
+            image_bytes=best_payload,
+            mime_type="image/jpeg",
+            extension=".jpg",
+            size_bytes=len(best_payload),
+            width=best_size[0],
+            height=best_size[1],
+        )
+    raise ImageOptimizationError("Could not create a thumbnail under 100 KB.")
 
 
 def _decoded_pixel_hash(image_bytes: bytes) -> str:

@@ -385,4 +385,5 @@ async def test_duplicate_webhook_does_not_download_or_store_twice() -> None:
     assert repository.work.slides[0].status == SlideStatus.COMPLETED
     assert repository.work.status == GenerationJobStatus.COMPLETED
     assert any(key.endswith("card_series.zip") for key in storage.objects)
+    assert any(key.endswith("thumbnail.jpg") for key in storage.objects)
     assert webhook_id in repository.processed_webhooks

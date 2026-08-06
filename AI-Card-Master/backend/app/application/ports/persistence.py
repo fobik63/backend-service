@@ -96,6 +96,9 @@ class GenerationRepositoryPort(Protocol):
         job_id: UUID,
         *,
         archive_object_key: str,
+        thumbnail_object_key: str,
+        thumbnail_mime_type: str,
+        thumbnail_size_bytes: int,
         provider_used: str,
         warning: str | None,
     ) -> None: ...

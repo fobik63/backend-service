@@ -70,6 +70,9 @@ class GenerationJob(Base):
     subscription_status: Mapped[str] = mapped_column(String(32), nullable=False)
     input_object_key: Mapped[str] = mapped_column(String(1024), nullable=False)
     archive_object_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    thumbnail_object_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    thumbnail_mime_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    thumbnail_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     apply_text_overlays: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,

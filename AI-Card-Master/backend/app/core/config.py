@@ -264,6 +264,20 @@ class Settings(BaseSettings):
         alias="S3_PRESIGN_TTL_SECONDS",
     )
 
+    # Critical 500 alerts sent to an operator-owned Telegram bot.
+    telegram_error_bot_token: SecretStr | None = Field(
+        default=None,
+        alias="TELEGRAM_ERROR_BOT_TOKEN",
+    )
+    telegram_error_chat_id: str | None = Field(
+        default=None,
+        alias="TELEGRAM_ERROR_CHAT_ID",
+    )
+    telegram_error_timeout_seconds: float = Field(
+        default=5.0,
+        alias="TELEGRAM_ERROR_TIMEOUT_SECONDS",
+    )
+
     @field_validator("database_url")
     @classmethod
     def validate_database_url(cls, value: str) -> str:
@@ -347,11 +361,12 @@ class Settings(BaseSettings):
         "stable_diffusion_base_retry_delay_seconds",
         "midjourney_timeout_seconds",
         "midjourney_poll_interval_seconds",
+        "telegram_error_timeout_seconds",
     )
     @classmethod
     def validate_positive_floats(cls, value: float) -> float:
         if value <= 0:
-            raise ValueError("Provider timeout/retry settings must be positive.")
+            raise ValueError("Timeout/retry settings must be positive.")
         return value
 
     @field_validator("stable_diffusion_image_strength")

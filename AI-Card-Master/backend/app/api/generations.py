@@ -6,6 +6,8 @@ import asyncio
 import io
 import json
 import logging
+from datetime import UTC, datetime, timedelta
+from typing import Literal
 from typing import Annotated, Any
 from uuid import UUID, uuid4
 
@@ -16,6 +18,7 @@ from fastapi import (
     Form,
     Header,
     HTTPException,
+    Query,
     UploadFile,
     status,
 )
@@ -44,6 +47,7 @@ from app.services.series_generator import build_series_tasks_cached
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/generations", tags=["generations"])
+_ARCHIVE_RETENTION = timedelta(hours=24)
 
 _MIME_BY_SIGNATURE: tuple[tuple[bytes, str, str], ...] = (
     (b"\x89PNG\r\n\x1a\n", "image/png", ".png"),
@@ -90,6 +94,23 @@ class GenerationStatusResponse(StrictAPIModel):
     error: GenerationErrorResponse | None = None
     created_at: str
     updated_at: str
+    completed_at: str | None = None
+
+
+class GenerationHistoryItemResponse(StrictAPIModel):
+    task_id: UUID
+    status: GenerationJobStatus
+    progress: int
+    product_category: str | None = None
+    thumbnail_url: str | None = None
+    thumbnail_mime_type: str | None = None
+    thumbnail_size_bytes: int | None = Field(default=None, ge=1, le=100 * 1024)
+    archive_status: Literal["available", "expired", "pending", "unavailable"]
+    archive_url: str | None = None
+    archive_expires_at: str | None = None
+    provider_used: str | None = None
+    warning: str | None = None
+    created_at: str
     completed_at: str | None = None
 
 
@@ -274,6 +295,81 @@ async def create_generation(
         await file.close()
 
 
+@router.get("/history", response_model=list[GenerationHistoryItemResponse])
+async def list_generation_history(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db_session: Annotated[AsyncSession, Depends(get_db_session)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> list[GenerationHistoryItemResponse]:
+    """Return personal cabinet generation history with durable thumbnails."""
+
+    repository = GenerationRepository(db_session)
+    jobs = await repository.list_generation_history_for_user(
+        user_id=current_user.id,
+        limit=limit,
+        offset=offset,
+    )
+    storage = None
+    try:
+        storage = get_s3_storage()
+    except S3StorageError:
+        logger.warning("S3 unavailable while building generation history", exc_info=True)
+
+    now = datetime.now(UTC)
+    response: list[GenerationHistoryItemResponse] = []
+    for job in jobs:
+        thumbnail_url: str | None = None
+        if storage is not None and job.thumbnail_object_key:
+            try:
+                thumbnail_url = await storage.generate_presigned_url(
+                    object_key=job.thumbnail_object_key
+                )
+            except S3StorageError:
+                logger.warning(
+                    "Could not presign thumbnail for job %s",
+                    job.id,
+                    exc_info=True,
+                )
+
+        archive_url: str | None = None
+        archive_status, archive_expires_at = _archive_access_state(job, now)
+        if archive_status == "available" and storage is not None and job.archive_object_key:
+            try:
+                archive_url = await storage.generate_presigned_url(
+                    object_key=job.archive_object_key
+                )
+            except S3StorageError:
+                logger.warning(
+                    "Could not presign archive for job %s",
+                    job.id,
+                    exc_info=True,
+                )
+                archive_status = "unavailable"
+
+        response.append(
+            GenerationHistoryItemResponse(
+                task_id=job.id,
+                status=GenerationJobStatus(job.status),
+                progress=job.progress,
+                product_category=job.product_category,
+                thumbnail_url=thumbnail_url,
+                thumbnail_mime_type=job.thumbnail_mime_type,
+                thumbnail_size_bytes=job.thumbnail_size_bytes,
+                archive_status=archive_status,
+                archive_url=archive_url,
+                archive_expires_at=archive_expires_at.isoformat()
+                if archive_expires_at
+                else None,
+                provider_used=job.provider_used,
+                warning=job.warning,
+                created_at=job.created_at.isoformat(),
+                completed_at=job.completed_at.isoformat() if job.completed_at else None,
+            )
+        )
+    return response
+
+
 @router.get("/{task_id}", response_model=GenerationStatusResponse)
 async def get_generation_status(
     task_id: UUID,
@@ -307,7 +403,8 @@ async def get_generation_status(
         logger.warning("S3 unavailable while building generation status", exc_info=True)
 
     archive_url: str | None = None
-    if storage is not None and job.archive_object_key:
+    archive_status, _archive_expires_at = _archive_access_state(job, datetime.now(UTC))
+    if storage is not None and job.archive_object_key and archive_status == "available":
         try:
             archive_url = await storage.generate_presigned_url(
                 object_key=job.archive_object_key
@@ -410,6 +507,31 @@ async def _best_effort_delete(storage: Any, object_key: str) -> None:
         await storage.delete_object(object_key=object_key)
     except S3StorageError:
         logger.warning("Could not clean up orphan input %s", object_key, exc_info=True)
+
+
+def _archive_access_state(
+    job: Any,
+    now: datetime,
+) -> tuple[Literal["available", "expired", "pending", "unavailable"], datetime | None]:
+    if not job.archive_object_key:
+        if job.status == GenerationJobStatus.FAILED.value:
+            return "unavailable", None
+        if job.status == GenerationJobStatus.COMPLETED.value:
+            return "unavailable", None
+        return "pending", None
+    if job.completed_at is None:
+        return "pending", None
+
+    expires_at = _to_utc(job.completed_at) + _ARCHIVE_RETENTION
+    if _to_utc(now) < expires_at:
+        return "available", expires_at
+    return "expired", expires_at
+
+
+def _to_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 async def _validate_image(

@@ -43,6 +43,7 @@ from app.services.ai_engine import (
 from app.services.image_optimizer import (
     ImageOptimizationError,
     OptimizedImage,
+    create_generation_thumbnail,
     optimize_image_lossless,
 )
 from app.services.infographic_service import (
@@ -193,6 +194,16 @@ class GenerationApplicationService:
                 data=zip_bytes,
                 content_type="application/zip",
             )
+            thumbnail = await create_generation_thumbnail(images[0])
+            thumbnail_key = (
+                f"generation-previews/{work.user_id}/{work.id}/"
+                f"thumbnail{thumbnail.extension}"
+            )
+            await self._storage.upload(
+                object_key=thumbnail_key,
+                data=thumbnail.image_bytes,
+                content_type=thumbnail.mime_type,
+            )
             providers = sorted(
                 {
                     slide.provider_used
@@ -210,6 +221,9 @@ class GenerationApplicationService:
             await self._repository.complete_job(
                 work.id,
                 archive_object_key=archive_key,
+                thumbnail_object_key=thumbnail_key,
+                thumbnail_mime_type=thumbnail.mime_type,
+                thumbnail_size_bytes=thumbnail.size_bytes,
                 provider_used=provider_used,
                 warning=warning,
             )

@@ -6,7 +6,7 @@ import io
 import pytest
 from PIL import Image, ImageDraw
 
-from app.services.image_optimizer import optimize_image_lossless
+from app.services.image_optimizer import create_generation_thumbnail, optimize_image_lossless
 from app.services.product_compositor import (
     CompositingOptions,
     composite_product_on_background,
@@ -57,6 +57,22 @@ async def test_jpeg_metadata_removal_does_not_reencode_pixels() -> None:
     assert optimized.mime_type == "image/jpeg"
     assert optimized.optimized_size < optimized.original_size
     assert _pixel_digest(optimized.image_bytes) == _pixel_digest(original)
+
+
+@pytest.mark.asyncio
+async def test_generation_thumbnail_is_capped_at_100kb() -> None:
+    source = Image.new("RGB", (1400, 1400), (240, 240, 240))
+    draw = ImageDraw.Draw(source)
+    for offset in range(0, 1400, 20):
+        draw.line((0, offset, 1400, 1400 - offset), fill=(30, 90, 160), width=4)
+        draw.line((offset, 0, 1400 - offset, 1400), fill=(180, 40, 70), width=4)
+
+    thumbnail = await create_generation_thumbnail(_png(source, compress_level=0))
+
+    assert thumbnail.mime_type == "image/jpeg"
+    assert thumbnail.extension == ".jpg"
+    assert thumbnail.size_bytes <= 100 * 1024
+    assert len(thumbnail.image_bytes) == thumbnail.size_bytes
 
 
 @pytest.mark.asyncio

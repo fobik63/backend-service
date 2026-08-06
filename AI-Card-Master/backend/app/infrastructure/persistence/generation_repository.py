@@ -164,6 +164,24 @@ class GenerationRepository:
             .options(selectinload(GenerationJob.slides))
         )
 
+    async def list_generation_history_for_user(
+        self,
+        *,
+        user_id: UUID,
+        limit: int,
+        offset: int,
+    ) -> tuple[GenerationJob, ...]:
+        """Return newest generations for the personal cabinet history."""
+
+        jobs = await self._session.scalars(
+            select(GenerationJob)
+            .where(GenerationJob.user_id == user_id)
+            .order_by(GenerationJob.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        return tuple(jobs)
+
     async def get_work_item(self, job_id: UUID) -> GenerationWorkItem | None:
         job = await self._session.scalar(
             select(GenerationJob)
@@ -524,6 +542,9 @@ class GenerationRepository:
         job_id: UUID,
         *,
         archive_object_key: str,
+        thumbnail_object_key: str,
+        thumbnail_mime_type: str,
+        thumbnail_size_bytes: int,
         provider_used: str,
         warning: str | None,
     ) -> None:
@@ -533,6 +554,9 @@ class GenerationRepository:
         job.status = GenerationJobStatus.COMPLETED.value
         job.progress = 100
         job.archive_object_key = archive_object_key
+        job.thumbnail_object_key = thumbnail_object_key
+        job.thumbnail_mime_type = thumbnail_mime_type
+        job.thumbnail_size_bytes = thumbnail_size_bytes
         job.provider_used = provider_used
         job.warning = warning[:500] if warning else None
         job.error_code = None

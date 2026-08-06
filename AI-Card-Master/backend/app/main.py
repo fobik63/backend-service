@@ -41,6 +41,7 @@ from app.services.s3_storage import (
     close_s3_storage,
     get_s3_storage,
 )
+from app.services.telegram_alerts import notify_critical_500
 
 
 # Configure module logger.
@@ -164,10 +165,11 @@ async def request_validation_exception_handler(
 
 
 @app.exception_handler(Exception)
-async def unhandled_exception_handler(_: Request, exc: Exception) -> JSONResponse:
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Catch unexpected exceptions and prevent trace leaks to clients."""
 
     logger.exception("Unhandled server error: %s", exc)
+    await notify_critical_500(request, exc)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={
