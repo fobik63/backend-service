@@ -18,6 +18,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.models.enums import PaymentStatus, TariffCode
 from app.models.payment import Payment
 from app.models.user import User
@@ -53,6 +54,19 @@ class BillingResult:
     already_processed: bool
 
 
+@dataclass(frozen=True, slots=True)
+class DailyBonusResult:
+    """Outcome of a once-per-day free AI-coin claim."""
+
+    user_id: UUID
+    coins_granted: int
+    new_balance: int
+    streak: int
+    claimed: bool
+    last_claimed_at: datetime | None
+    next_available_at: datetime
+
+
 def compute_subscription_end(
     *,
     current_ends_at: datetime | None,
@@ -80,6 +94,22 @@ def compute_subscription_end(
             return end + timedelta(days=duration_days)
 
     return moment + timedelta(days=duration_days)
+
+
+def _to_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _next_utc_midnight(moment: datetime) -> datetime:
+    utc_moment = _to_utc(moment)
+    return datetime(
+        utc_moment.year,
+        utc_moment.month,
+        utc_moment.day,
+        tzinfo=UTC,
+    ) + timedelta(days=1)
 
 
 class BillingService:
@@ -307,6 +337,59 @@ class BillingService:
         user.ai_coins = int(user.ai_coins) + 1
         await self._session.flush()
         return user
+
+    async def claim_daily_bonus(self, user_id: UUID) -> DailyBonusResult:
+        """Grant the configured daily free coins once per UTC day."""
+
+        user = await self._session.get(User, user_id, with_for_update=True)
+        if user is None:
+            raise BillingNotFoundError(f"User {user_id} not found.")
+
+        settings = get_settings()
+        if settings.daily_bonus_coins <= 0:
+            raise BillingValidationError("Daily bonus must be greater than zero.")
+
+        now = datetime.now(UTC)
+        last_claimed_at = (
+            _to_utc(user.daily_bonus_claimed_at)
+            if user.daily_bonus_claimed_at is not None
+            else None
+        )
+        next_available_at = _next_utc_midnight(now)
+
+        if last_claimed_at is not None and last_claimed_at.date() == now.date():
+            return DailyBonusResult(
+                user_id=user.id,
+                coins_granted=0,
+                new_balance=user.ai_coins,
+                streak=user.daily_bonus_streak,
+                claimed=False,
+                last_claimed_at=last_claimed_at,
+                next_available_at=next_available_at,
+            )
+
+        yesterday = now.date() - timedelta(days=1)
+        streak = (
+            int(user.daily_bonus_streak) + 1
+            if last_claimed_at is not None and last_claimed_at.date() == yesterday
+            else 1
+        )
+        user.ai_coins = int(user.ai_coins) + int(settings.daily_bonus_coins)
+        user.daily_bonus_claimed_at = now
+        user.daily_bonus_streak = streak
+
+        await self._session.commit()
+        await self._session.refresh(user)
+
+        return DailyBonusResult(
+            user_id=user.id,
+            coins_granted=settings.daily_bonus_coins,
+            new_balance=user.ai_coins,
+            streak=user.daily_bonus_streak,
+            claimed=True,
+            last_claimed_at=user.daily_bonus_claimed_at,
+            next_available_at=next_available_at,
+        )
 
 
 def describe_tariff(plan: TariffPlan) -> dict[str, object]:

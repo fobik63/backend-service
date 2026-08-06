@@ -8,7 +8,7 @@ from fastapi import HTTPException
 import pytest
 
 import app.api.generations as generations_api
-from app.domain.generation import GenerationEngineMode
+from app.domain.generation import GenerationEngineMode, GenerationPostProcessingMode
 from app.main import app
 from app.models.enums import SubscriptionStatus
 from app.models.user import User
@@ -89,8 +89,28 @@ def test_premium_engine_mode_requires_paid_subscription() -> None:
     assert exc_info.value.status_code == 403
 
 
+def test_hd_face_fix_requires_paid_subscription() -> None:
+    user = User(
+        id=uuid4(),
+        email="free-hd@example.com",
+        hashed_password="hash",
+        subscription_status=SubscriptionStatus.FREE,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        generations_api._ensure_generation_options_allowed(
+            GenerationEngineMode.PREMIUM,
+            GenerationPostProcessingMode.HD_FACE_FIX,
+            user,
+        )
+
+    assert exc_info.value.status_code == 403
+
+
 def test_engine_mode_accepts_client_string_values() -> None:
-    form = generations_api.GenerationForm.model_validate({"engine_mode": "premium"})
+    form = generations_api.GenerationForm.model_validate(
+        {"engine_mode": "premium", "post_processing_mode": "hd_quality"}
+    )
     payload = generations_api.ModelModeRequest.model_validate(
         {
             "source_image_object_key": f"user-uploads/{uuid4()}/source.png",
@@ -98,11 +118,24 @@ def test_engine_mode_accepts_client_string_values() -> None:
             "body_type": "athletic",
             "ethnicity": "mixed",
             "engine_mode": "standard",
+            "post_processing_mode": "fast_generation",
         }
     )
 
     assert form.engine_mode == GenerationEngineMode.PREMIUM
+    assert form.post_processing_mode == GenerationPostProcessingMode.HD_FACE_FIX
     assert payload.engine_mode == GenerationEngineMode.STANDARD
+    assert payload.post_processing_mode == GenerationPostProcessingMode.FAST
+
+
+def test_hd_face_fix_forces_premium_engine_profile() -> None:
+    assert (
+        generations_api._effective_engine_mode(
+            GenerationEngineMode.STANDARD,
+            GenerationPostProcessingMode.HD_FACE_FIX,
+        )
+        == GenerationEngineMode.PREMIUM
+    )
 
 
 @pytest.mark.asyncio

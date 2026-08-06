@@ -4,16 +4,18 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.security import InvalidTokenError, decode_and_validate_token
 from app.models.database import get_db_session
 from app.models.enums import TariffCode
@@ -24,6 +26,7 @@ from app.services.billing_service import (
     BillingResult,
     BillingService,
     BillingValidationError,
+    DailyBonusResult,
     describe_tariff,
 )
 from app.services.tariffs import list_tariff_plans
@@ -80,6 +83,32 @@ class WebhookAckResponse(BaseModel):
     success: bool = True
     detail: str
     already_processed: bool = False
+
+
+class BalanceResponse(BaseModel):
+    """Current user's AI-coin balance and daily retention bonus state."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    ai_coins: int
+    daily_bonus_available: bool
+    daily_bonus_streak: int
+    daily_bonus_coins: int
+    last_daily_bonus_claimed_at: str | None
+    next_daily_bonus_available_at: str
+
+
+class DailyBonusClaimResponse(BaseModel):
+    """Result of claiming today's free retention bonus."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    claimed: bool
+    coins_granted: int
+    ai_coins: int
+    daily_bonus_streak: int
+    last_daily_bonus_claimed_at: str | None
+    next_daily_bonus_available_at: str
 
 
 async def get_billing_service(
@@ -158,6 +187,62 @@ async def list_tariffs() -> list[TariffResponse]:
     """Return the commercial tariff grid (Старт / Про / Полугодовой / Годовая)."""
 
     return [TariffResponse(**describe_tariff(plan)) for plan in list_tariff_plans()]
+
+
+@router.get("/balance", response_model=BalanceResponse)
+async def get_balance(current_user: User = Depends(get_current_user)) -> BalanceResponse:
+    """Return AI-coin balance and daily bonus availability for the cabinet."""
+
+    now = datetime.now(UTC)
+    last_claimed_at = current_user.daily_bonus_claimed_at
+    if last_claimed_at is not None and last_claimed_at.tzinfo is None:
+        last_claimed_at = last_claimed_at.replace(tzinfo=UTC)
+    daily_bonus_available = (
+        last_claimed_at is None or last_claimed_at.astimezone(UTC).date() < now.date()
+    )
+    next_available_at = datetime(now.year, now.month, now.day, tzinfo=UTC) + timedelta(days=1)
+    return BalanceResponse(
+        ai_coins=current_user.ai_coins,
+        daily_bonus_available=daily_bonus_available,
+        daily_bonus_streak=current_user.daily_bonus_streak,
+        daily_bonus_coins=get_settings().daily_bonus_coins,
+        last_daily_bonus_claimed_at=last_claimed_at.isoformat()
+        if last_claimed_at is not None
+        else None,
+        next_daily_bonus_available_at=next_available_at.isoformat(),
+    )
+
+
+@router.post("/daily-bonus/claim", response_model=DailyBonusClaimResponse)
+async def claim_daily_bonus(
+    current_user: User = Depends(get_current_user),
+    billing: BillingService = Depends(get_billing_service),
+) -> DailyBonusClaimResponse:
+    """Claim today's free AI-coin retention bonus exactly once."""
+
+    try:
+        result: DailyBonusResult = await billing.claim_daily_bonus(current_user.id)
+    except BillingNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except BillingValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    return DailyBonusClaimResponse(
+        claimed=result.claimed,
+        coins_granted=result.coins_granted,
+        ai_coins=result.new_balance,
+        daily_bonus_streak=result.streak,
+        last_daily_bonus_claimed_at=result.last_claimed_at.isoformat()
+        if result.last_claimed_at is not None
+        else None,
+        next_daily_bonus_available_at=result.next_available_at.isoformat(),
+    )
 
 
 @router.post(

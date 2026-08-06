@@ -27,6 +27,7 @@ from app.domain.generation import (
     GenerationErrorCode,
     GenerationErrorInfo,
     GenerationJobStatus,
+    GenerationPostProcessingMode,
     OutboxEventType,
     ProviderWebhookEvent,
     SlideStatus,
@@ -40,6 +41,7 @@ from app.services.ai_engine import (
     AIEngineRateLimitError,
     AIEngineUpstreamError,
     AIEngineValidationError,
+    get_face_fix_engine,
     note_provider_failure,
     note_provider_success,
 )
@@ -115,6 +117,7 @@ class GenerationApplicationService:
                     product_image=product_image,
                     subscription_status=work.subscription_status,
                     engine_mode=work.engine_mode,
+                    post_processing_mode=work.post_processing_mode,
                     excluded_providers=await self._repository.get_attempted_providers(
                         slide.id
                     ),
@@ -326,6 +329,7 @@ class GenerationApplicationService:
                 product_image=product_image,
                 subscription_status=work.subscription_status,
                 engine_mode=work.engine_mode,
+                post_processing_mode=work.post_processing_mode,
                 excluded_providers=await self._repository.get_attempted_providers(
                     slide.id
                 ),
@@ -353,6 +357,7 @@ class GenerationApplicationService:
                 slide=slide,
                 apply_text_overlays=work.apply_text_overlays,
                 overlay_texts=work.overlay_texts,
+                post_processing_mode=work.post_processing_mode,
             )
             await self._store_slide(
                 job_id=work.id,
@@ -378,6 +383,7 @@ class GenerationApplicationService:
                 ),
                 subscription_status=work.subscription_status,
                 engine_mode=work.engine_mode,
+                post_processing_mode=work.post_processing_mode,
                 excluded_providers=await self._repository.get_attempted_providers(
                     attempt.slide_id
                 ),
@@ -393,6 +399,7 @@ class GenerationApplicationService:
         product_image: bytes,
         subscription_status: str,
         engine_mode: GenerationEngineMode,
+        post_processing_mode: GenerationPostProcessingMode,
         excluded_providers: frozenset[str],
         apply_text_overlays: bool,
         overlay_texts: dict[str, str],
@@ -470,6 +477,7 @@ class GenerationApplicationService:
                 slide=slide,
                 apply_text_overlays=apply_text_overlays,
                 overlay_texts=overlay_texts,
+                post_processing_mode=post_processing_mode,
             )
             await self._store_slide(
                 job_id=job_id,
@@ -490,9 +498,14 @@ class GenerationApplicationService:
         slide: SlideWorkItem,
         apply_text_overlays: bool,
         overlay_texts: dict[str, str],
+        post_processing_mode: GenerationPostProcessingMode,
     ) -> OptimizedImage:
         if _is_model_vto_slide(slide):
-            return await optimize_image_lossless(generated_background)
+            final_model_bytes = await _apply_face_fix_if_requested(
+                generated_background,
+                post_processing_mode=post_processing_mode,
+            )
+            return await optimize_image_lossless(final_model_bytes)
 
         composited = await composite_product_on_background(
             product_image=product_image,
@@ -530,6 +543,10 @@ class GenerationApplicationService:
                 text=text,
                 style_name=style,
             )
+        final_bytes = await _apply_face_fix_if_requested(
+            final_bytes,
+            post_processing_mode=post_processing_mode,
+        )
         return await optimize_image_lossless(final_bytes)
 
     async def _store_slide(
@@ -589,6 +606,16 @@ class GenerationApplicationService:
             (provider for provider in self._async_providers if provider.name == name),
             None,
         )
+
+
+async def _apply_face_fix_if_requested(
+    image_bytes: bytes,
+    *,
+    post_processing_mode: GenerationPostProcessingMode,
+) -> bytes:
+    if post_processing_mode != GenerationPostProcessingMode.HD_FACE_FIX:
+        return image_bytes
+    return await get_face_fix_engine().fix_if_needed(image_bytes)
 
 
 def _normalise_error(exc: Exception) -> GenerationErrorInfo:

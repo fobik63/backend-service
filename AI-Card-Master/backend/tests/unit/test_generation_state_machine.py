@@ -12,6 +12,7 @@ from app.application.generation_service import GenerationApplicationService
 from app.domain.generation import (
     AttemptWorkItem,
     GenerationJobStatus,
+    GenerationPostProcessingMode,
     GenerationWorkItem,
     MarketplaceTextContent,
     OutboxEventType,
@@ -294,6 +295,16 @@ class TextProvider:
         )
 
 
+class FaceFixProvider:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def fix_if_needed(self, image: bytes) -> bytes:
+        self.calls += 1
+        assert image
+        return image
+
+
 def _work() -> GenerationWorkItem:
     job_id = uuid4()
     return GenerationWorkItem(
@@ -372,6 +383,34 @@ async def test_provider_pool_falls_back_to_stable_diffusion() -> None:
     assert repository.work.slides[0].provider_used == "stable_diffusion"
     assert f"finalize-job:{work.id}" in repository.outbox
     assert repository.failed == 0
+
+
+@pytest.mark.asyncio
+async def test_hd_face_fix_runs_post_processing_before_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    work = _work().model_copy(
+        update={"post_processing_mode": GenerationPostProcessingMode.HD_FACE_FIX}
+    )
+    repository = FakeRepository(work)
+    storage = FakeStorage()
+    storage.objects[work.input_object_key] = _png((255, 255, 255), product=True)
+    face_fix = FaceFixProvider()
+    monkeypatch.setattr(generation_module, "get_face_fix_engine", lambda: face_fix)
+    service = GenerationApplicationService(
+        repository=repository,
+        storage=storage,
+        async_providers=(
+            AsyncProvider("primary", fail_submit=True),
+            AsyncProvider("secondary", fail_submit=True),
+        ),
+        immediate_provider=ImmediateProvider(),
+    )
+
+    await service.submit_job(work.id)
+
+    assert face_fix.calls == 1
+    assert repository.work.slides[0].status == SlideStatus.COMPLETED
 
 
 @pytest.mark.asyncio

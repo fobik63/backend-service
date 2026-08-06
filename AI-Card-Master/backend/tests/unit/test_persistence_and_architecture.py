@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -11,6 +12,7 @@ from app.domain.generation import GenerationErrorCode, GenerationErrorInfo
 from app.infrastructure.persistence.generation_repository import GenerationRepository
 from app.models.generation_job import GenerationJob
 from app.models.user import User
+from app.services.billing_service import BillingService, BillingValidationError
 from app.workers import generation_tasks
 
 
@@ -44,6 +46,35 @@ class FakeRefundSession:
         self.commits += 1
 
 
+class FakeUserSession:
+    def __init__(self, user: User) -> None:
+        self.user = user
+        self.commits = 0
+        self.flushes = 0
+        self.refreshes = 0
+
+    async def get(
+        self,
+        model: type[Any],
+        identity: Any,
+        *,
+        with_for_update: bool = False,
+    ) -> Any:
+        assert with_for_update is True
+        if model is User and identity == self.user.id:
+            return self.user
+        return None
+
+    async def commit(self) -> None:
+        self.commits += 1
+
+    async def flush(self) -> None:
+        self.flushes += 1
+
+    async def refresh(self, _: Any) -> None:
+        self.refreshes += 1
+
+
 @pytest.mark.asyncio
 async def test_final_failure_refunds_coin_exactly_once() -> None:
     user = User(
@@ -74,6 +105,83 @@ async def test_final_failure_refunds_coin_exactly_once() -> None:
     assert user.ai_coins == 3
     assert job.coin_refunded is True
     assert session.commits == 2
+
+
+@pytest.mark.asyncio
+async def test_final_failure_refunds_full_hd_face_fix_cost() -> None:
+    user = User(
+        id=uuid4(),
+        email="hd-refund@example.com",
+        hashed_password="hash",
+        ai_coins=0,
+    )
+    job = GenerationJob(
+        id=uuid4(),
+        user_id=user.id,
+        subscription_status="Pro",
+        input_object_key="input/product.png",
+        coin_charged=True,
+        coins_charged=3,
+        coin_refunded=False,
+    )
+    session = FakeRefundSession(job, user)
+    repository = GenerationRepository(session)  # type: ignore[arg-type]
+    error = GenerationErrorInfo(
+        code=GenerationErrorCode.TRANSIENT,
+        message="Face Fix unavailable.",
+        retryable=True,
+    )
+
+    await repository.fail_job(job.id, error)
+    await repository.fail_job(job.id, error)
+
+    assert user.ai_coins == 3
+    assert job.coin_refunded is True
+
+
+@pytest.mark.asyncio
+async def test_daily_bonus_claims_once_per_utc_day() -> None:
+    user = User(
+        id=uuid4(),
+        email="daily@example.com",
+        hashed_password="hash",
+        ai_coins=0,
+        daily_bonus_claimed_at=None,
+        daily_bonus_streak=0,
+    )
+    session = FakeUserSession(user)
+    billing = BillingService(session)  # type: ignore[arg-type]
+
+    first = await billing.claim_daily_bonus(user.id)
+    second = await billing.claim_daily_bonus(user.id)
+
+    assert first.claimed is True
+    assert first.coins_granted == 1
+    assert second.claimed is False
+    assert second.coins_granted == 0
+    assert user.ai_coins == 1
+    assert user.daily_bonus_streak == 1
+    assert session.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_safe_spend_rejects_zero_balance_debit() -> None:
+    user = User(
+        id=uuid4(),
+        email="empty@example.com",
+        hashed_password="hash",
+        ai_coins=0,
+        daily_bonus_claimed_at=datetime(2026, 8, 6, tzinfo=UTC),
+        daily_bonus_streak=1,
+    )
+    session = FakeUserSession(user)
+    billing = BillingService(session)  # type: ignore[arg-type]
+
+    with pytest.raises(BillingValidationError):
+        await billing.debit_generation_coin(user.id)
+
+    assert user.ai_coins == 0
+    assert session.commits == 0
 
 
 def test_alembic_has_single_async_pipeline_head() -> None:

@@ -202,6 +202,18 @@ class Settings(BaseSettings):
         default=Decimal("0"),
         alias="MIDJOURNEY_GENERATION_COST_USD",
     )
+    face_fix_api_key: SecretStr | None = Field(default=None, alias="FACE_FIX_API_KEY")
+    face_fix_base_url: str = Field(default="", alias="FACE_FIX_BASE_URL")
+    face_fix_path: str = Field(default="/v1/face-fix", alias="FACE_FIX_PATH")
+    face_fix_model_name: str = Field(default="face-fix-auto", alias="FACE_FIX_MODEL_NAME")
+    face_fix_timeout_seconds: float = Field(default=45.0, alias="FACE_FIX_TIMEOUT_SECONDS")
+    face_fix_connect_timeout_seconds: float = Field(
+        default=8.0,
+        alias="FACE_FIX_CONNECT_TIMEOUT_SECONDS",
+    )
+    face_fix_max_connections: int = Field(default=80, alias="FACE_FIX_MAX_CONNECTIONS")
+    face_fix_max_retries: int = Field(default=2, alias="FACE_FIX_MAX_RETRIES")
+    face_fix_cost_usd: Decimal = Field(default=Decimal("0"), alias="FACE_FIX_COST_USD")
 
     # Redis, Celery, and durable generation workflow.
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
@@ -226,6 +238,12 @@ class Settings(BaseSettings):
         alias="GENERATION_ALLOWED_RESULT_HOSTS",
     )
     generation_charge_coins: bool = Field(default=True, alias="GENERATION_CHARGE_COINS")
+    generation_fast_cost_coins: int = Field(default=1, alias="GENERATION_FAST_COST_COINS")
+    generation_hd_face_fix_cost_coins: int = Field(
+        default=3,
+        alias="GENERATION_HD_FACE_FIX_COST_COINS",
+    )
+    daily_bonus_coins: int = Field(default=1, alias="DAILY_BONUS_COINS")
     smart_inpainting_edge_pass_enabled: bool = Field(
         default=False,
         alias="SMART_INPAINTING_EDGE_PASS_ENABLED",
@@ -358,12 +376,17 @@ class Settings(BaseSettings):
         "generation_job_timeout_seconds",
         "generation_max_upload_bytes",
         "generation_max_result_bytes",
+        "daily_bonus_coins",
+        "generation_fast_cost_coins",
+        "generation_hd_face_fix_cost_coins",
         "style_cache_ttl_seconds",
         "stable_diffusion_max_connections",
         "stable_diffusion_max_keepalive_connections",
         "stable_diffusion_max_parallel_requests",
         "stable_diffusion_cfg_scale",
         "stable_diffusion_steps",
+        "face_fix_max_connections",
+        "face_fix_max_retries",
     )
     @classmethod
     def validate_generation_positive_ints(cls, value: int) -> int:
@@ -378,6 +401,8 @@ class Settings(BaseSettings):
         "stable_diffusion_base_retry_delay_seconds",
         "midjourney_timeout_seconds",
         "midjourney_poll_interval_seconds",
+        "face_fix_timeout_seconds",
+        "face_fix_connect_timeout_seconds",
         "telegram_error_timeout_seconds",
     )
     @classmethod
@@ -402,6 +427,7 @@ class Settings(BaseSettings):
 
     @field_validator(
         "midjourney_generation_cost_usd",
+        "face_fix_cost_usd",
         "claude_47_input_1k_tokens_cost_usd",
         "claude_47_output_1k_tokens_cost_usd",
     )

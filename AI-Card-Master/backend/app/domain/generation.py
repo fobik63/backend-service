@@ -46,6 +46,13 @@ class GenerationEngineMode(StrEnum):
     PREMIUM = "premium"
 
 
+class GenerationPostProcessingMode(StrEnum):
+    """Client-selected post-processing tier."""
+
+    FAST = "fast"
+    HD_FACE_FIX = "hd_face_fix"
+
+
 class GenerationErrorCode(StrEnum):
     """Sanitised error categories safe to return to API clients."""
 
@@ -203,6 +210,7 @@ class GenerationWorkItem(DomainModel):
     product_category: str | None = Field(default=None, max_length=128)
     subscription_status: str = Field(min_length=1, max_length=32)
     engine_mode: GenerationEngineMode = GenerationEngineMode.STANDARD
+    post_processing_mode: GenerationPostProcessingMode = GenerationPostProcessingMode.FAST
     apply_text_overlays: bool = False
     overlay_texts: dict[str, str] = Field(default_factory=dict)
     marketplace_text: MarketplaceTextContent | None = None

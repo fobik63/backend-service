@@ -579,6 +579,24 @@ def _env_float(key: str, default: float) -> float:
         return default
 
 
+def _compute_postprocess_retry_delay(
+    attempt: int,
+    response: httpx.Response | None,
+) -> float:
+    if response is not None:
+        retry_after = response.headers.get("Retry-After")
+        if retry_after:
+            try:
+                parsed_retry_after = float(retry_after)
+                if parsed_retry_after > 0:
+                    return min(parsed_retry_after, 10.0)
+            except ValueError:
+                logger.debug("Non-numeric Retry-After header ignored: %s", retry_after)
+    base = 0.35 * (2 ** (attempt - 1))
+    jitter = random.uniform(0.0, 0.35)
+    return min(base + jitter, 10.0)
+
+
 @dataclass(frozen=True, slots=True)
 class MidjourneyTariffProfile:
     """Midjourney parameter profile derived from subscription tariff."""
@@ -760,6 +778,164 @@ class MidjourneyConfig:
             max_result_bytes=settings.generation_max_result_bytes,
             allowed_result_hosts=tuple(settings.allowed_result_hosts),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class FaceFixConfig:
+    """Runtime config for automatic face restoration post-processing."""
+
+    api_key: str
+    base_url: str
+    path: str = "/v1/face-fix"
+    model_name: str = "face-fix-auto"
+    timeout_seconds: float = 45.0
+    connect_timeout_seconds: float = 8.0
+    max_connections: int = 80
+    max_retries: int = 2
+    max_result_bytes: int = 30 * 1024 * 1024
+
+    @classmethod
+    def from_settings(cls) -> "FaceFixConfig":
+        settings = get_settings()
+        api_key = (
+            settings.face_fix_api_key.get_secret_value().strip()
+            if settings.face_fix_api_key is not None
+            else ""
+        )
+        if not api_key:
+            raise AIEngineConfigurationError("Missing FACE_FIX_API_KEY environment variable.")
+        if not settings.face_fix_base_url.strip():
+            raise AIEngineConfigurationError("FACE_FIX_BASE_URL must be configured.")
+        return cls(
+            api_key=api_key,
+            base_url=settings.face_fix_base_url,
+            path=settings.face_fix_path,
+            model_name=settings.face_fix_model_name,
+            timeout_seconds=settings.face_fix_timeout_seconds,
+            connect_timeout_seconds=settings.face_fix_connect_timeout_seconds,
+            max_connections=settings.face_fix_max_connections,
+            max_retries=settings.face_fix_max_retries,
+            max_result_bytes=settings.generation_max_result_bytes,
+        )
+
+
+class FaceFixService:
+    """Async adapter for a face restoration model in automatic repair mode."""
+
+    def __init__(self, config: FaceFixConfig) -> None:
+        if not config.base_url.strip().startswith(("https://", "http://")):
+            raise AIEngineConfigurationError("Face Fix base URL must be absolute HTTP(S).")
+        if not config.path.startswith("/"):
+            raise AIEngineConfigurationError("Face Fix path must start with '/'.")
+        if not config.model_name.strip():
+            raise AIEngineConfigurationError("Face Fix model name must not be empty.")
+        self._config = config
+        self._client = httpx.AsyncClient(
+            base_url=config.base_url.rstrip("/"),
+            headers={
+                "Authorization": f"Bearer {config.api_key}",
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            },
+            timeout=httpx.Timeout(
+                timeout=config.timeout_seconds,
+                connect=config.connect_timeout_seconds,
+            ),
+            limits=httpx.Limits(
+                max_connections=config.max_connections,
+                max_keepalive_connections=max(1, config.max_connections // 2),
+            ),
+            http2=True,
+        )
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+    async def fix_if_needed(self, image: bytes) -> bytes:
+        """Repair distorted faces only when the upstream model detects them."""
+
+        mime_type, _extension = _detect_image_mime_type(image)
+        encoded = base64.b64encode(image).decode("ascii")
+        payload: dict[str, Any] = {
+            "model": self._config.model_name,
+            "mode": "auto",
+            "image": f"data:{mime_type};base64,{encoded}",
+            "return_original_when_clean": True,
+        }
+        max_attempts = self._config.max_retries + 1
+        last_error: Exception | None = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                response = await self._client.post(self._config.path, json=payload)
+                if response.status_code in TRANSIENT_HTTP_CODES and attempt < max_attempts:
+                    await asyncio.sleep(_compute_postprocess_retry_delay(attempt, response))
+                    continue
+                if response.is_error:
+                    error_message = _extract_error_message(response)
+                    if response.status_code == 429:
+                        raise AIEngineRateLimitError(
+                            f"Face Fix provider rate limit reached: {error_message}"
+                        )
+                    raise AIEngineUpstreamError(
+                        f"Face Fix API returned {response.status_code}: {error_message}"
+                    )
+                return await self._extract_fixed_image(response, original=image)
+            except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as exc:
+                last_error = exc
+                if attempt >= max_attempts:
+                    break
+                await asyncio.sleep(_compute_postprocess_retry_delay(attempt, None))
+        raise AIEngineUpstreamError("Face Fix API is temporarily unavailable.") from last_error
+
+    async def _extract_fixed_image(
+        self,
+        response: httpx.Response,
+        *,
+        original: bytes,
+    ) -> bytes:
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise AIEngineUpstreamError("Face Fix response is not valid JSON.") from exc
+        if not isinstance(payload, dict):
+            raise AIEngineUpstreamError("Face Fix response has unexpected shape.")
+
+        if payload.get("fixed") is False or payload.get("faces_fixed") is False:
+            return original
+        image_payload = _nested_string(
+            payload,
+            ("image_base64", "base64", "image", "result_url", "resultUrl", "url"),
+        )
+        if not image_payload:
+            return original
+        if image_payload.startswith("data:") and "," in image_payload:
+            _header, image_payload = image_payload.split(",", 1)
+        if image_payload.startswith(("https://", "http://")):
+            return await self._download_fixed_image(image_payload)
+        try:
+            fixed = base64.b64decode(image_payload, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise AIEngineUpstreamError("Failed to decode Face Fix image data.") from exc
+        _detect_image_mime_type(fixed)
+        return fixed
+
+    async def _download_fixed_image(self, result_url: str) -> bytes:
+        await _validate_public_result_url(result_url, allowed_hosts=frozenset())
+        try:
+            async with self._client.stream("GET", result_url) as response:
+                response.raise_for_status()
+                chunks: list[bytes] = []
+                size = 0
+                async for chunk in response.aiter_bytes():
+                    size += len(chunk)
+                    if size > self._config.max_result_bytes:
+                        raise AIEngineUpstreamError("Face Fix result exceeds the configured limit.")
+                    chunks.append(chunk)
+        except httpx.HTTPError as exc:
+            raise AIEngineUpstreamError("Failed to download Face Fix result.") from exc
+        image = b"".join(chunks)
+        _detect_image_mime_type(image)
+        return image
 
 
 class MidjourneyService:
@@ -1455,6 +1631,7 @@ class StableDiffusionImmediateAdapter:
 _default_service: StableDiffusionService | None = None
 _midjourney_service: MidjourneyService | None = None
 _async_midjourney_services: dict[str, MidjourneyService] | None = None
+_face_fix_service: FaceFixService | None = None
 _stable_immediate_adapter = StableDiffusionImmediateAdapter()
 
 
@@ -1478,6 +1655,15 @@ def get_midjourney_engine() -> MidjourneyService:
     if _midjourney_service is None:
         _midjourney_service = MidjourneyService(MidjourneyConfig.from_settings())
     return _midjourney_service
+
+
+def get_face_fix_engine() -> FaceFixService:
+    """Get singleton Face Fix post-processing service configured from Settings."""
+
+    global _face_fix_service
+    if _face_fix_service is None:
+        _face_fix_service = FaceFixService(FaceFixConfig.from_settings())
+    return _face_fix_service
 
 
 def get_async_midjourney_providers() -> tuple[MidjourneyService, ...]:
@@ -1576,7 +1762,7 @@ def get_midjourney_callback_token(provider_name: str) -> str:
 async def close_ai_engine() -> None:
     """Close singleton service resources (call during app shutdown)."""
 
-    global _default_service, _midjourney_service, _async_midjourney_services
+    global _default_service, _midjourney_service, _async_midjourney_services, _face_fix_service
     if _default_service is not None:
         await _default_service.aclose()
         _default_service = None
@@ -1589,6 +1775,9 @@ async def close_ai_engine() -> None:
             return_exceptions=True,
         )
         _async_midjourney_services = None
+    if _face_fix_service is not None:
+        await _face_fix_service.aclose()
+        _face_fix_service = None
 
 
 async def generate_product_image(

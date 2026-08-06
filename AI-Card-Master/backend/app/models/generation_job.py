@@ -24,6 +24,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.domain.generation import (
     GenerationEngineMode,
     GenerationJobStatus,
+    GenerationPostProcessingMode,
     OutboxEventType,
     SlideStatus,
 )
@@ -79,6 +80,12 @@ class GenerationJob(Base):
         default=GenerationEngineMode.STANDARD.value,
         server_default=text("'standard'"),
     )
+    post_processing_mode: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default=GenerationPostProcessingMode.FAST.value,
+        server_default=text("'fast'"),
+    )
     input_object_key: Mapped[str] = mapped_column(String(1024), nullable=False)
     archive_object_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     thumbnail_object_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
@@ -107,6 +114,12 @@ class GenerationJob(Base):
         nullable=False,
         default=False,
         server_default=text("false"),
+    )
+    coins_charged: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
     )
     coin_refunded: Mapped[bool] = mapped_column(
         Boolean,

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, DateTime, Enum, Integer, String, Text, text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Enum, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -21,6 +21,13 @@ class User(Base):
     """
 
     __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint("ai_coins >= 0", name="ck_users_ai_coins_non_negative"),
+        CheckConstraint(
+            "daily_bonus_streak >= 0",
+            name="ck_users_daily_bonus_streak_non_negative",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True),
@@ -60,6 +67,17 @@ class User(Base):
         DateTime(timezone=True),
         nullable=True,
         default=None,
+    )
+    daily_bonus_claimed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        default=None,
+    )
+    daily_bonus_streak: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
     )
     is_banned: Mapped[bool] = mapped_column(
         Boolean,

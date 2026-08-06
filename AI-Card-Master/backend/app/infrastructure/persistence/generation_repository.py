@@ -19,6 +19,7 @@ from app.domain.generation import (
     GenerationEngineMode,
     GenerationErrorInfo,
     GenerationJobStatus,
+    GenerationPostProcessingMode,
     GenerationWorkItem,
     MarketplaceTextContent,
     OutboxEventType,
@@ -72,6 +73,7 @@ class GenerationRepository:
         idempotency_key: str | None,
         subscription_status: str,
         engine_mode: GenerationEngineMode,
+        post_processing_mode: GenerationPostProcessingMode,
         input_object_key: str,
         product_category: str | None,
         apply_text_overlays: bool,
@@ -91,14 +93,15 @@ class GenerationRepository:
                 return existing, False
 
         settings = get_settings()
+        generation_cost = _generation_cost_for_mode(post_processing_mode)
         try:
             user = await self._session.get(User, user_id, with_for_update=True)
             if user is None:
                 raise LookupError("Generation user was not found.")
             if settings.generation_charge_coins:
-                if user.ai_coins < 1:
+                if user.ai_coins < generation_cost:
                     raise BillingValidationError("Insufficient AI-coin balance.")
-                user.ai_coins -= 1
+                user.ai_coins -= generation_cost
 
             now = datetime.now(UTC)
             job = GenerationJob(
@@ -109,10 +112,12 @@ class GenerationRepository:
                 product_category=product_category,
                 subscription_status=subscription_status,
                 engine_mode=engine_mode.value,
+                post_processing_mode=post_processing_mode.value,
                 input_object_key=input_object_key,
                 apply_text_overlays=apply_text_overlays,
                 overlay_texts=dict(overlay_texts) or None,
                 coin_charged=settings.generation_charge_coins,
+                coins_charged=generation_cost if settings.generation_charge_coins else 0,
                 deadline_at=now
                 + timedelta(seconds=settings.generation_job_timeout_seconds),
             )
@@ -208,6 +213,7 @@ class GenerationRepository:
             product_category=job.product_category,
             subscription_status=job.subscription_status,
             engine_mode=GenerationEngineMode(job.engine_mode),
+            post_processing_mode=GenerationPostProcessingMode(job.post_processing_mode),
             apply_text_overlays=job.apply_text_overlays,
             overlay_texts=dict(job.overlay_texts or {}),
             marketplace_text=(
@@ -749,7 +755,8 @@ class GenerationRepository:
         user = await self._session.get(User, job.user_id, with_for_update=True)
         if user is None:
             return
-        user.ai_coins += 1
+        refund_amount = int(job.coins_charged or 1)
+        user.ai_coins += refund_amount
         job.coin_refunded = True
 
     async def _record_midjourney_cost(
@@ -802,3 +809,10 @@ class GenerationRepository:
             abandoned=attempt.abandoned,
             slide_status=SlideStatus(slide.status),
         )
+
+
+def _generation_cost_for_mode(mode: GenerationPostProcessingMode) -> int:
+    settings = get_settings()
+    if mode == GenerationPostProcessingMode.HD_FACE_FIX:
+        return settings.generation_hd_face_fix_cost_coins
+    return settings.generation_fast_cost_coins

@@ -29,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.payments import get_current_user
 from app.core.config import get_settings
 from app.domain.generation import GenerationJobStatus, MarketplaceTextContent, SlideStatus
-from app.domain.generation import GenerationEngineMode
+from app.domain.generation import GenerationEngineMode, GenerationPostProcessingMode
 from app.infrastructure.persistence.generation_repository import GenerationRepository
 from app.infrastructure.redis import (
     RedisUnavailableError,
@@ -142,6 +142,7 @@ class GenerationForm(StrictAPIModel):
 
     product_category: str | None = Field(default=None, max_length=128)
     engine_mode: GenerationEngineMode = GenerationEngineMode.STANDARD
+    post_processing_mode: GenerationPostProcessingMode = GenerationPostProcessingMode.FAST
     apply_text_overlays: bool = False
     overlay_texts: dict[str, str] = Field(default_factory=dict)
 
@@ -149,6 +150,11 @@ class GenerationForm(StrictAPIModel):
     @classmethod
     def parse_engine_mode(cls, value: object) -> GenerationEngineMode:
         return _parse_engine_mode(value)
+
+    @field_validator("post_processing_mode", mode="before")
+    @classmethod
+    def parse_post_processing_mode(cls, value: object) -> GenerationPostProcessingMode:
+        return _parse_post_processing_mode(value)
 
     @field_validator("product_category")
     @classmethod
@@ -186,6 +192,7 @@ class ModelModeRequest(StrictAPIModel):
     body_type: BodyType
     ethnicity: Ethnicity
     engine_mode: GenerationEngineMode = GenerationEngineMode.STANDARD
+    post_processing_mode: GenerationPostProcessingMode = GenerationPostProcessingMode.FAST
     background: str | None = Field(default=None, min_length=3, max_length=160)
     pose: str | None = Field(default=None, min_length=3, max_length=160)
 
@@ -193,6 +200,11 @@ class ModelModeRequest(StrictAPIModel):
     @classmethod
     def parse_engine_mode(cls, value: object) -> GenerationEngineMode:
         return _parse_engine_mode(value)
+
+    @field_validator("post_processing_mode", mode="before")
+    @classmethod
+    def parse_post_processing_mode(cls, value: object) -> GenerationPostProcessingMode:
+        return _parse_post_processing_mode(value)
 
     @field_validator("source_image_object_key")
     @classmethod
@@ -217,6 +229,10 @@ class ModelModeRequest(StrictAPIModel):
 async def parse_generation_form(
     product_category: Annotated[str | None, Form(max_length=128)] = None,
     engine_mode: Annotated[GenerationEngineMode, Form()] = GenerationEngineMode.STANDARD,
+    post_processing_mode: Annotated[
+        GenerationPostProcessingMode,
+        Form(),
+    ] = GenerationPostProcessingMode.FAST,
     apply_text_overlays: Annotated[bool, Form()] = False,
     overlay_texts: Annotated[str | None, Form(max_length=3000)] = None,
 ) -> GenerationForm:
@@ -242,6 +258,7 @@ async def parse_generation_form(
         return GenerationForm(
             product_category=product_category,
             engine_mode=engine_mode,
+            post_processing_mode=post_processing_mode,
             apply_text_overlays=apply_text_overlays,
             overlay_texts=parsed_overlays,
         )
@@ -279,7 +296,8 @@ async def create_model_generation(
     """Queue the JSON-only Model mode without blocking on external VTO APIs."""
 
     _validate_owned_source_object_key(payload.source_image_object_key, current_user.id)
-    _ensure_engine_mode_allowed(payload.engine_mode, current_user)
+    engine_mode = _effective_engine_mode(payload.engine_mode, payload.post_processing_mode)
+    _ensure_generation_options_allowed(engine_mode, payload.post_processing_mode, current_user)
     repository = GenerationRepository(db_session)
     if idempotency_key:
         idempotency_key = idempotency_key.strip()
@@ -296,7 +314,8 @@ async def create_model_generation(
             )
 
     settings = get_settings()
-    if settings.generation_charge_coins and current_user.ai_coins < 1:
+    generation_cost = _generation_cost_for_mode(payload.post_processing_mode)
+    if settings.generation_charge_coins and current_user.ai_coins < generation_cost:
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,
             detail="Insufficient AI-coin balance.",
@@ -316,7 +335,8 @@ async def create_model_generation(
             user_id=current_user.id,
             idempotency_key=idempotency_key,
             subscription_status=current_user.subscription_status.value,
-            engine_mode=payload.engine_mode,
+            engine_mode=engine_mode,
+            post_processing_mode=payload.post_processing_mode,
             input_object_key=payload.source_image_object_key,
             product_category=MODEL_VTO_PRODUCT_CATEGORY,
             apply_text_overlays=False,
@@ -364,7 +384,8 @@ async def create_generation(
 ) -> GenerationCreateResponse:
     """Persist a durable generation command and return before AI work begins."""
 
-    _ensure_engine_mode_allowed(form.engine_mode, current_user)
+    engine_mode = _effective_engine_mode(form.engine_mode, form.post_processing_mode)
+    _ensure_generation_options_allowed(engine_mode, form.post_processing_mode, current_user)
     repository = GenerationRepository(db_session)
     if idempotency_key:
         idempotency_key = idempotency_key.strip()
@@ -382,7 +403,8 @@ async def create_generation(
             )
 
     settings = get_settings()
-    if settings.generation_charge_coins and current_user.ai_coins < 1:
+    generation_cost = _generation_cost_for_mode(form.post_processing_mode)
+    if settings.generation_charge_coins and current_user.ai_coins < generation_cost:
         await file.close()
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,
@@ -410,7 +432,8 @@ async def create_generation(
             user_id=current_user.id,
             idempotency_key=idempotency_key,
             subscription_status=current_user.subscription_status.value,
-            engine_mode=form.engine_mode,
+            engine_mode=engine_mode,
+            post_processing_mode=form.post_processing_mode,
             input_object_key=input_key,
             product_category=form.product_category,
             apply_text_overlays=form.apply_text_overlays,
@@ -667,6 +690,38 @@ def _ensure_engine_mode_allowed(engine_mode: GenerationEngineMode, user: User) -
         )
 
 
+def _ensure_generation_options_allowed(
+    engine_mode: GenerationEngineMode,
+    post_processing_mode: GenerationPostProcessingMode,
+    user: User,
+) -> None:
+    _ensure_engine_mode_allowed(engine_mode, user)
+    if (
+        post_processing_mode == GenerationPostProcessingMode.HD_FACE_FIX
+        and not user.subscription_status.is_paid()
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="HD Face Fix post-processing requires an active paid subscription.",
+        )
+
+
+def _effective_engine_mode(
+    engine_mode: GenerationEngineMode,
+    post_processing_mode: GenerationPostProcessingMode,
+) -> GenerationEngineMode:
+    if post_processing_mode == GenerationPostProcessingMode.HD_FACE_FIX:
+        return GenerationEngineMode.PREMIUM
+    return engine_mode
+
+
+def _generation_cost_for_mode(post_processing_mode: GenerationPostProcessingMode) -> int:
+    settings = get_settings()
+    if post_processing_mode == GenerationPostProcessingMode.HD_FACE_FIX:
+        return settings.generation_hd_face_fix_cost_coins
+    return settings.generation_fast_cost_coins
+
+
 def _parse_engine_mode(value: object) -> GenerationEngineMode:
     if isinstance(value, GenerationEngineMode):
         return value
@@ -677,6 +732,29 @@ def _parse_engine_mode(value: object) -> GenerationEngineMode:
         except ValueError as exc:
             raise ValueError("engine_mode must be 'standard' or 'premium'.") from exc
     raise ValueError("engine_mode must be 'standard' or 'premium'.")
+
+
+def _parse_post_processing_mode(value: object) -> GenerationPostProcessingMode:
+    if isinstance(value, GenerationPostProcessingMode):
+        return value
+    if isinstance(value, str):
+        cleaned = value.strip().lower()
+        aliases = {
+            "quick": GenerationPostProcessingMode.FAST,
+            "fast_generation": GenerationPostProcessingMode.FAST,
+            "hd": GenerationPostProcessingMode.HD_FACE_FIX,
+            "hd_quality": GenerationPostProcessingMode.HD_FACE_FIX,
+            "hd_quality_face_fix": GenerationPostProcessingMode.HD_FACE_FIX,
+        }
+        if cleaned in aliases:
+            return aliases[cleaned]
+        try:
+            return GenerationPostProcessingMode(cleaned)
+        except ValueError as exc:
+            raise ValueError(
+                "post_processing_mode must be 'fast' or 'hd_face_fix'."
+            ) from exc
+    raise ValueError("post_processing_mode must be 'fast' or 'hd_face_fix'.")
 
 
 def _marketplace_text_response(value: object) -> MarketplaceTextResponse | None:
