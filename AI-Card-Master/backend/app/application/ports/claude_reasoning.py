@@ -7,6 +7,7 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from app.domain.claude_reasoning import (
+    ClaudeOutboxMessage,
     ClaudeReasoningJobStatus,
     ClaudeReasoningJobView,
     CompetitorTextContext,
@@ -27,7 +28,7 @@ class ClaudeReasoningPersistencePort(Protocol):
         model_name: str,
         idempotency_key: str | None = None,
     ) -> ClaudeReasoningJobView:
-        """Persist a queued reasoning job."""
+        """Persist a queued reasoning job and outbox event atomically."""
 
     async def find_idempotent_job(
         self, *, user_id: UUID, idempotency_key: str
@@ -41,6 +42,14 @@ class ClaudeReasoningPersistencePort(Protocol):
 
     async def get_job(self, *, job_id: UUID) -> ClaudeReasoningJobView | None:
         """Load a job by id (worker path)."""
+
+    async def claim_job(
+        self,
+        *,
+        job_id: UUID,
+        stale_before: datetime,
+    ) -> ClaudeReasoningJobView | None:
+        """Atomically claim queued or stale in-flight work."""
 
     async def mark_status(
         self,
@@ -73,6 +82,34 @@ class ClaudeReasoningPersistencePort(Protocol):
         output_tokens_delta: int = 0,
     ) -> ClaudeReasoningJobView:
         """Persist stage-2 + merged CoT result and mark completed."""
+
+    async def claim_outbox(self, *, limit: int) -> tuple[ClaudeOutboxMessage, ...]:
+        """Claim pending outbox rows for Celery publish."""
+
+    async def mark_outbox_published(self, message_id: UUID) -> None:
+        """Mark an outbox row as published."""
+
+    async def mark_outbox_failed(self, message_id: UUID, error: str) -> None:
+        """Mark an outbox row for retry or terminal failure."""
+
+    async def list_recoverable_job_ids(
+        self,
+        *,
+        queued_before: datetime,
+        processing_before: datetime,
+        limit: int,
+    ) -> tuple[UUID, ...]:
+        """Return jobs that need re-dispatch after worker or broker loss."""
+
+
+class ClaudeStageCachePort(Protocol):
+    """Optional Redis cache for intermediate validated stage payloads."""
+
+    async def get(self, key: str) -> dict[str, Any] | None:
+        """Return a cached JSON object or None."""
+
+    async def set(self, key: str, payload: dict[str, Any], ttl_seconds: int) -> None:
+        """Store a JSON object with TTL; may no-op when Redis is down."""
 
 
 class ClaudeVisionReasoningPort(Protocol):

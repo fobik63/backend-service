@@ -29,6 +29,7 @@ from app.api import (
     ai_strategy_router,
     analytics_router,
     bulk_generations_router,
+    claude_analyses_router,
     claude_reasoning_router,
     visual_audit_router,
     exports_router,
@@ -37,6 +38,7 @@ from app.api import (
     marketplace_bridge_router,
     midjourney_webhook_router,
     oracle_router,
+    pain_analysis_router,
     payments_router,
     referrals_router,
     smart_variants_router,
@@ -157,10 +159,12 @@ app.include_router(exports_router)
 app.include_router(marketplace_bridge_router)
 app.include_router(bulk_generations_router)
 app.include_router(smart_variants_router)
+app.include_router(claude_analyses_router)
 app.include_router(claude_reasoning_router)
 app.include_router(visual_audit_router)
 app.include_router(oracle_router)
 app.include_router(ai_strategy_router)
+app.include_router(pain_analysis_router)
 app.include_router(ab_tests_router)
 app.include_router(generations_router)
 app.include_router(text_generation_router)

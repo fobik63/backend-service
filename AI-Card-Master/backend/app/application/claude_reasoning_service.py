@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Protocol
 from uuid import UUID
 
 from app.application.ports.claude_reasoning import (
     ClaudeReasoningPersistencePort,
+    ClaudeStageCachePort,
     ClaudeVisionReasoningPort,
 )
 from app.domain.bulk_generation import detect_image_mime
@@ -16,13 +17,9 @@ from app.domain.claude_reasoning import (
     ClaudeReasoningJobStatus,
     ClaudeReasoningJobView,
     CompetitorTextContext,
+    VisionStageResult,
     merge_chain_of_thought,
     redis_stage_key,
-)
-from app.infrastructure.redis import (
-    RedisUnavailableError,
-    cache_json,
-    get_cached_json,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,6 +52,20 @@ class ClaudeReasoningNotFoundError(ClaudeReasoningError):
     """Job was not found for the user."""
 
 
+class ClaudeReasoningTransientError(ClaudeReasoningError):
+    """Retryable dependency failure for Celery autoretry."""
+
+
+class _NullStageCache:
+    """No-op cache used when Redis wiring is omitted in tests."""
+
+    async def get(self, key: str) -> dict | None:
+        return None
+
+    async def set(self, key: str, payload: dict, ttl_seconds: int) -> None:
+        return None
+
+
 class ClaudeReasoningService:
     """Coordinate enqueue → Vision CoT → text alignment via Celery workers."""
 
@@ -67,7 +78,9 @@ class ClaudeReasoningService:
         max_images: int,
         max_image_bytes: int,
         redis_stage_ttl_seconds: int,
+        processing_timeout_seconds: int = 900,
         claude: ClaudeVisionReasoningPort | None = None,
+        stage_cache: ClaudeStageCachePort | None = None,
     ) -> None:
         if not model_name.strip():
             raise ClaudeReasoningValidationError("model_name must not be empty.")
@@ -79,13 +92,19 @@ class ClaudeReasoningService:
             raise ClaudeReasoningValidationError(
                 "redis_stage_ttl_seconds must be positive."
             )
+        if processing_timeout_seconds <= 0:
+            raise ClaudeReasoningValidationError(
+                "processing_timeout_seconds must be positive."
+            )
         self._repository = repository
         self._claude = claude
         self._storage = storage
+        self._stage_cache = stage_cache or _NullStageCache()
         self._model_name = model_name.strip()
         self._max_images = max_images
         self._max_image_bytes = max_image_bytes
         self._redis_stage_ttl_seconds = redis_stage_ttl_seconds
+        self._processing_timeout = timedelta(seconds=processing_timeout_seconds)
 
     def _require_claude(self) -> ClaudeVisionReasoningPort:
         if self._claude is None:
@@ -102,7 +121,7 @@ class ClaudeReasoningService:
         text_context: CompetitorTextContext,
         idempotency_key: str | None = None,
     ) -> tuple[ClaudeReasoningJobView, bool]:
-        """Upload images, create a queued job; caller enqueues Celery.
+        """Upload images and create a queued job + outbox event.
 
         Returns (job, idempotent_replay).
         """
@@ -122,6 +141,12 @@ class ClaudeReasoningService:
         if len(images) > self._max_images:
             raise ClaudeReasoningValidationError(
                 f"Maximum {self._max_images} images allowed per request."
+            )
+        if text_context.image_contexts and len(text_context.image_contexts) != len(
+            images
+        ):
+            raise ClaudeReasoningValidationError(
+                "image_contexts count must match the number of uploaded images."
             )
 
         object_keys: list[str] = []
@@ -160,7 +185,7 @@ class ClaudeReasoningService:
     async def attach_celery_task(
         self, *, job_id: UUID, celery_task_id: str
     ) -> ClaudeReasoningJobView:
-        """Store Celery task id after queue publish."""
+        """Store Celery task id after outbox publish (optional telemetry)."""
 
         return await self._repository.mark_status(
             job_id=job_id,
@@ -177,29 +202,24 @@ class ClaudeReasoningService:
         return job
 
     async def run_chain_of_thought(self, *, job_id: UUID) -> ClaudeReasoningJobView:
-        """Execute Vision → Reasoning CoT for a queued job (Celery worker)."""
+        """Execute Vision → Reasoning CoT for a claimed job (Celery worker)."""
 
-        job = await self._repository.get_job(job_id=job_id)
-        if job is None:
-            raise ClaudeReasoningNotFoundError("Claude reasoning job not found.")
-        if job.status == ClaudeReasoningJobStatus.COMPLETED and job.final_result:
+        stale_before = datetime.now(UTC) - self._processing_timeout
+        claimed = await self._repository.claim_job(
+            job_id=job_id,
+            stale_before=stale_before,
+        )
+        if claimed is None:
+            job = await self._repository.get_job(job_id=job_id)
+            if job is None:
+                raise ClaudeReasoningNotFoundError("Claude reasoning job not found.")
             return job
-        if job.status == ClaudeReasoningJobStatus.FAILED:
-            raise ClaudeReasoningError(
-                job.error_message or "Claude reasoning job previously failed."
-            )
 
+        job = claimed
         try:
-            await self._repository.mark_status(
-                job_id=job_id,
-                status=ClaudeReasoningJobStatus.VISION_RUNNING,
-            )
             text_context = CompetitorTextContext.model_validate(job.text_context)
-
-            from app.domain.claude_reasoning import VisionStageResult
-
             vision: VisionStageResult | None = None
-            cached_vision = await self._read_stage_cache(job_id, "vision")
+            cached_vision = await self._stage_cache.get(redis_stage_key(job_id, "vision"))
             if cached_vision is not None:
                 vision = VisionStageResult.model_validate(cached_vision)
             elif job.vision_result is not None:
@@ -213,7 +233,14 @@ class ClaudeReasoningService:
                     product_category=text_context.product_category,
                 )
                 vision_payload = vision.model_dump(mode="json")
-                await self._write_stage_cache(job_id, "vision", vision_payload)
+                # Persist only validated structured fields; never Anthropic thinking blocks.
+                if "thinking" in vision_payload:
+                    vision_payload.pop("thinking", None)
+                await self._stage_cache.set(
+                    redis_stage_key(job_id, "vision"),
+                    vision_payload,
+                    self._redis_stage_ttl_seconds,
+                )
                 await self._repository.save_vision_result(
                     job_id=job_id,
                     vision_result=vision_payload,
@@ -231,7 +258,13 @@ class ClaudeReasoningService:
                 text_context=text_context,
             )
             reasoning_payload = reasoning.model_dump(mode="json")
-            await self._write_stage_cache(job_id, "reasoning", reasoning_payload)
+            if "thinking" in reasoning_payload:
+                reasoning_payload.pop("thinking", None)
+            await self._stage_cache.set(
+                redis_stage_key(job_id, "reasoning"),
+                reasoning_payload,
+                self._redis_stage_ttl_seconds,
+            )
 
             final = merge_chain_of_thought(
                 vision=vision,
@@ -239,7 +272,11 @@ class ClaudeReasoningService:
                 model_name=job.model_name,
             )
             final_payload = final.model_dump(mode="json")
-            await self._write_stage_cache(job_id, "final", final_payload)
+            await self._stage_cache.set(
+                redis_stage_key(job_id, "final"),
+                final_payload,
+                self._redis_stage_ttl_seconds,
+            )
 
             return await self._repository.save_final_result(
                 job_id=job_id,
@@ -248,17 +285,39 @@ class ClaudeReasoningService:
                 input_tokens_delta=in_tok2,
                 output_tokens_delta=out_tok2,
             )
-        except ClaudeReasoningError:
-            raise
-        except Exception as exc:
-            logger.exception("Claude CoT failed for job_id=%s", job_id)
+        except ClaudeReasoningValidationError as exc:
             await self._repository.mark_status(
                 job_id=job_id,
                 status=ClaudeReasoningJobStatus.FAILED,
                 error_message=str(exc)[:1000],
                 completed_at=datetime.now(UTC),
             )
-            raise ClaudeReasoningError(str(exc)) from exc
+            raise
+        except ClaudeReasoningError:
+            raise
+        except Exception as exc:
+            logger.exception("Claude CoT failed for job_id=%s", job_id)
+            await self._repository.mark_status(
+                job_id=job_id,
+                status=ClaudeReasoningJobStatus.QUEUED,
+                error_message=str(exc)[:1000],
+            )
+            raise ClaudeReasoningTransientError(str(exc)) from exc
+
+    async def recover_stalled(self, *, limit: int = 50) -> int:
+        """Re-queue stalled jobs through the transactional outbox."""
+
+        now = datetime.now(UTC)
+        job_ids = await self._repository.list_recoverable_job_ids(
+            queued_before=now - timedelta(seconds=30),
+            processing_before=now - self._processing_timeout,
+            limit=limit,
+        )
+        for job_id in job_ids:
+            enqueue = getattr(self._repository, "enqueue_recovery_outbox", None)
+            if callable(enqueue):
+                await enqueue(job_id=job_id)
+        return len(job_ids)
 
     async def _load_images(
         self, object_keys: tuple[str, ...]
@@ -277,30 +336,3 @@ class ClaudeReasoningService:
             mime_type, _ext = detected
             loaded.append((data, mime_type))
         return tuple(loaded)
-
-    async def _write_stage_cache(
-        self, job_id: UUID, stage: str, payload: dict
-    ) -> None:
-        try:
-            await cache_json(
-                redis_stage_key(job_id, stage),
-                payload,
-                self._redis_stage_ttl_seconds,
-            )
-        except RedisUnavailableError:
-            logger.warning(
-                "Redis unavailable; skipped Claude stage cache job_id=%s stage=%s",
-                job_id,
-                stage,
-            )
-
-    async def _read_stage_cache(self, job_id: UUID, stage: str) -> dict | None:
-        try:
-            return await get_cached_json(redis_stage_key(job_id, stage))
-        except RedisUnavailableError:
-            logger.warning(
-                "Redis unavailable; Claude stage cache miss job_id=%s stage=%s",
-                job_id,
-                stage,
-            )
-            return None

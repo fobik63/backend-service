@@ -9,7 +9,9 @@ from app.models.bulk_generation import (
     UserPushNotification,
 )
 from app.models.ai_strategy import AiStrategyJob
-from app.models.claude_reasoning import ClaudeReasoningJob
+from app.models.claude_reasoning import ClaudeReasoningJob, ClaudeReasoningOutbox
+from app.models.pain_analysis import PainAnalysisJob
+from app.models.stock_parser import ParserHealth
 from app.models.generation_error_log import GenerationErrorLog
 from app.models.visual_audit import VisualAuditJob
 from app.models.oracle import OraclePredictionJob
@@ -38,6 +40,9 @@ __all__ = [
     "BulkGenerationItem",
     "AiStrategyJob",
     "ClaudeReasoningJob",
+    "ClaudeReasoningOutbox",
+    "PainAnalysisJob",
+    "ParserHealth",
     "VisualAuditJob",
     "OraclePredictionJob",
     "Generation",

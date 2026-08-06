@@ -11,21 +11,15 @@ from typing import Any
 from uuid import UUID
 
 import httpx
-from pydantic import ValidationError
+from anthropic import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    AsyncAnthropic,
+)
+from pydantic import BaseModel, ValidationError
 
 from app.core.config import Settings, get_settings
-from app.domain.claude_reasoning import (
-    REASONING_JSON_SCHEMA,
-    VISION_JSON_SCHEMA,
-    CompetitorTextContext,
-    ReasoningStageResult,
-    VisionStageResult,
-    build_reasoning_user_prompt,
-    build_vision_user_prompt,
-    extract_json_object,
-    reasoning_system_prompt,
-    vision_system_prompt,
-)
 from app.domain.ab_test import (
     AB_HYPOTHESES_JSON_SCHEMA,
     AbProductBrief,
@@ -43,6 +37,18 @@ from app.domain.ai_strategy import (
     build_strategy_plan_prompt,
     strategy_system_prompt,
 )
+from app.domain.claude_reasoning import (
+    REASONING_JSON_SCHEMA,
+    VISION_JSON_SCHEMA,
+    CompetitorTextContext,
+    ReasoningStageResult,
+    VisionStageResult,
+    build_reasoning_user_prompt,
+    build_vision_user_prompt,
+    extract_json_object,
+    reasoning_system_prompt,
+    vision_system_prompt,
+)
 from app.domain.oracle import (
     ORACLE_ENRICHMENT_JSON_SCHEMA,
     ClaudeGapEnrichment,
@@ -51,12 +57,21 @@ from app.domain.oracle import (
     build_oracle_enrichment_prompt,
     oracle_system_prompt,
 )
+from app.domain.pain_analysis import (
+    PAIN_ANALYSIS_JSON_SCHEMA,
+    PainAnalysisRequest,
+    PainAnalysisResult,
+    build_pain_analysis_prompt,
+    normalize_claude_pain_result,
+    pain_analysis_system_prompt,
+)
 from app.domain.visual_audit import (
     RISING_STAR_VISION_JSON_SCHEMA,
     RisingStarVisionDissection,
     build_rising_star_vision_prompt,
     rising_star_vision_system_prompt,
 )
+from app.infrastructure.claude.image_normalize import normalize_image_for_claude
 from app.services.api_usage_costs import record_api_usage_cost
 from app.services.infographic_service import TRANSIENT_HTTP_CODES
 
@@ -89,6 +104,13 @@ class Claude47VisionClient:
         self._model = self._settings.claude_47_model.strip()
         if not self._model:
             raise ClaudeConfigurationError("CLAUDE_47_MODEL must not be empty.")
+        self._sdk = AsyncAnthropic(
+            api_key=self._api_key,
+            base_url=self._settings.claude_47_base_url.rstrip("/"),
+            timeout=self._settings.claude_47_timeout_seconds,
+            max_retries=0,
+        )
+        # Legacy httpx path kept for deterministic retry/Retry-After handling.
         self._client = httpx.AsyncClient(
             base_url=self._settings.claude_47_base_url.rstrip("/"),
             timeout=httpx.Timeout(self._settings.claude_47_timeout_seconds),
@@ -106,6 +128,7 @@ class Claude47VisionClient:
 
     async def aclose(self) -> None:
         await self._client.aclose()
+        await self._sdk.close()
 
     async def analyze_visual_triggers(
         self,
@@ -121,13 +144,17 @@ class Claude47VisionClient:
         selected = images[:max_images]
         content: list[dict[str, Any]] = []
         for image_bytes, mime_type in selected:
+            normalized, media_type = normalize_image_for_claude(
+                image_bytes,
+                media_type=mime_type,
+            )
             content.append(
                 {
                     "type": "image",
                     "source": {
                         "type": "base64",
-                        "media_type": mime_type,
-                        "data": base64.b64encode(image_bytes).decode("ascii"),
+                        "media_type": media_type,
+                        "data": base64.b64encode(normalized).decode("ascii"),
                     },
                 }
             )
@@ -140,22 +167,16 @@ class Claude47VisionClient:
                 ),
             }
         )
-        payload_json, input_tokens, output_tokens = await self._messages_json(
+        return await self._messages_parse(
             system=vision_system_prompt(),
             content=content,
-            json_schema=VISION_JSON_SCHEMA,
+            output_format=VisionStageResult,
             max_tokens=self._settings.claude_47_vision_max_tokens,
             operation="claude_vision_triggers",
             user_id=user_id,
             job_id=job_id,
+            fallback_schema=VISION_JSON_SCHEMA,
         )
-        try:
-            result = VisionStageResult.model_validate(payload_json)
-        except ValidationError as exc:
-            raise ClaudeUpstreamError(
-                "Claude Vision JSON failed schema validation."
-            ) from exc
-        return result, input_tokens, output_tokens
 
     async def align_triggers_with_text(
         self,
@@ -174,22 +195,16 @@ class Claude47VisionClient:
                 ),
             }
         ]
-        payload_json, input_tokens, output_tokens = await self._messages_json(
+        return await self._messages_parse(
             system=reasoning_system_prompt(),
             content=content,
-            json_schema=REASONING_JSON_SCHEMA,
+            output_format=ReasoningStageResult,
             max_tokens=self._settings.claude_47_reasoning_max_tokens,
             operation="claude_cot_text_alignment",
             user_id=user_id,
             job_id=job_id,
+            fallback_schema=REASONING_JSON_SCHEMA,
         )
-        try:
-            result = ReasoningStageResult.model_validate(payload_json)
-        except ValidationError as exc:
-            raise ClaudeUpstreamError(
-                "Claude reasoning JSON failed schema validation."
-            ) from exc
-        return result, input_tokens, output_tokens
 
     async def dissect_rising_star_visuals(
         self,
@@ -212,13 +227,17 @@ class Claude47VisionClient:
         selected = images[:max_images]
         content: list[dict[str, Any]] = []
         for image_bytes, mime_type in selected:
+            normalized, media_type = normalize_image_for_claude(
+                image_bytes,
+                media_type=mime_type,
+            )
             content.append(
                 {
                     "type": "image",
                     "source": {
                         "type": "base64",
-                        "media_type": mime_type,
-                        "data": base64.b64encode(image_bytes).decode("ascii"),
+                        "media_type": media_type,
+                        "data": base64.b64encode(normalized).decode("ascii"),
                     },
                 }
             )
@@ -496,6 +515,115 @@ class Claude47VisionClient:
             ) from exc
         return hypotheses, input_tokens, output_tokens
 
+    async def analyze_competitor_pains(
+        self,
+        *,
+        request: PainAnalysisRequest,
+        user_id: UUID | None = None,
+        job_id: UUID | None = None,
+    ) -> tuple[PainAnalysisResult, int, int]:
+        """Filter junk competitor negatives and produce pain-closing content."""
+
+        if not request.raw_negative_reviews:
+            raise ClaudeUpstreamError(
+                "At least one negative review is required for pain analysis."
+            )
+        content: list[dict[str, Any]] = [
+            {
+                "type": "text",
+                "text": build_pain_analysis_prompt(request=request),
+            }
+        ]
+        payload_json, input_tokens, output_tokens = await self._messages_json(
+            system=pain_analysis_system_prompt(),
+            content=content,
+            json_schema=PAIN_ANALYSIS_JSON_SCHEMA,
+            max_tokens=self._settings.claude_47_reasoning_max_tokens,
+            operation="claude_pain_analysis",
+            user_id=user_id,
+            job_id=job_id,
+        )
+        try:
+            result = normalize_claude_pain_result(
+                payload_json,
+                model_name=self._model,
+            )
+        except (ValidationError, ValueError) as exc:
+            raise ClaudeUpstreamError(
+                f"Claude pain analysis failed validation: {exc}"
+            ) from exc
+        return result, input_tokens, output_tokens
+
+    async def _messages_parse(
+        self,
+        *,
+        system: str,
+        content: list[dict[str, Any]],
+        output_format: type[BaseModel],
+        max_tokens: int,
+        operation: str,
+        user_id: UUID | None,
+        job_id: UUID | None,
+        fallback_schema: dict[str, Any],
+    ) -> tuple[Any, int, int]:
+        """Prefer official SDK parse; fall back to schema-constrained create."""
+
+        try:
+            response = await self._sdk.messages.parse(
+                model=self._model,
+                max_tokens=max_tokens,
+                system=system,
+                messages=[{"role": "user", "content": content}],
+                thinking={"type": "adaptive"},
+                output_config={"effort": self._settings.claude_47_effort},
+                output_format=output_format,
+            )
+        except (APITimeoutError, APIConnectionError) as exc:
+            raise ClaudeUpstreamError("Claude request failed after retries.") from exc
+        except APIStatusError as exc:
+            # Older SDK / transitional accounts may reject parse; use JSON schema path.
+            if exc.status_code in {400, 404, 422}:
+                payload_json, input_tokens, output_tokens = await self._messages_json(
+                    system=system,
+                    content=content,
+                    json_schema=fallback_schema,
+                    max_tokens=max_tokens,
+                    operation=operation,
+                    user_id=user_id,
+                    job_id=job_id,
+                )
+                try:
+                    return (
+                        output_format.model_validate(payload_json),
+                        input_tokens,
+                        output_tokens,
+                    )
+                except ValidationError as validation_exc:
+                    raise ClaudeUpstreamError(
+                        "Claude JSON failed schema validation."
+                    ) from validation_exc
+            raise ClaudeUpstreamError(
+                f"Claude API error {exc.status_code}: {str(exc)[:500]}"
+            ) from exc
+
+        if response.parsed_output is None:
+            raise ClaudeUpstreamError("Claude parse returned empty structured output.")
+        usage = getattr(response, "usage", None)
+        input_tokens = _safe_token_count(getattr(usage, "input_tokens", None))
+        output_tokens = _safe_token_count(getattr(usage, "output_tokens", None))
+        await self._record_usage(
+            operation=operation,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            user_id=user_id,
+            job_id=job_id,
+            usage={
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+            },
+        )
+        return response.parsed_output, input_tokens, output_tokens
+
     async def _messages_json(
         self,
         *,
@@ -516,17 +644,19 @@ class Claude47VisionClient:
         if beta:
             headers["anthropic-beta"] = beta
 
+        # Opus 4.7 rejects temperature/top_p/top_k and token-budget thinking.
         payload: dict[str, Any] = {
             "model": self._model,
             "max_tokens": max_tokens,
-            "temperature": self._settings.claude_47_temperature,
+            "thinking": {"type": "adaptive"},
             "system": system,
             "messages": [{"role": "user", "content": content}],
             "output_config": {
+                "effort": self._settings.claude_47_effort,
                 "format": {
                     "type": "json_schema",
                     "schema": json_schema,
-                }
+                },
             },
         }
         response = await self._post_with_retry(
@@ -536,7 +666,7 @@ class Claude47VisionClient:
         )
         try:
             body = response.json()
-            text = body["content"][0]["text"]
+            text = _extract_text_content(body.get("content"))
         except (KeyError, IndexError, TypeError, ValueError) as exc:
             raise ClaudeUpstreamError("Unexpected Anthropic response shape.") from exc
         if not isinstance(text, str) or not text.strip():
@@ -657,3 +787,22 @@ def _safe_token_count(value: object) -> int:
     if isinstance(value, int) and value >= 0:
         return value
     return 0
+
+
+def _extract_text_content(content: object) -> str:
+    """Return the first text block, ignoring Anthropic thinking blocks."""
+
+    if not isinstance(content, list) or not content:
+        raise ValueError("Missing content blocks.")
+    texts: list[str] = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") != "text":
+            continue
+        text = block.get("text")
+        if isinstance(text, str) and text.strip():
+            texts.append(text)
+    if not texts:
+        raise ValueError("No text content block in Anthropic response.")
+    return texts[0]

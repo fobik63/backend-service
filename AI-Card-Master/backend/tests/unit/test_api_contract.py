@@ -88,6 +88,11 @@ def test_generation_and_webhook_contracts_are_exposed() -> None:
     assert "202" in paths["/api/v1/claude/reasoning/analyze"]["post"]["responses"]
     assert "/api/v1/claude/reasoning/{task_id}" in paths
     assert "get" in paths["/api/v1/claude/reasoning/{task_id}"]
+    assert "/api/v1/claude-analyses" in paths
+    assert "post" in paths["/api/v1/claude-analyses"]
+    assert "202" in paths["/api/v1/claude-analyses"]["post"]["responses"]
+    assert "/api/v1/claude-analyses/{analysis_id}" in paths
+    assert "get" in paths["/api/v1/claude-analyses/{analysis_id}"]
     assert "/api/v1/oracle/preview" in paths
     assert "post" in paths["/api/v1/oracle/preview"]
     assert "/api/v1/oracle/predict" in paths

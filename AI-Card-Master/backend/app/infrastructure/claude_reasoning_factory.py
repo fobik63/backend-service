@@ -10,6 +10,7 @@ from app.infrastructure.claude.client import (
     Claude47VisionClient,
     ClaudeConfigurationError,
 )
+from app.infrastructure.claude_stage_cache import RedisClaudeStageCache
 from app.infrastructure.persistence.claude_reasoning_repository import (
     ClaudeReasoningRepository,
 )
@@ -33,10 +34,11 @@ def build_claude_reasoning_service(
     if client is None and require_claude_client:
         client = Claude47VisionClient(settings)
     elif client is None:
-        # Best-effort: attach client when key is present so enqueue can
-        # still validate configuration early in staging.
         try:
-            if settings.claude_47_api_key and settings.claude_47_api_key.get_secret_value().strip():
+            if (
+                settings.claude_47_api_key
+                and settings.claude_47_api_key.get_secret_value().strip()
+            ):
                 client = Claude47VisionClient(settings)
         except ClaudeConfigurationError:
             client = None
@@ -48,5 +50,7 @@ def build_claude_reasoning_service(
         max_images=settings.claude_47_max_images_per_request,
         max_image_bytes=settings.generation_max_upload_bytes,
         redis_stage_ttl_seconds=settings.claude_47_stage_cache_ttl_seconds,
+        processing_timeout_seconds=settings.claude_47_processing_timeout_seconds,
         claude=client,
+        stage_cache=RedisClaudeStageCache(),
     )

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Literal
 
 from pydantic import (
+    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -326,6 +327,33 @@ class Settings(BaseSettings):
         default=45.0,
         alias="MARKETPLACE_BRIDGE_TIMEOUT_SECONDS",
     )
+
+    # Isolated stock parser (WB/Ozon mobile JSON endpoints — no Selenium).
+    # STOCK_PARSER_PROXY_URLS: comma/semicolon separated http(s)/socks5 URLs.
+    stock_parser_proxy_urls: str = Field(
+        default="",
+        alias="STOCK_PARSER_PROXY_URLS",
+    )
+    stock_parser_timeout_seconds: float = Field(
+        default=20.0,
+        alias="STOCK_PARSER_TIMEOUT_SECONDS",
+    )
+    stock_parser_circuit_breaker_threshold: int = Field(
+        default=5,
+        alias="STOCK_PARSER_CIRCUIT_BREAKER_THRESHOLD",
+    )
+    stock_parser_wb_card_base_url: str = Field(
+        default="https://card.wb.ru",
+        alias="STOCK_PARSER_WB_CARD_BASE_URL",
+    )
+    stock_parser_wb_dest: int = Field(
+        default=-1257786,
+        alias="STOCK_PARSER_WB_DEST",
+    )
+    stock_parser_ozon_api_base_url: str = Field(
+        default="https://api.ozon.ru",
+        alias="STOCK_PARSER_OZON_API_BASE_URL",
+    )
     smart_inpainting_edge_pass_enabled: bool = Field(
         default=False,
         alias="SMART_INPAINTING_EDGE_PASS_ENABLED",
@@ -399,7 +427,7 @@ class Settings(BaseSettings):
     # Claude 4.7 Opus Vision & Reasoning Integration Layer
     claude_47_api_key: SecretStr | None = Field(
         default=None,
-        alias="CLAUDE_47_API_KEY",
+        validation_alias=AliasChoices("CLAUDE_47_API_KEY", "ANTHROPIC_API_KEY"),
     )
     claude_47_base_url: str = Field(
         default="https://api.anthropic.com",
@@ -414,7 +442,7 @@ class Settings(BaseSettings):
         alias="CLAUDE_47_API_VERSION",
     )
     claude_47_structured_outputs_beta: str = Field(
-        default="structured-outputs-2025-11-13",
+        default="",
         alias="CLAUDE_47_STRUCTURED_OUTPUTS_BETA",
     )
     claude_47_timeout_seconds: float = Field(
@@ -434,9 +462,14 @@ class Settings(BaseSettings):
         default=0.5,
         alias="CLAUDE_47_BASE_RETRY_DELAY_SECONDS",
     )
+    # Kept for legacy env compatibility; Opus 4.7 rejects temperature in requests.
     claude_47_temperature: float = Field(
         default=0.2,
         alias="CLAUDE_47_TEMPERATURE",
+    )
+    claude_47_effort: Literal["low", "medium", "high", "xhigh", "max"] = Field(
+        default="high",
+        alias="CLAUDE_47_EFFORT",
     )
     claude_47_vision_max_tokens: int = Field(
         default=4096,
@@ -453,6 +486,18 @@ class Settings(BaseSettings):
     claude_47_stage_cache_ttl_seconds: int = Field(
         default=3600,
         alias="CLAUDE_47_STAGE_CACHE_TTL_SECONDS",
+    )
+    claude_47_processing_timeout_seconds: int = Field(
+        default=900,
+        alias="CLAUDE_47_PROCESSING_TIMEOUT_SECONDS",
+    )
+    claude_47_outbox_batch_size: int = Field(
+        default=100,
+        alias="CLAUDE_47_OUTBOX_BATCH_SIZE",
+    )
+    claude_47_recovery_batch_size: int = Field(
+        default=50,
+        alias="CLAUDE_47_RECOVERY_BATCH_SIZE",
     )
     claude_47_input_1k_tokens_cost_usd: Decimal = Field(
         default=Decimal("0"),
@@ -669,6 +714,9 @@ class Settings(BaseSettings):
         "claude_47_reasoning_max_tokens",
         "claude_47_max_images_per_request",
         "claude_47_stage_cache_ttl_seconds",
+        "claude_47_processing_timeout_seconds",
+        "claude_47_outbox_batch_size",
+        "claude_47_recovery_batch_size",
         "visual_audit_top_n",
         "visual_audit_brand_dominant_soft_reviews",
         "visual_audit_brand_dominant_hard_reviews",
@@ -679,6 +727,7 @@ class Settings(BaseSettings):
         "oracle_max_alerts",
         "oracle_top_rank_ceiling",
         "ai_strategy_max_recommendations",
+        "stock_parser_circuit_breaker_threshold",
     )
     @classmethod
     def validate_generation_positive_ints(cls, value: int) -> int:
@@ -699,6 +748,7 @@ class Settings(BaseSettings):
         "telegram_user_timeout_seconds",
         "marketplace_export_timeout_seconds",
         "marketplace_bridge_timeout_seconds",
+        "stock_parser_timeout_seconds",
         "winback_inactivity_scan_seconds",
         "winback_style_update_scan_seconds",
         "bulk_generation_poll_seconds",

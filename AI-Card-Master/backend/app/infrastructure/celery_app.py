@@ -21,7 +21,9 @@ celery_app = Celery(
         "app.workers.visual_audit_tasks",
         "app.workers.oracle_tasks",
         "app.workers.ai_strategy_tasks",
+        "app.workers.pain_analysis_tasks",
         "app.workers.ab_test_tasks",
+        "app.workers.stock_parser_tasks",
     ],
 )
 
@@ -56,12 +58,17 @@ celery_app.conf.update(
         "smart_variant.recolor_and_enqueue": {"queue": "smart_variant"},
         "smart_variant.poll_active_syncs": {"queue": "smart_variant"},
         "claude.run_chain_of_thought": {"queue": "claude.reasoning"},
+        "claude.dispatch_outbox": {"queue": "claude.recovery"},
+        "claude.recover_stalled": {"queue": "claude.recovery"},
         "claude.run_visual_audit": {"queue": "claude.reasoning"},
         "claude.run_oracle_prediction": {"queue": "claude.reasoning"},
         "claude.run_ai_strategy_plan": {"queue": "claude.reasoning"},
+        "claude.run_pain_analysis": {"queue": "claude.reasoning"},
         "ab_test.generate_and_publish": {"queue": "ab_test"},
         "ab_test.poll_active_experiments": {"queue": "ab_test"},
         "ab_test.resolve_experiment": {"queue": "ab_test"},
+        "stock_parser.parse_sku": {"queue": "stock_parser"},
+        "stock_parser.parse_batch": {"queue": "stock_parser"},
     },
     beat_schedule={
         "dispatch-generation-outbox": {
@@ -70,6 +77,14 @@ celery_app.conf.update(
         },
         "recover-stalled-generations": {
             "task": "generation.recover_stalled",
+            "schedule": 60.0,
+        },
+        "dispatch-claude-analysis-outbox": {
+            "task": "claude.dispatch_outbox",
+            "schedule": 2.0,
+        },
+        "recover-stalled-claude-analyses": {
+            "task": "claude.recover_stalled",
             "schedule": 60.0,
         },
         "winback-scan-inactivity": {

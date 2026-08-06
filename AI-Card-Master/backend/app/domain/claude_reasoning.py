@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -23,10 +23,43 @@ class ClaudeReasoningJobStatus(StrEnum):
     FAILED = "failed"
 
 
+TextAlignmentStatus = Literal[
+    "supported",
+    "contradicted",
+    "missing",
+    "ambiguous",
+]
+
+
 class StrictDomainModel(BaseModel):
     """Strict Pydantic v2 base for Claude structured payloads."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class ImageSlideContext(StrictDomainModel):
+    """Per-image textual metadata supplied with multipart uploads."""
+
+    image_index: int = Field(ge=0, le=4)
+    caption: str | None = Field(default=None, max_length=500)
+    labels: list[str] = Field(default_factory=list, max_length=20)
+    notes: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("labels", mode="before")
+    @classmethod
+    def _coerce_labels(cls, value: object) -> list[str]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise ValueError("Expected a list of strings.")
+        cleaned: list[str] = []
+        for item in value:
+            if not isinstance(item, str):
+                raise ValueError("List items must be strings.")
+            text = item.strip()
+            if text:
+                cleaned.append(text)
+        return cleaned
 
 
 class VisualTrigger(StrictDomainModel):
@@ -57,7 +90,7 @@ class TextAlignmentItem(StrictDomainModel):
 
     trigger_id: str = Field(min_length=1, max_length=64)
     text_evidence: str = Field(min_length=1, max_length=500)
-    alignment: str = Field(min_length=1, max_length=32)
+    alignment: TextAlignmentStatus
     gap_note: str = Field(min_length=1, max_length=500)
     monetization_signal: str = Field(min_length=1, max_length=300)
 
@@ -95,6 +128,7 @@ class CompetitorTextContext(StrictDomainModel):
     price_after: float | None = Field(default=None, ge=0)
     marketplace: str | None = Field(default=None, max_length=32)
     product_category: str | None = Field(default=None, max_length=128)
+    image_contexts: list[ImageSlideContext] = Field(default_factory=list, max_length=5)
 
     @field_validator("characteristics", "reviews_positive", "reviews_negative", mode="before")
     @classmethod
@@ -133,6 +167,40 @@ class ClaudeReasoningJobView:
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None
+
+    @property
+    def progress(self) -> int:
+        """Deterministic progress for status polling."""
+
+        if self.status == ClaudeReasoningJobStatus.QUEUED:
+            return 0
+        if self.status == ClaudeReasoningJobStatus.VISION_RUNNING:
+            return 35
+        if self.status == ClaudeReasoningJobStatus.REASONING_RUNNING:
+            return 70
+        if self.status == ClaudeReasoningJobStatus.COMPLETED:
+            return 100
+        if self.status == ClaudeReasoningJobStatus.FAILED:
+            return 100
+        return 0
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.status in (
+            ClaudeReasoningJobStatus.COMPLETED,
+            ClaudeReasoningJobStatus.FAILED,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ClaudeOutboxMessage:
+    """Claimed transactional outbox row ready for Celery publish."""
+
+    id: UUID
+    event_type: str
+    aggregate_id: UUID
+    payload: dict[str, Any]
+    attempts: int
 
 
 VISION_JSON_SCHEMA: dict[str, Any] = {
@@ -213,7 +281,15 @@ REASONING_JSON_SCHEMA: dict[str, Any] = {
                 "properties": {
                     "trigger_id": {"type": "string"},
                     "text_evidence": {"type": "string"},
-                    "alignment": {"type": "string"},
+                    "alignment": {
+                        "type": "string",
+                        "enum": [
+                            "supported",
+                            "contradicted",
+                            "missing",
+                            "ambiguous",
+                        ],
+                    },
                     "gap_note": {"type": "string"},
                     "monetization_signal": {"type": "string"},
                 },
@@ -283,7 +359,8 @@ def build_reasoning_user_prompt(
     return (
         "Этап 2 цепочки рассуждений: сопоставь визуальные триггеры конкурента "
         "с текстовыми данными (заголовок, описание, характеристики, отзывы). "
-        "Для каждого trigger_id укажи alignment: confirmed | partial | contradiction | missing. "
+        "Для каждого trigger_id укажи alignment: "
+        "supported | contradicted | missing | ambiguous. "
         "Сначала рассуждай в reasoning_trace, затем верни строго JSON. "
         f"Входные данные:\n{json.dumps(payload, ensure_ascii=False)}"
     )
@@ -310,7 +387,7 @@ def merge_chain_of_thought(
         confirmed = [
             item.trigger_id
             for item in reasoning.alignments
-            if item.alignment.lower() in {"confirmed", "partial"}
+            if item.alignment == "supported"
         ]
     if not confirmed:
         confirmed = [trigger.trigger_id for trigger in vision.visual_triggers[:3]]
@@ -339,7 +416,7 @@ def merge_chain_of_thought(
     confidences = [item.confidence for item in vision.visual_triggers]
     avg_vision = sum(confidences) / len(confidences) if confidences else 0.5
     confirmed_ratio = (
-        len([a for a in reasoning.alignments if a.alignment.lower() == "confirmed"])
+        len([a for a in reasoning.alignments if a.alignment == "supported"])
         / max(len(reasoning.alignments), 1)
     )
     confidence_score = round(min(1.0, max(0.0, 0.55 * avg_vision + 0.45 * confirmed_ratio)), 4)

@@ -16,6 +16,7 @@ from app.domain.claude_reasoning import (
     ClaudeReasoningJobStatus,
     ClaudeReasoningJobView,
     CompetitorTextContext,
+    ImageSlideContext,
     ReasoningStageResult,
     TextAlignmentItem,
     VisionStageResult,
@@ -67,14 +68,14 @@ def _reasoning() -> ReasoningStageResult:
             TextAlignmentItem(
                 trigger_id="t1",
                 text_evidence="В описании: бесшумный механизм",
-                alignment="confirmed",
+                alignment="supported",
                 gap_note="Визуал и текст согласованы",
                 monetization_signal="Закрывает частую боль из отзывов",
             ),
             TextAlignmentItem(
                 trigger_id="t2",
                 text_evidence="Гарантия не указана в тексте",
-                alignment="contradiction",
+                alignment="contradicted",
                 gap_note="На фото обещание без текстового подтверждения",
                 monetization_signal="Риск недоверия",
             ),
@@ -142,6 +143,8 @@ class _FakeClaude:
 class _FakeRepo:
     def __init__(self) -> None:
         self.jobs: dict[UUID, ClaudeReasoningJobView] = {}
+        self.outbox_events: list[UUID] = []
+        self._idempotency: dict[tuple[UUID, str], UUID] = {}
 
     async def create_job(
         self,
@@ -172,15 +175,18 @@ class _FakeRepo:
             completed_at=None,
         )
         self.jobs[job.id] = job
+        self.outbox_events.append(job.id)
+        if idempotency_key:
+            self._idempotency[(user_id, idempotency_key)] = job.id
         return job
 
     async def find_idempotent_job(
         self, *, user_id: UUID, idempotency_key: str
     ) -> ClaudeReasoningJobView | None:
-        for job in self.jobs.values():
-            if job.user_id == user_id and job.text_context.get("_idem") == idempotency_key:
-                return job
-        return None
+        job_id = self._idempotency.get((user_id, idempotency_key))
+        if job_id is None:
+            return None
+        return self.jobs.get(job_id)
 
     async def get_job_for_user(
         self, *, user_id: UUID, job_id: UUID
@@ -192,6 +198,32 @@ class _FakeRepo:
 
     async def get_job(self, *, job_id: UUID) -> ClaudeReasoningJobView | None:
         return self.jobs.get(job_id)
+
+    async def claim_job(
+        self,
+        *,
+        job_id: UUID,
+        stale_before: datetime,
+    ) -> ClaudeReasoningJobView | None:
+        job = self.jobs.get(job_id)
+        if job is None or job.is_terminal:
+            return None
+        if job.status == ClaudeReasoningJobStatus.QUEUED:
+            return await self.mark_status(
+                job_id=job_id,
+                status=ClaudeReasoningJobStatus.VISION_RUNNING,
+            )
+        if job.updated_at > stale_before:
+            return None
+        if job.vision_result is None:
+            return await self.mark_status(
+                job_id=job_id,
+                status=ClaudeReasoningJobStatus.VISION_RUNNING,
+            )
+        return await self.mark_status(
+            job_id=job_id,
+            status=ClaudeReasoningJobStatus.REASONING_RUNNING,
+        )
 
     async def mark_status(
         self,
@@ -285,6 +317,24 @@ class _FakeRepo:
         self.jobs[job_id] = updated
         return updated
 
+    async def claim_outbox(self, *, limit: int):
+        return ()
+
+    async def mark_outbox_published(self, message_id: UUID) -> None:
+        return None
+
+    async def mark_outbox_failed(self, message_id: UUID, error: str) -> None:
+        return None
+
+    async def list_recoverable_job_ids(
+        self,
+        *,
+        queued_before: datetime,
+        processing_before: datetime,
+        limit: int,
+    ) -> tuple[UUID, ...]:
+        return ()
+
 
 def _service(
     repo: _FakeRepo | None = None,
@@ -360,23 +410,68 @@ async def test_enqueue_rejects_invalid_image() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_chain_of_thought_two_stages(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _no_cache_get(_key: str) -> None:
-        return None
+async def test_enqueue_rejects_too_many_images() -> None:
+    service, *_ = _service()
+    with pytest.raises(ClaudeReasoningValidationError, match="Maximum 5"):
+        await service.enqueue_analysis(
+            user_id=uuid4(),
+            images=(_MIN_PNG,) * 6,
+            text_context=CompetitorTextContext(),
+        )
 
-    async def _no_cache_set(_key: str, _payload: dict, _ttl: int) -> None:
-        return None
 
-    monkeypatch.setattr(
-        "app.application.claude_reasoning_service.get_cached_json",
-        _no_cache_get,
+@pytest.mark.asyncio
+async def test_enqueue_rejects_image_context_mismatch() -> None:
+    service, *_ = _service()
+    with pytest.raises(ClaudeReasoningValidationError, match="image_contexts"):
+        await service.enqueue_analysis(
+            user_id=uuid4(),
+            images=(_MIN_PNG,),
+            text_context=CompetitorTextContext(
+                image_contexts=[
+                    ImageSlideContext(image_index=0, caption="a"),
+                    ImageSlideContext(image_index=1, caption="b"),
+                ]
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_enqueue_idempotency_replays_same_job() -> None:
+    service, *_ = _service()
+    user_id = uuid4()
+    first, replay1 = await service.enqueue_analysis(
+        user_id=user_id,
+        images=(_MIN_PNG,),
+        text_context=CompetitorTextContext(title="A"),
+        idempotency_key="key-abc-123",
     )
-    monkeypatch.setattr(
-        "app.application.claude_reasoning_service.cache_json",
-        _no_cache_set,
+    second, replay2 = await service.enqueue_analysis(
+        user_id=user_id,
+        images=(_MIN_PNG,),
+        text_context=CompetitorTextContext(title="B"),
+        idempotency_key="key-abc-123",
     )
+    assert replay1 is False
+    assert replay2 is True
+    assert first.id == second.id
 
-    service, repo, _storage, claude = _service()
+
+@pytest.mark.asyncio
+async def test_run_chain_of_thought_two_stages() -> None:
+    call_order: list[str] = []
+
+    class _OrderedClaude(_FakeClaude):
+        async def analyze_visual_triggers(self, **kwargs):
+            call_order.append("vision")
+            return await super().analyze_visual_triggers(**kwargs)
+
+        async def align_triggers_with_text(self, **kwargs):
+            call_order.append("reasoning")
+            return await super().align_triggers_with_text(**kwargs)
+
+    claude = _OrderedClaude()
+    service, repo, _storage, _ = _service(claude=claude)
     user_id = uuid4()
     job, _ = await service.enqueue_analysis(
         user_id=user_id,
@@ -384,12 +479,16 @@ async def test_run_chain_of_thought_two_stages(monkeypatch: pytest.MonkeyPatch) 
         text_context=CompetitorTextContext(
             title="Товар",
             description="Бесшумный механизм",
+            image_contexts=[ImageSlideContext(image_index=0, caption="hero")],
         ),
     )
+    assert job.id in repo.outbox_events
     completed = await service.run_chain_of_thought(job_id=job.id)
     assert completed.status == ClaudeReasoningJobStatus.COMPLETED
     assert completed.final_result is not None
     assert "conversion_triggers" in completed.final_result
+    assert "thinking" not in completed.final_result
+    assert call_order == ["vision", "reasoning"]
     assert claude.vision_calls == 1
     assert claude.reasoning_calls == 1
     assert completed.input_tokens == 180
@@ -398,7 +497,43 @@ async def test_run_chain_of_thought_two_stages(monkeypatch: pytest.MonkeyPatch) 
 
 
 @pytest.mark.asyncio
+async def test_duplicate_claim_is_noop_when_completed() -> None:
+    service, _repo, _storage, claude = _service()
+    job, _ = await service.enqueue_analysis(
+        user_id=uuid4(),
+        images=(_MIN_PNG,),
+        text_context=CompetitorTextContext(title="Товар"),
+    )
+    first = await service.run_chain_of_thought(job_id=job.id)
+    second = await service.run_chain_of_thought(job_id=job.id)
+    assert first.status == ClaudeReasoningJobStatus.COMPLETED
+    assert second.status == ClaudeReasoningJobStatus.COMPLETED
+    assert claude.vision_calls == 1
+    assert claude.reasoning_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_get_job_for_user_not_found() -> None:
     service, *_ = _service()
     with pytest.raises(ClaudeReasoningNotFoundError):
         await service.get_job_for_user(user_id=uuid4(), job_id=uuid4())
+
+
+def test_extract_text_ignores_thinking_blocks() -> None:
+    from app.infrastructure.claude.client import _extract_text_content
+
+    text = _extract_text_content(
+        [
+            {"type": "thinking", "thinking": "hidden"},
+            {"type": "text", "text": '{"ok": true}'},
+        ]
+    )
+    assert text == '{"ok": true}'
+
+
+def test_normalize_image_for_claude_keeps_small_png() -> None:
+    from app.infrastructure.claude.image_normalize import normalize_image_for_claude
+
+    data, media_type = normalize_image_for_claude(_MIN_PNG, media_type="image/png")
+    assert media_type == "image/png"
+    assert data.startswith(b"\x89PNG")
