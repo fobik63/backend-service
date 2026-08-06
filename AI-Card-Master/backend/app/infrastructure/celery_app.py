@@ -26,6 +26,7 @@ celery_app = Celery(
         "app.workers.ab_test_tasks",
         "app.workers.stock_parser_tasks",
         "app.workers.eye_of_god_tasks",
+        "app.workers.competitor_audit_tasks",
     ],
 )
 
@@ -73,6 +74,8 @@ celery_app.conf.update(
         "stock_parser.parse_sku": {"queue": "stock_parser"},
         "stock_parser.parse_batch": {"queue": "stock_parser"},
         "claude.run_eye_of_god_vision": {"queue": "claude.reasoning"},
+        "analytics.run_competitor_audit": {"queue": "analytics.scrape"},
+        "claude.run_competitor_deep_analysis": {"queue": "claude.reasoning"},
     },
     beat_schedule={
         "dispatch-generation-outbox": {

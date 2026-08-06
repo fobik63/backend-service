@@ -367,6 +367,37 @@ class Settings(BaseSettings):
         default=0,
         alias="STOCK_PARSER_BEAT_MINUTE_UTC",
     )
+
+    # Manual competitor-link audit (plan §77): deep scrape via Celery.
+    competitor_audit_proxy_urls: str = Field(
+        default="",
+        alias="COMPETITOR_AUDIT_PROXY_URLS",
+    )
+    competitor_audit_timeout_seconds: float = Field(
+        default=25.0,
+        alias="COMPETITOR_AUDIT_TIMEOUT_SECONDS",
+    )
+    competitor_audit_redis_ttl_seconds: int = Field(
+        default=3600,
+        alias="COMPETITOR_AUDIT_REDIS_TTL_SECONDS",
+    )
+    competitor_audit_max_reviews: int = Field(
+        default=50,
+        alias="COMPETITOR_AUDIT_MAX_REVIEWS",
+    )
+    competitor_audit_wb_content_base_url: str = Field(
+        default="https://wbx-content-v2.wbstatic.net",
+        alias="COMPETITOR_AUDIT_WB_CONTENT_BASE_URL",
+    )
+    competitor_audit_max_vision_images: int = Field(
+        default=5,
+        alias="COMPETITOR_AUDIT_MAX_VISION_IMAGES",
+    )
+    competitor_audit_image_timeout_seconds: float = Field(
+        default=20.0,
+        alias="COMPETITOR_AUDIT_IMAGE_TIMEOUT_SECONDS",
+    )
+
     smart_inpainting_edge_pass_enabled: bool = Field(
         default=False,
         alias="SMART_INPAINTING_EDGE_PASS_ENABLED",
@@ -784,6 +815,9 @@ class Settings(BaseSettings):
         "ai_strategy_max_recommendations",
         "stock_parser_circuit_breaker_threshold",
         "stock_parser_chunk_size",
+        "competitor_audit_redis_ttl_seconds",
+        "competitor_audit_max_reviews",
+        "competitor_audit_max_vision_images",
     )
     @classmethod
     def validate_generation_positive_ints(cls, value: int) -> int:
@@ -819,6 +853,8 @@ class Settings(BaseSettings):
         "marketplace_export_timeout_seconds",
         "marketplace_bridge_timeout_seconds",
         "stock_parser_timeout_seconds",
+        "competitor_audit_timeout_seconds",
+        "competitor_audit_image_timeout_seconds",
         "winback_inactivity_scan_seconds",
         "winback_style_update_scan_seconds",
         "bulk_generation_poll_seconds",

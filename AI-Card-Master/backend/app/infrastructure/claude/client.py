@@ -71,6 +71,14 @@ from app.domain.eye_of_god import (
     build_eye_of_god_vision_prompt,
     eye_of_god_vision_system_prompt,
 )
+from app.domain.competitor_audit import (
+    COMPETITOR_DEEP_ANALYSIS_JSON_SCHEMA,
+    CompetitorCardDeepAnalysis,
+    CompetitorCardScrapeResult,
+    build_competitor_deep_analysis_prompt,
+    competitor_deep_analysis_system_prompt,
+    normalize_deep_analysis_card,
+)
 from app.domain.visual_audit import (
     RISING_STAR_VISION_JSON_SCHEMA,
     RisingStarVisionDissection,
@@ -345,6 +353,69 @@ class Claude47VisionClient:
         except ValidationError as exc:
             raise ClaudeUpstreamError(
                 "Claude Eye-of-God Vision JSON failed schema validation."
+            ) from exc
+        return result, input_tokens, output_tokens
+
+    async def analyze_competitor_card(
+        self,
+        *,
+        card: CompetitorCardScrapeResult,
+        images: tuple[tuple[bytes, str], ...],
+        user_id: UUID | None = None,
+        job_id: UUID | None = None,
+    ) -> tuple[CompetitorCardDeepAnalysis, int, int]:
+        """Three-vector competitor audit: Vision + reviews → frontend JSON (§78)."""
+
+        max_images = min(
+            self._settings.claude_47_max_images_per_request,
+            self._settings.competitor_audit_max_vision_images,
+        )
+        selected = images[:max_images]
+        content: list[dict[str, Any]] = []
+        for image_bytes, mime_type in selected:
+            normalized, media_type = normalize_image_for_claude(
+                image_bytes,
+                media_type=mime_type,
+            )
+            content.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": base64.b64encode(normalized).decode("ascii"),
+                    },
+                }
+            )
+        content.append(
+            {
+                "type": "text",
+                "text": build_competitor_deep_analysis_prompt(
+                    card=card,
+                    image_count=len(selected),
+                ),
+            }
+        )
+        # Vision tokens when photos present; otherwise reasoning budget for text-only.
+        max_tokens = (
+            self._settings.claude_47_vision_max_tokens
+            if selected
+            else self._settings.claude_47_reasoning_max_tokens
+        )
+        payload_json, input_tokens, output_tokens = await self._messages_json(
+            system=competitor_deep_analysis_system_prompt(),
+            content=content,
+            json_schema=COMPETITOR_DEEP_ANALYSIS_JSON_SCHEMA,
+            max_tokens=max_tokens,
+            operation="claude_competitor_deep_analysis",
+            user_id=user_id,
+            job_id=job_id,
+        )
+        try:
+            result = normalize_deep_analysis_card(payload_json, card=card)
+        except (ValidationError, ValueError) as exc:
+            raise ClaudeUpstreamError(
+                f"Claude competitor deep analysis failed validation: {exc}"
             ) from exc
         return result, input_tokens, output_tokens
 

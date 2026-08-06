@@ -13,6 +13,7 @@ from app.models.claude_reasoning import ClaudeReasoningJob, ClaudeReasoningOutbo
 from app.models.pain_analysis import PainAnalysisJob
 from app.models.stock_parser import ParserHealth, SkuItem, StockSnapshot
 from app.models.eye_of_god import EyeOfGodJob
+from app.models.competitor_audit import CompetitorAuditJob
 from app.models.generation_error_log import GenerationErrorLog
 from app.models.visual_audit import VisualAuditJob
 from app.models.oracle import OraclePredictionJob
@@ -47,6 +48,7 @@ __all__ = [
     "SkuItem",
     "StockSnapshot",
     "EyeOfGodJob",
+    "CompetitorAuditJob",
     "VisualAuditJob",
     "OraclePredictionJob",
     "Generation",

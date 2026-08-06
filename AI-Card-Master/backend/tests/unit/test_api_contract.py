@@ -63,6 +63,11 @@ def test_generation_and_webhook_contracts_are_exposed() -> None:
     assert "post" in paths["/api/v1/exports/{platform}"]
     assert "/api/v1/analytics/style-presets" in paths
     assert "get" in paths["/api/v1/analytics/style-presets"]
+    assert "/api/v1/analytics/analyze-links" in paths
+    assert "post" in paths["/api/v1/analytics/analyze-links"]
+    assert "202" in paths["/api/v1/analytics/analyze-links"]["post"]["responses"]
+    assert "/api/v1/analytics/analyze-links/{task_id}" in paths
+    assert "get" in paths["/api/v1/analytics/analyze-links/{task_id}"]
     assert "/api/v1/winback/cancel-intent" in paths
     assert "post" in paths["/api/v1/winback/cancel-intent"]
     assert "/api/v1/winback/offer" in paths
