@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.config.style_presets import resolve_niche_key
 from app.core.config import get_settings
 from app.domain.generation import (
     AttemptWorkItem,
@@ -29,6 +30,7 @@ from app.domain.generation import (
     SlideStatus,
     SlideWorkItem,
 )
+from app.infrastructure.persistence.style_analytics_repository import StyleAnalyticsRepository
 from app.models.generation_error_log import GenerationErrorLog
 from app.models.generation_job import (
     GenerationJob,
@@ -136,6 +138,14 @@ class GenerationRepository:
                         prompt_used=task.user_text,
                     )
                 )
+
+            # Internal tracking: durable log of which style presets are chosen.
+            await StyleAnalyticsRepository(self._session).log_selections(
+                user_id=user_id,
+                generation_job_id=job.id,
+                niche_key=resolve_niche_key(product_category) or "generic",
+                selections=slide_tasks,
+            )
 
             self._session.add(
                 GenerationOutbox(

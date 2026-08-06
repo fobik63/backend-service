@@ -33,6 +33,29 @@ def test_generation_and_webhook_contracts_are_exposed() -> None:
     assert "get" in paths["/api/v1/generation-texts/{task_id}"]
     assert "/api/v1/webhooks/midjourney/{provider_name}" in paths
     assert "post" in paths["/api/v1/webhooks/midjourney/{provider_name}"]
+    assert "/api/v1/referrals/stats" in paths
+    assert "get" in paths["/api/v1/referrals/stats"]
+    assert "/api/v1/referrals/apply" in paths
+    assert "post" in paths["/api/v1/referrals/apply"]
+    assert "/api/v1/workspaces" in paths
+    assert "post" in paths["/api/v1/workspaces"]
+    assert "/api/v1/workspaces/me" in paths
+    assert "get" in paths["/api/v1/workspaces/me"]
+    assert "/api/v1/workspaces/managers" in paths
+    assert "post" in paths["/api/v1/workspaces/managers"]
+    assert "/api/v1/workspaces/managers/{manager_user_id}" in paths
+    assert "delete" in paths["/api/v1/workspaces/managers/{manager_user_id}"]
+    assert "/api/v1/workspaces/shares" in paths
+    assert "post" in paths["/api/v1/workspaces/shares"]
+    assert "get" in paths["/api/v1/workspaces/shares"]
+    assert "/api/v1/workspaces/shares/{share_id}" in paths
+    assert "delete" in paths["/api/v1/workspaces/shares/{share_id}"]
+    assert "/api/v1/analytics/style-presets" in paths
+    assert "get" in paths["/api/v1/analytics/style-presets"]
+    style_schema = paths["/api/v1/analytics/style-presets"]["get"]["responses"]["200"][
+        "content"
+    ]["application/json"]["schema"]
+    assert "$ref" in style_schema or "properties" in style_schema
 
 
 def test_liveness_and_dependency_readiness_are_separate() -> None:

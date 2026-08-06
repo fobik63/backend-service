@@ -5,7 +5,17 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Enum, Integer, String, Text, text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -79,6 +89,23 @@ class User(Base):
         default=0,
         server_default=text("0"),
     )
+    referral_code: Mapped[str | None] = mapped_column(
+        String(16),
+        unique=True,
+        nullable=True,
+        index=True,
+    )
+    referred_by_user_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    referral_bonus_granted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        default=None,
+    )
     is_banned: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
@@ -115,5 +142,17 @@ class User(Base):
         "Payment",
         back_populates="user",
         cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    referred_by = relationship(
+        "User",
+        remote_side=[id],
+        foreign_keys=[referred_by_user_id],
+        back_populates="referrals",
+    )
+    referrals = relationship(
+        "User",
+        foreign_keys=[referred_by_user_id],
+        back_populates="referred_by",
         passive_deletes=True,
     )

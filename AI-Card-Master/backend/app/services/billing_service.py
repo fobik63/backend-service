@@ -267,6 +267,18 @@ class BillingService:
         user.subscription_ends_at = new_ends_at
         user.ai_coins = int(user.ai_coins) + int(plan.ai_coins)
 
+        referral_bonus_credited = 0
+        if user.referred_by_user_id is not None and user.referral_bonus_granted_at is None:
+            referrer = await self._session.get(
+                User,
+                user.referred_by_user_id,
+                with_for_update=True,
+            )
+            if referrer is not None and referrer.id != user.id:
+                referral_bonus_credited = int(get_settings().referral_bonus_coins)
+                referrer.ai_coins = int(referrer.ai_coins) + referral_bonus_credited
+                user.referral_bonus_granted_at = now
+
         payment.status = PaymentStatus.SUCCEEDED
         payment.processed_at = now
 
@@ -283,6 +295,13 @@ class BillingService:
             user.ai_coins,
             new_ends_at.isoformat(),
         )
+        if referral_bonus_credited > 0:
+            logger.info(
+                "Referral bonus applied: referrer=%s invited_user=%s credits=+%s",
+                user.referred_by_user_id,
+                user.id,
+                referral_bonus_credited,
+            )
 
         return BillingResult(
             payment_id=payment.id,

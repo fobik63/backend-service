@@ -25,11 +25,14 @@ from sqlalchemy import text
 
 from app.api import (
     admin_router,
+    analytics_router,
     generations_router,
     images_router,
     midjourney_webhook_router,
     payments_router,
+    referrals_router,
     text_generation_router,
+    workspaces_router,
 )
 from app.api.images import ensure_uploads_dir
 from app.core.admin_middleware import AdminOnlyMiddleware
@@ -134,8 +137,11 @@ app.add_middleware(AdminOnlyMiddleware)
 
 # Register API routers.
 app.include_router(admin_router)
+app.include_router(analytics_router)
 app.include_router(images_router)
 app.include_router(payments_router)
+app.include_router(referrals_router)
+app.include_router(workspaces_router)
 app.include_router(generations_router)
 app.include_router(text_generation_router)
 app.include_router(midjourney_webhook_router)

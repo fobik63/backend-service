@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -10,7 +11,9 @@ import pytest
 
 from app.domain.generation import GenerationErrorCode, GenerationErrorInfo
 from app.infrastructure.persistence.generation_repository import GenerationRepository
+from app.models.enums import PaymentStatus, TariffCode
 from app.models.generation_job import GenerationJob
+from app.models.payment import Payment
 from app.models.user import User
 from app.services.billing_service import BillingService, BillingValidationError
 from app.workers import generation_tasks
@@ -70,6 +73,38 @@ class FakeUserSession:
 
     async def flush(self) -> None:
         self.flushes += 1
+
+    async def refresh(self, _: Any) -> None:
+        self.refreshes += 1
+
+
+class FakePaymentSession:
+    def __init__(self, payment: Payment, user: User, referrer: User) -> None:
+        self.payment = payment
+        self.user = user
+        self.referrer = referrer
+        self.commits = 0
+        self.refreshes = 0
+
+    async def scalar(self, _statement: Any) -> Any:
+        return self.payment
+
+    async def get(
+        self,
+        model: type[Any],
+        identity: Any,
+        *,
+        with_for_update: bool = False,
+    ) -> Any:
+        assert with_for_update is True
+        if model is User and identity == self.user.id:
+            return self.user
+        if model is User and identity == self.referrer.id:
+            return self.referrer
+        return None
+
+    async def commit(self) -> None:
+        self.commits += 1
 
     async def refresh(self, _: Any) -> None:
         self.refreshes += 1
@@ -161,6 +196,50 @@ async def test_daily_bonus_claims_once_per_utc_day() -> None:
     assert second.coins_granted == 0
     assert user.ai_coins == 1
     assert user.daily_bonus_streak == 1
+    assert session.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_successful_payment_grants_referral_bonus_once() -> None:
+    referrer = User(
+        id=uuid4(),
+        email="referrer@example.com",
+        hashed_password="hash",
+        ai_coins=2,
+        referral_code="ABC123XY",
+    )
+    invited = User(
+        id=uuid4(),
+        email="invited@example.com",
+        hashed_password="hash",
+        ai_coins=0,
+        referred_by_user_id=referrer.id,
+        referral_bonus_granted_at=None,
+    )
+    payment = Payment(
+        id=uuid4(),
+        user_id=invited.id,
+        tariff_code=TariffCode.START,
+        yookassa_payment_id="yk_referral_1",
+        amount_rub=Decimal("319.00"),
+        status=PaymentStatus.PENDING,
+    )
+    session = FakePaymentSession(payment, invited, referrer)
+    billing = BillingService(session)  # type: ignore[arg-type]
+
+    first = await billing.apply_successful_payment(
+        yookassa_payment_id=payment.yookassa_payment_id,
+        expected_amount=Decimal("319.00"),
+    )
+    second = await billing.apply_successful_payment(
+        yookassa_payment_id=payment.yookassa_payment_id,
+        expected_amount=Decimal("319.00"),
+    )
+
+    assert first.already_processed is False
+    assert second.already_processed is True
+    assert referrer.ai_coins == 12
+    assert invited.referral_bonus_granted_at is not None
     assert session.commits == 1
 
 

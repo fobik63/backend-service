@@ -12,7 +12,9 @@ from app.models.generation_job import (
     GenerationWebhookEvent,
 )
 from app.models.payment import Payment
+from app.models.style_preset_selection import StylePresetSelection
 from app.models.user import User
+from app.models.workspace import Workspace, WorkspaceMember, WorkspaceSharedGeneration
 
 __all__ = [
     "Base",
@@ -25,5 +27,9 @@ __all__ = [
     "GenerationSlide",
     "GenerationWebhookEvent",
     "Payment",
+    "StylePresetSelection",
     "User",
+    "Workspace",
+    "WorkspaceMember",
+    "WorkspaceSharedGeneration",
 ]

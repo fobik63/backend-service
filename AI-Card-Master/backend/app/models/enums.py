@@ -34,6 +34,26 @@ class SubscriptionStatus(StrEnum):
 
         return self.value in self.paid_values()
 
+    @classmethod
+    def workspace_owner_values(cls) -> frozenset[str]:
+        """Tariffs allowed to own a workspace and invite managers.
+
+        Start is a short trial; Pro / HalfYear / Year are full Pro-tier accounts.
+        """
+
+        return frozenset(
+            {
+                cls.PRO.value,
+                cls.HALF_YEAR.value,
+                cls.YEAR.value,
+            }
+        )
+
+    def can_own_workspace(self) -> bool:
+        """Whether this subscription may create/manage a workspace."""
+
+        return self.value in self.workspace_owner_values()
+
 
 class PaymentStatus(StrEnum):
     """Lifecycle of a YooKassa payment record."""

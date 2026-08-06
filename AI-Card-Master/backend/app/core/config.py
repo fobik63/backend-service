@@ -244,6 +244,8 @@ class Settings(BaseSettings):
         alias="GENERATION_HD_FACE_FIX_COST_COINS",
     )
     daily_bonus_coins: int = Field(default=1, alias="DAILY_BONUS_COINS")
+    referral_bonus_coins: int = Field(default=10, alias="REFERRAL_BONUS_COINS")
+    workspace_max_managers: int = Field(default=3, alias="WORKSPACE_MAX_MANAGERS")
     smart_inpainting_edge_pass_enabled: bool = Field(
         default=False,
         alias="SMART_INPAINTING_EDGE_PASS_ENABLED",
@@ -377,6 +379,8 @@ class Settings(BaseSettings):
         "generation_max_upload_bytes",
         "generation_max_result_bytes",
         "daily_bonus_coins",
+        "referral_bonus_coins",
+        "workspace_max_managers",
         "generation_fast_cost_coins",
         "generation_hd_face_fix_cost_coins",
         "style_cache_ttl_seconds",

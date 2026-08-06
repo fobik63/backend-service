@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.security import InvalidTokenError, decode_and_validate_token
+from app.infrastructure.persistence.workspace_repository import WorkspaceRepository
 from app.models.database import get_db_session
 from app.models.enums import TariffCode
 from app.models.user import User
@@ -170,6 +171,26 @@ async def get_current_user(
     return user
 
 
+async def require_billing_access(
+    current_user: User = Depends(get_current_user),
+    db_session: AsyncSession = Depends(get_db_session),
+) -> User:
+    """Block workspace managers from payments and balance endpoints.
+
+    Managers may generate cards but must not access billing for the Pro owner.
+    """
+
+    if await WorkspaceRepository(db_session).is_workspace_manager(current_user.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Workspace managers have generation-only access and cannot "
+                "view or manage payments."
+            ),
+        )
+    return current_user
+
+
 async def get_yookassa_dependency() -> YooKassaService:
     """FastAPI dependency that maps config errors to HTTP 503."""
 
@@ -190,7 +211,9 @@ async def list_tariffs() -> list[TariffResponse]:
 
 
 @router.get("/balance", response_model=BalanceResponse)
-async def get_balance(current_user: User = Depends(get_current_user)) -> BalanceResponse:
+async def get_balance(
+    current_user: User = Depends(require_billing_access),
+) -> BalanceResponse:
     """Return AI-coin balance and daily bonus availability for the cabinet."""
 
     now = datetime.now(UTC)
@@ -215,7 +238,7 @@ async def get_balance(current_user: User = Depends(get_current_user)) -> Balance
 
 @router.post("/daily-bonus/claim", response_model=DailyBonusClaimResponse)
 async def claim_daily_bonus(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_billing_access),
     billing: BillingService = Depends(get_billing_service),
 ) -> DailyBonusClaimResponse:
     """Claim today's free AI-coin retention bonus exactly once."""
@@ -252,7 +275,7 @@ async def claim_daily_bonus(
 )
 async def create_payment(
     payload: CreatePaymentRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_billing_access),
     billing: BillingService = Depends(get_billing_service),
     yookassa: YooKassaService = Depends(get_yookassa_dependency),
 ) -> CreatePaymentResponse:
