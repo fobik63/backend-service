@@ -1,8 +1,13 @@
-# AI-Card-Master production-oriented stack (plan §16).
+# AI-Card-Master production-oriented stack (plan §16 / §24).
 # Usage:
 #   cp .env.example .env   # fill secrets
 #   docker compose up -d --build
 #   docker compose exec api alembic upgrade head
+#
+# Scaled launch (Nginx edge + replicas + rollback tags):
+#   bash deploy/release.sh
+#   python deploy/autoscale.py
+#   bash deploy/rollback.sh
 
 services:
   postgres:
@@ -37,6 +42,7 @@ services:
       - "6379:6379"
 
   api:
+    image: ai-card-master-backend:${IMAGE_TAG:-current}
     build:
       context: .
       dockerfile: Dockerfile
@@ -80,6 +86,7 @@ services:
       ]
 
   worker:
+    image: ai-card-master-backend:${IMAGE_TAG:-current}
     build:
       context: .
       dockerfile: Dockerfile
@@ -112,6 +119,7 @@ services:
       ]
 
   beat:
+    image: ai-card-master-backend:${IMAGE_TAG:-current}
     build:
       context: .
       dockerfile: Dockerfile

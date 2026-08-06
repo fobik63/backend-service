@@ -25,6 +25,7 @@ from sqlalchemy import text
 
 from app.api import (
     ab_tests_router,
+    account_router,
     admin_router,
     ai_strategy_router,
     analytics_router,
@@ -35,6 +36,7 @@ from app.api import (
     exports_router,
     generations_router,
     images_router,
+    legal_router,
     marketplace_bridge_router,
     midjourney_webhook_router,
     oracle_router,
@@ -156,6 +158,8 @@ app.add_middleware(CloudflareProtectionMiddleware)
 app.include_router(admin_router)
 app.include_router(analytics_router)
 app.include_router(images_router)
+app.include_router(legal_router)
+app.include_router(account_router)
 app.include_router(payments_router)
 app.include_router(referrals_router)
 app.include_router(winback_router)

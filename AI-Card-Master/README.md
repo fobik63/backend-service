@@ -255,14 +255,25 @@ Redis and PostgreSQL before API/worker/beat. `/health/live` checks the process;
 ```bash
 cd backend
 cp .env.example .env   # fill JWT, S3, Telegram, YooKassa secrets
-docker compose up -d --build
-docker compose exec api alembic upgrade head
+python deploy/preflight_audit.py
+bash deploy/release.sh
+```
+
+Checklist: `backend/deploy/LAUNCH_CHECKLIST.md`.
+
+Scaled stack (Nginx edge, no public `:8000`):
+
+```bash
+docker compose -f docker-compose.yml -f deploy/docker-compose.scale.yml \
+  up -d --build --scale api=2 --scale worker=3
+python deploy/autoscale.py   # optional: scale by Celery queue depth
+bash deploy/rollback.sh      # previous image; add --with-db-downgrade -1 if needed
 ```
 
 Stack: PostgreSQL 16 + Redis 7 (LRU) + gunicorn/uvicorn API + Celery worker + beat.
-Nginx sample: `backend/deploy/nginx.conf`. History lookups use composite indexes
-`(user_id, created_at)` and a short Redis cache; ERROR-level failures notify Telegram
-with explicit `error_type` / `file` / `line`.
+Nginx samples: `backend/deploy/nginx.conf`, `backend/deploy/nginx.scale.conf`.
+History lookups use composite indexes `(user_id, created_at)` and a short Redis cache;
+ERROR-level failures notify Telegram with explicit `error_type` / `file` / `line`.
 
 ### Clean Architecture boundaries
 

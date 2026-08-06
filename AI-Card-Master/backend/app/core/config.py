@@ -98,6 +98,41 @@ class Settings(BaseSettings):
         default="http://localhost:3000,http://127.0.0.1:3000",
         alias="CORS_ORIGINS",
     )
+
+    # Public legal / GDPR operator identity (shown in Terms & Privacy pages).
+    # Replace placeholders before production launch / payment acceptance.
+    service_display_name: str = Field(
+        default="AI-Card-Master",
+        alias="SERVICE_DISPLAY_NAME",
+    )
+    public_site_url: str = Field(
+        default="https://ai-card-master.example",
+        alias="PUBLIC_SITE_URL",
+    )
+    legal_operator_name: str = Field(
+        default="[УКАЖИТЕ ЮРИДИЧЕСКОЕ НАИМЕНОВАНИЕ ОПЕРАТОРА]",
+        alias="LEGAL_OPERATOR_NAME",
+    )
+    legal_operator_address: str = Field(
+        default="[УКАЖИТЕ ЮРИДИЧЕСКИЙ АДРЕС ОПЕРАТОРА]",
+        alias="LEGAL_OPERATOR_ADDRESS",
+    )
+    legal_jurisdiction: str = Field(
+        default="Российская Федерация",
+        alias="LEGAL_JURISDICTION",
+    )
+    support_email: str = Field(
+        default="support@example.com",
+        alias="SUPPORT_EMAIL",
+    )
+    privacy_email: str = Field(
+        default="privacy@example.com",
+        alias="PRIVACY_EMAIL",
+    )
+    legal_documents_effective_date: str = Field(
+        default="2026-08-07",
+        alias="LEGAL_DOCUMENTS_EFFECTIVE_DATE",
+    )
     cors_allow_credentials: bool = Field(default=True, alias="CORS_ALLOW_CREDENTIALS")
 
     # Hidden admin API gate. Empty value disables /api/v1/admin for everyone.

@@ -37,6 +37,13 @@ def test_generation_and_webhook_contracts_are_exposed() -> None:
     assert "get" in paths["/api/v1/referrals/stats"]
     assert "/api/v1/referrals/apply" in paths
     assert "post" in paths["/api/v1/referrals/apply"]
+    assert "/api/v1/legal/terms" in paths
+    assert "get" in paths["/api/v1/legal/terms"]
+    assert "/api/v1/legal/privacy" in paths
+    assert "get" in paths["/api/v1/legal/privacy"]
+    assert "/api/v1/account" in paths
+    assert "delete" in paths["/api/v1/account"]
+    assert "200" in paths["/api/v1/account"]["delete"]["responses"]
     assert "/api/v1/workspaces" in paths
     assert "post" in paths["/api/v1/workspaces"]
     assert "/api/v1/workspaces/me" in paths
