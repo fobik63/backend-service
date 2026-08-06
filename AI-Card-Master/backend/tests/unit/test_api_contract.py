@@ -50,8 +50,27 @@ def test_generation_and_webhook_contracts_are_exposed() -> None:
     assert "get" in paths["/api/v1/workspaces/shares"]
     assert "/api/v1/workspaces/shares/{share_id}" in paths
     assert "delete" in paths["/api/v1/workspaces/shares/{share_id}"]
+    assert "/api/v1/exports/requirements/{platform}" in paths
+    assert "get" in paths["/api/v1/exports/requirements/{platform}"]
+    assert "/api/v1/exports/credentials" in paths
+    assert "get" in paths["/api/v1/exports/credentials"]
+    assert "/api/v1/exports/credentials/{platform}" in paths
+    assert "put" in paths["/api/v1/exports/credentials/{platform}"]
+    assert "delete" in paths["/api/v1/exports/credentials/{platform}"]
+    assert "/api/v1/exports/validate" in paths
+    assert "post" in paths["/api/v1/exports/validate"]
+    assert "/api/v1/exports/{platform}" in paths
+    assert "post" in paths["/api/v1/exports/{platform}"]
     assert "/api/v1/analytics/style-presets" in paths
     assert "get" in paths["/api/v1/analytics/style-presets"]
+    assert "/api/v1/winback/cancel-intent" in paths
+    assert "post" in paths["/api/v1/winback/cancel-intent"]
+    assert "/api/v1/winback/offer" in paths
+    assert "get" in paths["/api/v1/winback/offer"]
+    assert "/api/v1/winback/offer/{offer_id}/claim" in paths
+    assert "post" in paths["/api/v1/winback/offer/{offer_id}/claim"]
+    assert "/api/v1/winback/telegram" in paths
+    assert "post" in paths["/api/v1/winback/telegram"]
     style_schema = paths["/api/v1/analytics/style-presets"]["get"]["responses"]["200"][
         "content"
     ]["application/json"]["schema"]

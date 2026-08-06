@@ -12,7 +12,7 @@ celery_app = Celery(
     "ai_card_master",
     broker=settings.effective_celery_broker_url,
     backend=settings.effective_celery_result_backend,
-    include=["app.workers.generation_tasks"],
+    include=["app.workers.generation_tasks", "app.workers.winback_tasks"],
 )
 
 celery_app.conf.update(
@@ -39,6 +39,8 @@ celery_app.conf.update(
         "generation.finalize_job": {"queue": "generation.finalize"},
         "generation.dispatch_outbox": {"queue": "generation.recovery"},
         "generation.recover_stalled": {"queue": "generation.recovery"},
+        "winback.scan_inactivity": {"queue": "winback"},
+        "winback.notify_luxury_loft_updates": {"queue": "winback"},
     },
     beat_schedule={
         "dispatch-generation-outbox": {
@@ -48,6 +50,14 @@ celery_app.conf.update(
         "recover-stalled-generations": {
             "task": "generation.recover_stalled",
             "schedule": 60.0,
+        },
+        "winback-scan-inactivity": {
+            "task": "winback.scan_inactivity",
+            "schedule": settings.winback_inactivity_scan_seconds,
+        },
+        "winback-notify-luxury-loft-updates": {
+            "task": "winback.notify_luxury_loft_updates",
+            "schedule": settings.winback_style_update_scan_seconds,
         },
     },
 )

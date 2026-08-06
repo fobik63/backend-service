@@ -26,12 +26,14 @@ from sqlalchemy import text
 from app.api import (
     admin_router,
     analytics_router,
+    exports_router,
     generations_router,
     images_router,
     midjourney_webhook_router,
     payments_router,
     referrals_router,
     text_generation_router,
+    winback_router,
     workspaces_router,
 )
 from app.api.images import ensure_uploads_dir
@@ -141,7 +143,9 @@ app.include_router(analytics_router)
 app.include_router(images_router)
 app.include_router(payments_router)
 app.include_router(referrals_router)
+app.include_router(winback_router)
 app.include_router(workspaces_router)
+app.include_router(exports_router)
 app.include_router(generations_router)
 app.include_router(text_generation_router)
 app.include_router(midjourney_webhook_router)

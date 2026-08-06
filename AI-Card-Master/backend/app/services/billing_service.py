@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.domain.winback import compute_discounted_amount
 from app.models.enums import PaymentStatus, TariffCode
 from app.models.payment import Payment
 from app.models.user import User
@@ -26,6 +27,27 @@ from app.services.tariffs import TariffPlan, get_tariff_plan
 
 
 logger = logging.getLogger(__name__)
+
+
+def expected_tariff_amount(
+    plan: TariffPlan, *, discount_percent: int | None = None
+) -> Decimal:
+    """Catalog price, or win-back discounted price when a percent is active."""
+
+    if discount_percent is None:
+        return plan.price_rub
+    return compute_discounted_amount(plan.price_rub, discount_percent)
+
+
+def _is_discounted_tariff_amount(catalog_price: Decimal, amount: Decimal) -> bool:
+    """Whether ``amount`` equals catalog_price minus a 1–90% win-back discount."""
+
+    if amount <= 0 or amount >= catalog_price:
+        return False
+    for percent in range(1, 91):
+        if compute_discounted_amount(catalog_price, percent) == amount:
+            return True
+    return False
 
 
 class BillingError(Exception):
@@ -128,6 +150,7 @@ class BillingService:
         confirmation_url: str | None,
         description: str | None,
         currency: str = "RUB",
+        discount_percent: int | None = None,
     ) -> Payment:
         """Persist a newly created YooKassa payment in pending state."""
 
@@ -136,10 +159,11 @@ class BillingService:
             raise BillingNotFoundError(f"User {user_id} not found.")
 
         plan = get_tariff_plan(tariff_code)
-        if amount_rub != plan.price_rub:
+        expected = expected_tariff_amount(plan, discount_percent=discount_percent)
+        if amount_rub != expected:
             raise BillingValidationError(
                 f"Amount mismatch for tariff {tariff_code.value}: "
-                f"expected {plan.price_rub}, got {amount_rub}."
+                f"expected {expected}, got {amount_rub}."
             )
 
         existing = await self._session.scalar(
@@ -225,16 +249,21 @@ class BillingService:
 
         plan = get_tariff_plan(payment.tariff_code)
 
-        if expected_amount is not None and expected_amount != plan.price_rub:
+        # Trust the amount persisted at checkout (catalog or win-back discount),
+        # then require the verified YooKassa amount to match that stored value.
+        if expected_amount is not None and expected_amount != payment.amount_rub:
             raise BillingValidationError(
-                f"YooKassa amount {expected_amount} does not match tariff "
-                f"{plan.code.value} price {plan.price_rub}."
+                f"YooKassa amount {expected_amount} does not match stored "
+                f"payment amount {payment.amount_rub}."
             )
-
-        if payment.amount_rub != plan.price_rub:
+        if (
+            payment.amount_rub != plan.price_rub
+            and not _is_discounted_tariff_amount(plan.price_rub, payment.amount_rub)
+        ):
             raise BillingValidationError(
                 f"Stored payment amount {payment.amount_rub} does not match "
-                f"tariff {plan.code.value} price {plan.price_rub}."
+                f"tariff {plan.code.value} price {plan.price_rub} "
+                "or a valid win-back discount."
             )
 
         if payment.status == PaymentStatus.SUCCEEDED and payment.processed_at is not None:

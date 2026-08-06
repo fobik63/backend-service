@@ -17,10 +17,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.security import InvalidTokenError, decode_and_validate_token
+from app.infrastructure.persistence.winback_repository import WinbackRepository
 from app.infrastructure.persistence.workspace_repository import WorkspaceRepository
 from app.models.database import get_db_session
 from app.models.enums import TariffCode
 from app.models.user import User
+from app.application.winback_service import WinbackService
 from app.services.billing_service import (
     BillingError,
     BillingNotFoundError,
@@ -30,7 +32,8 @@ from app.services.billing_service import (
     DailyBonusResult,
     describe_tariff,
 )
-from app.services.tariffs import list_tariff_plans
+from app.services.tariffs import get_tariff_plan, list_tariff_plans
+from app.services.telegram_user_notify import TelegramUserNotifier
 from app.services.yookassa_service import (
     YooKassaConfigurationError,
     YooKassaError,
@@ -168,7 +171,34 @@ async def get_current_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User is banned for abuse.",
         )
+
+    # Activity signal for Churn Prevention inactivity scanner (throttled in DB).
+    now = datetime.now(UTC)
+    last_seen = user.last_seen_at
+    if last_seen is not None and last_seen.tzinfo is None:
+        last_seen = last_seen.replace(tzinfo=UTC)
+    if last_seen is None or (now - last_seen.astimezone(UTC)).total_seconds() >= 3600:
+        user.last_seen_at = now
+        await db_session.commit()
+        await db_session.refresh(user)
+
     return user
+
+
+async def get_winback_service_for_payments(
+    db_session: AsyncSession = Depends(get_db_session),
+) -> WinbackService:
+    """Win-back service for discounted checkout and post-payment redemption."""
+
+    settings = get_settings()
+    return WinbackService(
+        WinbackRepository(db_session),
+        inactivity_days=settings.winback_inactivity_days,
+        free_generations=settings.winback_free_generations,
+        discount_percent=settings.winback_discount_percent,
+        offer_ttl_hours=settings.winback_offer_ttl_hours,
+        telegram=TelegramUserNotifier(),
+    )
 
 
 async def require_billing_access(
@@ -278,14 +308,23 @@ async def create_payment(
     current_user: User = Depends(require_billing_access),
     billing: BillingService = Depends(get_billing_service),
     yookassa: YooKassaService = Depends(get_yookassa_dependency),
+    winback: WinbackService = Depends(get_winback_service_for_payments),
 ) -> CreatePaymentResponse:
     """Create a YooKassa payment and persist a pending local payment row."""
+
+    plan = get_tariff_plan(payload.tariff_code)
+    amount_rub, discount_percent, _offer_id = await winback.resolve_checkout_amount(
+        user_id=current_user.id,
+        catalog_price_rub=plan.price_rub,
+    )
 
     try:
         created = await yookassa.create_tariff_payment(
             user_id=str(current_user.id),
             tariff_code=payload.tariff_code,
             customer_email=current_user.email,
+            amount_rub_override=amount_rub if discount_percent is not None else None,
+            discount_percent=discount_percent,
         )
         payment = await billing.create_pending_payment(
             user_id=current_user.id,
@@ -295,6 +334,7 @@ async def create_payment(
             confirmation_url=created.confirmation_url,
             description=created.description or None,
             currency=created.currency,
+            discount_percent=discount_percent,
         )
     except YooKassaConfigurationError as exc:
         raise HTTPException(
@@ -340,6 +380,7 @@ async def yookassa_webhook(
     payload: dict[str, Any],
     billing: BillingService = Depends(get_billing_service),
     yookassa: YooKassaService = Depends(get_yookassa_dependency),
+    winback: WinbackService = Depends(get_winback_service_for_payments),
 ) -> WebhookAckResponse:
     """Receive asynchronous YooKassa notifications about payment status.
 
@@ -430,6 +471,19 @@ async def yookassa_webhook(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(exc),
         ) from exc
+
+    if not result.already_processed:
+        payment = await billing.get_payment_by_yookassa_id(yookassa_payment_id)
+        catalog_price = get_tariff_plan(result.tariff_code).price_rub
+        if payment is not None and payment.amount_rub != catalog_price:
+            _amount, _percent, offer_id = await winback.resolve_checkout_amount(
+                user_id=result.user_id,
+                catalog_price_rub=catalog_price,
+            )
+            await winback.redeem_discount_after_payment(
+                user_id=result.user_id,
+                offer_id=offer_id,
+            )
 
     detail = (
         "Payment already processed."

@@ -79,6 +79,8 @@ class YooKassaService:
         tariff_code: TariffCode | str,
         customer_email: str | None = None,
         idempotence_key: str | None = None,
+        amount_rub_override: Decimal | None = None,
+        discount_percent: int | None = None,
     ) -> YooKassaPaymentCreated:
         """Create a redirect payment for the given commercial tariff."""
 
@@ -87,6 +89,8 @@ class YooKassaService:
             plan=plan,
             user_id=user_id,
             customer_email=customer_email,
+            amount_rub_override=amount_rub_override,
+            discount_percent=discount_percent,
         )
         headers = {
             "Idempotence-Key": idempotence_key or str(uuid.uuid4()),
@@ -139,11 +143,22 @@ class YooKassaService:
         plan: TariffPlan,
         user_id: str,
         customer_email: str | None,
+        amount_rub_override: Decimal | None = None,
+        discount_percent: int | None = None,
     ) -> dict[str, Any]:
         description = f"AI-Card-Master — тариф «{plan.title}»"
+        if discount_percent is not None:
+            description = (
+                f"{description} (win-back −{discount_percent}%)"
+            )
+        amount_value = (
+            f"{amount_rub_override:.2f}"
+            if amount_rub_override is not None
+            else plan.amount_value
+        )
         payload: dict[str, Any] = {
             "amount": {
-                "value": plan.amount_value,
+                "value": amount_value,
                 "currency": "RUB",
             },
             "capture": True,
@@ -157,6 +172,8 @@ class YooKassaService:
                 "tariff_code": plan.code.value,
             },
         }
+        if discount_percent is not None:
+            payload["metadata"]["winback_discount_percent"] = str(discount_percent)
         if customer_email:
             payload["receipt"] = {
                 "customer": {"email": customer_email},
@@ -165,7 +182,7 @@ class YooKassaService:
                         "description": description[:128],
                         "quantity": "1.00",
                         "amount": {
-                            "value": plan.amount_value,
+                            "value": amount_value,
                             "currency": "RUB",
                         },
                         "vat_code": self._settings.yookassa_vat_code,

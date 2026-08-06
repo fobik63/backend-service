@@ -6,6 +6,7 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -119,6 +120,18 @@ class User(Base):
         nullable=True,
         default=None,
     )
+    last_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        default=None,
+        index=True,
+    )
+    telegram_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        nullable=True,
+        unique=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -154,5 +167,11 @@ class User(Base):
         "User",
         foreign_keys=[referred_by_user_id],
         back_populates="referred_by",
+        passive_deletes=True,
+    )
+    winback_offers = relationship(
+        "WinbackOffer",
+        back_populates="user",
+        cascade="all, delete-orphan",
         passive_deletes=True,
     )

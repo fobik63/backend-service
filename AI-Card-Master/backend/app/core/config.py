@@ -246,6 +246,46 @@ class Settings(BaseSettings):
     daily_bonus_coins: int = Field(default=1, alias="DAILY_BONUS_COINS")
     referral_bonus_coins: int = Field(default=10, alias="REFERRAL_BONUS_COINS")
     workspace_max_managers: int = Field(default=3, alias="WORKSPACE_MAX_MANAGERS")
+
+    # Churn Prevention / Win-back
+    winback_inactivity_days: int = Field(default=10, alias="WINBACK_INACTIVITY_DAYS")
+    winback_free_generations: int = Field(default=5, alias="WINBACK_FREE_GENERATIONS")
+    winback_discount_percent: int = Field(default=30, alias="WINBACK_DISCOUNT_PERCENT")
+    winback_offer_ttl_hours: int = Field(default=72, alias="WINBACK_OFFER_TTL_HOURS")
+    winback_inactivity_scan_seconds: float = Field(
+        default=3600.0,
+        alias="WINBACK_INACTIVITY_SCAN_SECONDS",
+    )
+    winback_style_update_scan_seconds: float = Field(
+        default=86400.0,
+        alias="WINBACK_STYLE_UPDATE_SCAN_SECONDS",
+    )
+    winback_style_campaign_key: str = Field(
+        default="luxury_loft_update_v1",
+        alias="WINBACK_STYLE_CAMPAIGN_KEY",
+    )
+
+    # Direct Export (WB / Ozon / Amazon seller drafts)
+    marketplace_credentials_secret: SecretStr = Field(
+        default=SecretStr(""),
+        alias="MARKETPLACE_CREDENTIALS_SECRET",
+    )
+    marketplace_export_timeout_seconds: float = Field(
+        default=30.0,
+        alias="MARKETPLACE_EXPORT_TIMEOUT_SECONDS",
+    )
+    wildberries_content_api_base_url: str = Field(
+        default="https://content-api.wildberries.ru",
+        alias="WILDBERRIES_CONTENT_API_BASE_URL",
+    )
+    ozon_seller_api_base_url: str = Field(
+        default="https://api-seller.ozon.ru",
+        alias="OZON_SELLER_API_BASE_URL",
+    )
+    amazon_sp_api_base_url: str = Field(
+        default="https://sellingpartnerapi-eu.amazon.com",
+        alias="AMAZON_SP_API_BASE_URL",
+    )
     smart_inpainting_edge_pass_enabled: bool = Field(
         default=False,
         alias="SMART_INPAINTING_EDGE_PASS_ENABLED",
@@ -304,6 +344,16 @@ class Settings(BaseSettings):
     telegram_error_timeout_seconds: float = Field(
         default=5.0,
         alias="TELEGRAM_ERROR_TIMEOUT_SECONDS",
+    )
+    # User-facing Telegram bot for win-back / style-update triggers.
+    # Falls back to TELEGRAM_ERROR_BOT_TOKEN when unset.
+    telegram_user_bot_token: SecretStr | None = Field(
+        default=None,
+        alias="TELEGRAM_USER_BOT_TOKEN",
+    )
+    telegram_user_timeout_seconds: float = Field(
+        default=5.0,
+        alias="TELEGRAM_USER_TIMEOUT_SECONDS",
     )
 
     claude_47_input_1k_tokens_cost_usd: Decimal = Field(
@@ -381,6 +431,10 @@ class Settings(BaseSettings):
         "daily_bonus_coins",
         "referral_bonus_coins",
         "workspace_max_managers",
+        "winback_inactivity_days",
+        "winback_free_generations",
+        "winback_discount_percent",
+        "winback_offer_ttl_hours",
         "generation_fast_cost_coins",
         "generation_hd_face_fix_cost_coins",
         "style_cache_ttl_seconds",
@@ -408,6 +462,10 @@ class Settings(BaseSettings):
         "face_fix_timeout_seconds",
         "face_fix_connect_timeout_seconds",
         "telegram_error_timeout_seconds",
+        "telegram_user_timeout_seconds",
+        "marketplace_export_timeout_seconds",
+        "winback_inactivity_scan_seconds",
+        "winback_style_update_scan_seconds",
     )
     @classmethod
     def validate_positive_floats(cls, value: float) -> float:
