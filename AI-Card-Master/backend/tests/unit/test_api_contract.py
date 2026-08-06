@@ -71,6 +71,18 @@ def test_generation_and_webhook_contracts_are_exposed() -> None:
     assert "post" in paths["/api/v1/winback/offer/{offer_id}/claim"]
     assert "/api/v1/winback/telegram" in paths
     assert "post" in paths["/api/v1/winback/telegram"]
+    assert "/api/v1/bulk-generations" in paths
+    assert "post" in paths["/api/v1/bulk-generations"]
+    assert "202" in paths["/api/v1/bulk-generations"]["post"]["responses"]
+    assert "/api/v1/bulk-generations/{batch_id}" in paths
+    assert "get" in paths["/api/v1/bulk-generations/{batch_id}"]
+    assert "/api/v1/bulk-generations/notifications" in paths
+    assert "get" in paths["/api/v1/bulk-generations/notifications"]
+    assert "/api/v1/smart-variants" in paths
+    assert "post" in paths["/api/v1/smart-variants"]
+    assert "202" in paths["/api/v1/smart-variants"]["post"]["responses"]
+    assert "/api/v1/smart-variants/{sync_id}" in paths
+    assert "get" in paths["/api/v1/smart-variants/{sync_id}"]
     style_schema = paths["/api/v1/analytics/style-presets"]["get"]["responses"]["200"][
         "content"
     ]["application/json"]["schema"]

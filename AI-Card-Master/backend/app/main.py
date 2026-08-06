@@ -26,12 +26,14 @@ from sqlalchemy import text
 from app.api import (
     admin_router,
     analytics_router,
+    bulk_generations_router,
     exports_router,
     generations_router,
     images_router,
     midjourney_webhook_router,
     payments_router,
     referrals_router,
+    smart_variants_router,
     text_generation_router,
     winback_router,
     workspaces_router,
@@ -146,6 +148,8 @@ app.include_router(referrals_router)
 app.include_router(winback_router)
 app.include_router(workspaces_router)
 app.include_router(exports_router)
+app.include_router(bulk_generations_router)
+app.include_router(smart_variants_router)
 app.include_router(generations_router)
 app.include_router(text_generation_router)
 app.include_router(midjourney_webhook_router)

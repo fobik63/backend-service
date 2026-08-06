@@ -265,6 +265,38 @@ class Settings(BaseSettings):
         alias="WINBACK_STYLE_CAMPAIGN_KEY",
     )
 
+    # Bulk Generation (ZIP of 1–20 products → background preset run)
+    bulk_generation_max_products: int = Field(
+        default=20,
+        alias="BULK_GENERATION_MAX_PRODUCTS",
+    )
+    bulk_generation_max_zip_bytes: int = Field(
+        default=200 * 1024 * 1024,
+        alias="BULK_GENERATION_MAX_ZIP_BYTES",
+    )
+    bulk_generation_poll_seconds: float = Field(
+        default=15.0,
+        alias="BULK_GENERATION_POLL_SECONDS",
+    )
+    bulk_generation_poll_batch_size: int = Field(
+        default=50,
+        alias="BULK_GENERATION_POLL_BATCH_SIZE",
+    )
+
+    # Smart Variant Sync (1 photo → N fabric color variants)
+    smart_variant_max_colors: int = Field(
+        default=10,
+        alias="SMART_VARIANT_MAX_COLORS",
+    )
+    smart_variant_poll_seconds: float = Field(
+        default=15.0,
+        alias="SMART_VARIANT_POLL_SECONDS",
+    )
+    smart_variant_poll_batch_size: int = Field(
+        default=50,
+        alias="SMART_VARIANT_POLL_BATCH_SIZE",
+    )
+
     # Direct Export (WB / Ozon / Amazon seller drafts)
     marketplace_credentials_secret: SecretStr = Field(
         default=SecretStr(""),
@@ -435,6 +467,11 @@ class Settings(BaseSettings):
         "winback_free_generations",
         "winback_discount_percent",
         "winback_offer_ttl_hours",
+        "bulk_generation_max_products",
+        "bulk_generation_max_zip_bytes",
+        "bulk_generation_poll_batch_size",
+        "smart_variant_max_colors",
+        "smart_variant_poll_batch_size",
         "generation_fast_cost_coins",
         "generation_hd_face_fix_cost_coins",
         "style_cache_ttl_seconds",
@@ -466,6 +503,8 @@ class Settings(BaseSettings):
         "marketplace_export_timeout_seconds",
         "winback_inactivity_scan_seconds",
         "winback_style_update_scan_seconds",
+        "bulk_generation_poll_seconds",
+        "smart_variant_poll_seconds",
     )
     @classmethod
     def validate_positive_floats(cls, value: float) -> float:

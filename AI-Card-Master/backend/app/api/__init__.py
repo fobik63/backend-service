@@ -2,11 +2,13 @@
 
 from app.api.admin import router as admin_router
 from app.api.analytics import router as analytics_router
+from app.api.bulk_generations import router as bulk_generations_router
 from app.api.exports import router as exports_router
 from app.api.generations import router as generations_router
 from app.api.images import router as images_router
 from app.api.payments import router as payments_router
 from app.api.referrals import router as referrals_router
+from app.api.smart_variants import router as smart_variants_router
 from app.api.text_generation import router as text_generation_router
 from app.api.webhooks import midjourney_webhook_router
 from app.api.winback import router as winback_router
@@ -15,12 +17,14 @@ from app.api.workspaces import router as workspaces_router
 __all__ = [
     "admin_router",
     "analytics_router",
+    "bulk_generations_router",
     "exports_router",
     "generations_router",
     "images_router",
     "midjourney_webhook_router",
     "payments_router",
     "referrals_router",
+    "smart_variants_router",
     "text_generation_router",
     "winback_router",
     "workspaces_router",

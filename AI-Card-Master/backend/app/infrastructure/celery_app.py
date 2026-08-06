@@ -12,7 +12,12 @@ celery_app = Celery(
     "ai_card_master",
     broker=settings.effective_celery_broker_url,
     backend=settings.effective_celery_result_backend,
-    include=["app.workers.generation_tasks", "app.workers.winback_tasks"],
+    include=[
+        "app.workers.generation_tasks",
+        "app.workers.winback_tasks",
+        "app.workers.bulk_generation_tasks",
+        "app.workers.smart_variant_tasks",
+    ],
 )
 
 celery_app.conf.update(
@@ -41,6 +46,10 @@ celery_app.conf.update(
         "generation.recover_stalled": {"queue": "generation.recovery"},
         "winback.scan_inactivity": {"queue": "winback"},
         "winback.notify_luxury_loft_updates": {"queue": "winback"},
+        "bulk.unpack_and_enqueue": {"queue": "bulk"},
+        "bulk.poll_active_batches": {"queue": "bulk"},
+        "smart_variant.recolor_and_enqueue": {"queue": "smart_variant"},
+        "smart_variant.poll_active_syncs": {"queue": "smart_variant"},
     },
     beat_schedule={
         "dispatch-generation-outbox": {
@@ -58,6 +67,14 @@ celery_app.conf.update(
         "winback-notify-luxury-loft-updates": {
             "task": "winback.notify_luxury_loft_updates",
             "schedule": settings.winback_style_update_scan_seconds,
+        },
+        "bulk-poll-active-batches": {
+            "task": "bulk.poll_active_batches",
+            "schedule": settings.bulk_generation_poll_seconds,
+        },
+        "smart-variant-poll-active-syncs": {
+            "task": "smart_variant.poll_active_syncs",
+            "schedule": settings.smart_variant_poll_seconds,
         },
     },
 )
