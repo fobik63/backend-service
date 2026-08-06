@@ -1,6 +1,8 @@
 """API layer: routers and endpoint handlers."""
 
 from app.api.admin import router as admin_router
+from app.api.ab_tests import router as ab_tests_router
+from app.api.ai_strategy import router as ai_strategy_router
 from app.api.analytics import router as analytics_router
 from app.api.bulk_generations import router as bulk_generations_router
 from app.api.claude_reasoning import router as claude_reasoning_router
@@ -20,6 +22,8 @@ from app.api.workspaces import router as workspaces_router
 
 __all__ = [
     "admin_router",
+    "ab_tests_router",
+    "ai_strategy_router",
     "analytics_router",
     "bulk_generations_router",
     "claude_reasoning_router",

@@ -517,6 +517,67 @@ class Settings(BaseSettings):
         alias="ORACLE_TOP_RANK_CEILING",
     )
 
+    # Strategic Killer Recommendations (AI Strategy)
+    ai_strategy_min_ctr_lift_pct: float = Field(
+        default=5.0,
+        alias="AI_STRATEGY_MIN_CTR_LIFT_PCT",
+    )
+    ai_strategy_min_absolute_ctr_gap: float = Field(
+        default=0.5,
+        alias="AI_STRATEGY_MIN_ABSOLUTE_CTR_GAP",
+    )
+    ai_strategy_max_recommendations: int = Field(
+        default=7,
+        alias="AI_STRATEGY_MAX_RECOMMENDATIONS",
+    )
+    ai_strategy_require_leader_ctr_advantage: bool = Field(
+        default=True,
+        alias="AI_STRATEGY_REQUIRE_LEADER_CTR_ADVANTAGE",
+    )
+
+    # Automated A/B Testing (3 creatives → CTR week → keep winner)
+    ab_test_duration_days: int = Field(default=7, alias="AB_TEST_DURATION_DAYS")
+    ab_test_min_impressions: int = Field(
+        default=100,
+        alias="AB_TEST_MIN_IMPRESSIONS",
+    )
+    ab_test_min_ctr_gap_pct: float = Field(
+        default=0.05,
+        alias="AB_TEST_MIN_CTR_GAP_PCT",
+    )
+    ab_test_auto_delete_losers: bool = Field(
+        default=True,
+        alias="AB_TEST_AUTO_DELETE_LOSERS",
+    )
+    ab_test_auto_promote_winner: bool = Field(
+        default=True,
+        alias="AB_TEST_AUTO_PROMOTE_WINNER",
+    )
+    ab_test_poll_seconds: float = Field(
+        default=3600.0,
+        alias="AB_TEST_POLL_SECONDS",
+    )
+    ab_test_poll_batch_size: int = Field(
+        default=50,
+        alias="AB_TEST_POLL_BATCH_SIZE",
+    )
+    ab_test_ads_timeout_seconds: float = Field(
+        default=30.0,
+        alias="AB_TEST_ADS_TIMEOUT_SECONDS",
+    )
+    ab_test_allow_ads_fallback: bool = Field(
+        default=True,
+        alias="AB_TEST_ALLOW_ADS_FALLBACK",
+    )
+    wildberries_advert_api_base_url: str = Field(
+        default="https://advert-api.wildberries.ru",
+        alias="WILDBERRIES_ADVERT_API_BASE_URL",
+    )
+    ozon_performance_api_base_url: str = Field(
+        default="https://api-performance.ozon.ru",
+        alias="OZON_PERFORMANCE_API_BASE_URL",
+    )
+
     @field_validator("database_url")
     @classmethod
     def validate_database_url(cls, value: str) -> str:
@@ -617,6 +678,7 @@ class Settings(BaseSettings):
         "oracle_min_recent_query_volume",
         "oracle_max_alerts",
         "oracle_top_rank_ceiling",
+        "ai_strategy_max_recommendations",
     )
     @classmethod
     def validate_generation_positive_ints(cls, value: int) -> int:
@@ -669,6 +731,8 @@ class Settings(BaseSettings):
         "visual_audit_min_review_velocity_per_day",
         "oracle_min_query_growth_ratio",
         "oracle_min_gap_score",
+        "ai_strategy_min_ctr_lift_pct",
+        "ai_strategy_min_absolute_ctr_gap",
     )
     @classmethod
     def validate_visual_audit_non_negative_floats(cls, value: float) -> float:

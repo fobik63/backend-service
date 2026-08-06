@@ -24,7 +24,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from app.api import (
+    ab_tests_router,
     admin_router,
+    ai_strategy_router,
     analytics_router,
     bulk_generations_router,
     claude_reasoning_router,
@@ -158,6 +160,8 @@ app.include_router(smart_variants_router)
 app.include_router(claude_reasoning_router)
 app.include_router(visual_audit_router)
 app.include_router(oracle_router)
+app.include_router(ai_strategy_router)
+app.include_router(ab_tests_router)
 app.include_router(generations_router)
 app.include_router(text_generation_router)
 app.include_router(midjourney_webhook_router)

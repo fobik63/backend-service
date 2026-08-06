@@ -26,6 +26,23 @@ from app.domain.claude_reasoning import (
     reasoning_system_prompt,
     vision_system_prompt,
 )
+from app.domain.ab_test import (
+    AB_HYPOTHESES_JSON_SCHEMA,
+    AbProductBrief,
+    AbVariantHypothesis,
+    ab_system_prompt,
+    build_ab_hypotheses_prompt,
+    normalize_hypotheses,
+)
+from app.domain.ai_strategy import (
+    STRATEGY_PLAN_JSON_SCHEMA,
+    ClaudeStrategyEnrichment,
+    StrategyActionType,
+    StrategyCompareReport,
+    build_ctr_rationale,
+    build_strategy_plan_prompt,
+    strategy_system_prompt,
+)
 from app.domain.oracle import (
     ORACLE_ENRICHMENT_JSON_SCHEMA,
     ClaudeGapEnrichment,
@@ -324,6 +341,160 @@ class Claude47VisionClient:
                 "Claude Oracle enrichment produced no valid gap items."
             )
         return enrichments, input_tokens, output_tokens
+
+    async def enrich_strategy_plan(
+        self,
+        *,
+        compare_report: StrategyCompareReport,
+        user_id: UUID | None = None,
+        job_id: UUID | None = None,
+    ) -> tuple[list[ClaudeStrategyEnrichment], str, int, int]:
+        """Refine killer step plan while preserving CTR-backed rationales."""
+
+        if not compare_report.recommendations:
+            raise ClaudeUpstreamError(
+                "At least one killer recommendation is required for planning."
+            )
+        content: list[dict[str, Any]] = [
+            {
+                "type": "text",
+                "text": build_strategy_plan_prompt(compare_report=compare_report),
+            }
+        ]
+        payload_json, input_tokens, output_tokens = await self._messages_json(
+            system=strategy_system_prompt(),
+            content=content,
+            json_schema=STRATEGY_PLAN_JSON_SCHEMA,
+            max_tokens=self._settings.claude_47_reasoning_max_tokens,
+            operation="claude_ai_strategy_plan",
+            user_id=user_id,
+            job_id=job_id,
+        )
+        steps_raw = payload_json.get("steps")
+        if not isinstance(steps_raw, list) or not steps_raw:
+            raise ClaudeUpstreamError("Claude AI Strategy JSON missing steps array.")
+
+        executive = payload_json.get("executive_summary")
+        if not isinstance(executive, str) or not executive.strip():
+            executive = (
+                f"Пошаговый killer-план из {len(compare_report.recommendations)} шагов "
+                f"против лидера {compare_report.leader_sku}."
+            )
+
+        lift_by_action = {
+            rec.action_type: rec.attributed_ctr_lift_pct
+            for rec in compare_report.recommendations
+        }
+        label_by_action = {
+            rec.action_type: rec.action_type.value
+            for rec in compare_report.recommendations
+        }
+        # Prefer human labels from deterministic deltas when present.
+        for delta in compare_report.deltas:
+            label_by_action[delta.action_type] = delta.feature_label
+
+        known_actions = {rec.action_type for rec in compare_report.recommendations}
+        enrichments: list[ClaudeStrategyEnrichment] = []
+        for item in steps_raw:
+            if not isinstance(item, dict):
+                continue
+            action_raw = item.get("action_type")
+            if not isinstance(action_raw, str):
+                continue
+            try:
+                action = StrategyActionType(action_raw.strip())
+            except ValueError:
+                logger.warning(
+                    "AI Strategy enrichment ignored unknown action_type=%s",
+                    action_raw,
+                )
+                continue
+            if action not in known_actions:
+                logger.warning(
+                    "AI Strategy enrichment ignored unexpected action_type=%s",
+                    action.value,
+                )
+                continue
+            refined = item.get("refined_title")
+            if not isinstance(refined, str) or not refined.strip():
+                refined = action.value
+            instruction = item.get("instruction")
+            if not isinstance(instruction, str) or not instruction.strip():
+                instruction = "Примените изменение по образцу лидера ниши."
+            rationale = item.get("rationale")
+            if not isinstance(rationale, str) or "выше CTR" not in rationale:
+                rationale = build_ctr_rationale(
+                    feature_label=label_by_action.get(action, action.value),
+                    ctr_lift_pct=lift_by_action.get(action, 1.0),
+                )
+            impact = item.get("expected_impact")
+            if not isinstance(impact, str) or not impact.strip():
+                impact = (
+                    f"Ожидаемый вклад в CTR: ≈{lift_by_action.get(action, 0):.0f}% "
+                    f"от преимущества лидера."
+                )
+            try:
+                enrichments.append(
+                    ClaudeStrategyEnrichment.model_validate(
+                        {
+                            "action_type": action,
+                            "refined_title": refined.strip()[:200],
+                            "instruction": instruction.strip()[:800],
+                            "rationale": rationale.strip()[:500],
+                            "expected_impact": impact.strip()[:300],
+                            "confidence": item.get("confidence", 0.5),
+                        }
+                    )
+                )
+            except ValidationError:
+                logger.warning(
+                    "AI Strategy enrichment item failed validation for action=%s",
+                    action.value,
+                )
+                continue
+
+        if not enrichments:
+            raise ClaudeUpstreamError(
+                "Claude AI Strategy enrichment produced no valid steps."
+            )
+        return enrichments, executive.strip()[:800], input_tokens, output_tokens
+
+    async def generate_ab_hypotheses(
+        self,
+        *,
+        product: AbProductBrief,
+        user_id: UUID | None = None,
+        experiment_id: UUID | None = None,
+    ) -> tuple[tuple[AbVariantHypothesis, ...], int, int]:
+        """Generate exactly three main-card creative hypotheses for A/B testing."""
+
+        content: list[dict[str, Any]] = [
+            {
+                "type": "text",
+                "text": build_ab_hypotheses_prompt(product=product),
+            }
+        ]
+        payload_json, input_tokens, output_tokens = await self._messages_json(
+            system=ab_system_prompt(),
+            content=content,
+            json_schema=AB_HYPOTHESES_JSON_SCHEMA,
+            max_tokens=self._settings.claude_47_reasoning_max_tokens,
+            operation="claude_ab_test_hypotheses",
+            user_id=user_id,
+            job_id=experiment_id,
+        )
+        variants_raw = payload_json.get("variants")
+        if not isinstance(variants_raw, list) or len(variants_raw) < 3:
+            raise ClaudeUpstreamError(
+                "Claude A/B JSON must include exactly 3 variants."
+            )
+        try:
+            hypotheses = normalize_hypotheses(variants_raw)
+        except (ValidationError, ValueError) as exc:
+            raise ClaudeUpstreamError(
+                f"Claude A/B hypotheses failed validation: {exc}"
+            ) from exc
+        return hypotheses, input_tokens, output_tokens
 
     async def _messages_json(
         self,

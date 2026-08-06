@@ -2,11 +2,13 @@
 
 from app.models.base import Base
 from app.models.api_usage_cost import ApiUsageCost
+from app.models.ab_test import AbTestExperiment, AbTestVariant
 from app.models.bulk_generation import (
     BulkGenerationBatch,
     BulkGenerationItem,
     UserPushNotification,
 )
+from app.models.ai_strategy import AiStrategyJob
 from app.models.claude_reasoning import ClaudeReasoningJob
 from app.models.generation_error_log import GenerationErrorLog
 from app.models.visual_audit import VisualAuditJob
@@ -30,8 +32,11 @@ from app.models.workspace import Workspace, WorkspaceMember, WorkspaceSharedGene
 __all__ = [
     "Base",
     "ApiUsageCost",
+    "AbTestExperiment",
+    "AbTestVariant",
     "BulkGenerationBatch",
     "BulkGenerationItem",
+    "AiStrategyJob",
     "ClaudeReasoningJob",
     "VisualAuditJob",
     "OraclePredictionJob",

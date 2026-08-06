@@ -97,6 +97,13 @@ def test_generation_and_webhook_contracts_are_exposed() -> None:
     assert "get" in paths["/api/v1/oracle/notifications"]
     assert "/api/v1/oracle/{task_id}" in paths
     assert "get" in paths["/api/v1/oracle/{task_id}"]
+    assert "/api/v1/ai-strategy/preview" in paths
+    assert "post" in paths["/api/v1/ai-strategy/preview"]
+    assert "/api/v1/ai-strategy/plan" in paths
+    assert "post" in paths["/api/v1/ai-strategy/plan"]
+    assert "202" in paths["/api/v1/ai-strategy/plan"]["post"]["responses"]
+    assert "/api/v1/ai-strategy/{task_id}" in paths
+    assert "get" in paths["/api/v1/ai-strategy/{task_id}"]
     assert "/api/v1/marketplace-bridge/dashboard" in paths
     assert "get" in paths["/api/v1/marketplace-bridge/dashboard"]
     assert "/api/v1/marketplace-bridge/platforms/{platform}" in paths

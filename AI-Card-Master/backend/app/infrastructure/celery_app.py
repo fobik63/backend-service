@@ -20,6 +20,8 @@ celery_app = Celery(
         "app.workers.claude_reasoning_tasks",
         "app.workers.visual_audit_tasks",
         "app.workers.oracle_tasks",
+        "app.workers.ai_strategy_tasks",
+        "app.workers.ab_test_tasks",
     ],
 )
 
@@ -56,6 +58,10 @@ celery_app.conf.update(
         "claude.run_chain_of_thought": {"queue": "claude.reasoning"},
         "claude.run_visual_audit": {"queue": "claude.reasoning"},
         "claude.run_oracle_prediction": {"queue": "claude.reasoning"},
+        "claude.run_ai_strategy_plan": {"queue": "claude.reasoning"},
+        "ab_test.generate_and_publish": {"queue": "ab_test"},
+        "ab_test.poll_active_experiments": {"queue": "ab_test"},
+        "ab_test.resolve_experiment": {"queue": "ab_test"},
     },
     beat_schedule={
         "dispatch-generation-outbox": {
@@ -81,6 +87,10 @@ celery_app.conf.update(
         "smart-variant-poll-active-syncs": {
             "task": "smart_variant.poll_active_syncs",
             "schedule": settings.smart_variant_poll_seconds,
+        },
+        "ab-test-poll-active-experiments": {
+            "task": "ab_test.poll_active_experiments",
+            "schedule": settings.ab_test_poll_seconds,
         },
     },
 )
