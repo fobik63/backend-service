@@ -11,6 +11,7 @@ import pytest
 from app.application.stock_parser_service import StockParserService
 from app.domain.stock_parser import (
     CIRCUIT_BREAKER_THRESHOLD,
+    STOCK_PARSER_DEFAULT_CHUNK_SIZE,
     ParseSkuRequest,
     ParsedSkuSnapshot,
     ParserErrorKind,
@@ -21,10 +22,14 @@ from app.domain.stock_parser import (
     StockLevel,
     StockSnapshotView,
     StockSnapshotWrite,
+    chunk_sequence,
     month_partition_bounds,
+    nightly_capture_at,
     normalize_marketplace,
+    stabilize_captured_at,
     stock_snapshot_partition_name,
 )
+from app.workers.stock_parser_tasks import build_nightly_batch_payloads
 from app.infrastructure.stock_parser.exceptions import (
     ParserHttpError,
     ParserSchemaError,
@@ -305,18 +310,39 @@ class _FakeHealthRepo:
         now = datetime.now(UTC)
         out: list[StockSnapshotView] = []
         for row in rows:
-            view = StockSnapshotView(
-                id=uuid4(),
-                sku_id=row.sku_id,
-                captured_at=row.captured_at,
-                warehouse_id=row.warehouse_id,
-                quantity=row.quantity,
-                price_kopecks=row.price_kopecks,
-                currency=row.currency,
-                created_at=now,
+            key = (row.sku_id, row.warehouse_id, row.captured_at)
+            existing = next(
+                (
+                    s
+                    for s in self.snapshots
+                    if (s.sku_id, s.warehouse_id, s.captured_at) == key
+                ),
+                None,
             )
+            if existing is not None:
+                view = existing.model_copy(
+                    update={
+                        "quantity": row.quantity,
+                        "price_kopecks": row.price_kopecks,
+                        "currency": row.currency,
+                    }
+                )
+                self.snapshots = [
+                    view if s.id == existing.id else s for s in self.snapshots
+                ]
+            else:
+                view = StockSnapshotView(
+                    id=uuid4(),
+                    sku_id=row.sku_id,
+                    captured_at=row.captured_at,
+                    warehouse_id=row.warehouse_id,
+                    quantity=row.quantity,
+                    price_kopecks=row.price_kopecks,
+                    currency=row.currency,
+                    created_at=now,
+                )
+                self.snapshots.append(view)
             out.append(view)
-            self.snapshots.append(view)
         return out
 
     async def list_stock_snapshots(
@@ -571,3 +597,91 @@ async def test_fake_repo_stores_sku_and_snapshots() -> None:
     listed = await repo.list_stock_snapshots(sku_id=sku.id)
     assert len(listed) == 2
     assert listed[0].warehouse_id in {"WH-1", "WH-2"}
+
+
+def test_nightly_capture_at_is_stable_utc_slot() -> None:
+    now = datetime(2026, 8, 7, 15, 44, 12, tzinfo=UTC)
+    assert nightly_capture_at(now=now, hour=3, minute=0) == datetime(
+        2026, 8, 7, 3, 0, 0, tzinfo=UTC
+    )
+
+
+def test_stabilize_captured_at_drops_subminute() -> None:
+    raw = datetime(2026, 8, 7, 3, 0, 45, 123456, tzinfo=UTC)
+    assert stabilize_captured_at(raw) == datetime(2026, 8, 7, 3, 0, 0, tzinfo=UTC)
+
+
+def test_chunk_sequence_caps_at_100() -> None:
+    items = list(range(250))
+    chunks = chunk_sequence(items, STOCK_PARSER_DEFAULT_CHUNK_SIZE)
+    assert len(chunks) == 3
+    assert [len(c) for c in chunks] == [100, 100, 50]
+    assert all(len(c) <= STOCK_PARSER_DEFAULT_CHUNK_SIZE for c in chunks)
+
+
+def test_build_nightly_batch_payloads_chunk_size() -> None:
+    now = datetime.now(UTC)
+    items = [
+        SkuItemView(
+            id=uuid4(),
+            marketplace=ParserMarketplace.WILDBERRIES,
+            article=str(i),
+            product_url=f"https://www.wildberries.ru/catalog/{i}/detail.aspx",
+            title=None,
+            is_active=True,
+            created_at=now,
+            updated_at=now,
+        )
+        for i in range(205)
+    ]
+    chunks = build_nightly_batch_payloads(items, chunk_size=100)
+    assert len(chunks) == 3
+    assert len(chunks[0]) == 100
+    assert len(chunks[1]) == 100
+    assert len(chunks[2]) == 5
+    assert chunks[0][0]["sku"] == "0"
+    assert chunks[0][0]["marketplace"] == "wildberries"
+
+
+@pytest.mark.asyncio
+async def test_successful_parse_persists_snapshots() -> None:
+    repo = _FakeHealthRepo()
+    service = StockParserService(
+        repo,
+        {ParserMarketplace.WILDBERRIES: _OkParser()},
+    )
+    captured = datetime(2026, 8, 7, 3, 0, tzinfo=UTC)
+    result = await service.parse_sku(
+        ParseSkuRequest(marketplace=ParserMarketplace.WILDBERRIES, sku="555"),
+        captured_at=captured,
+    )
+    assert result.ok is True
+    assert ("wildberries", "555") in repo.sku_items
+    assert len(repo.snapshots) == 1
+    assert repo.snapshots[0].quantity == 2
+    assert repo.snapshots[0].captured_at == captured
+
+
+@pytest.mark.asyncio
+async def test_worker_restart_does_not_duplicate_snapshots() -> None:
+    """Simulates Celery acks_late redelivery of the same nightly batch."""
+
+    repo = _FakeHealthRepo()
+    service = StockParserService(
+        repo,
+        {ParserMarketplace.WILDBERRIES: _OkParser()},
+    )
+    captured = nightly_capture_at(
+        now=datetime(2026, 8, 7, 3, 5, tzinfo=UTC), hour=3, minute=0
+    )
+    request = ParseSkuRequest(marketplace=ParserMarketplace.WILDBERRIES, sku="777")
+
+    first = await service.parse_sku(request, captured_at=captured)
+    second = await service.parse_sku(request, captured_at=captured)
+
+    assert first.ok is True
+    assert second.ok is True
+    assert len(repo.snapshots) == 1
+    assert repo.snapshots[0].quantity == 2
+    # SKU dimension stays a single upserted row.
+    assert len(repo.sku_items) == 1

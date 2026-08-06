@@ -8,10 +8,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Sequence, TypeVar
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+T = TypeVar("T")
 
 
 class ParserMarketplace(StrEnum):
@@ -52,6 +54,41 @@ OZON_REQUIRED_PRODUCT_KEYS: frozenset[str] = frozenset(
 )
 
 CIRCUIT_BREAKER_THRESHOLD = 5
+# Hard ceiling for one Celery stock-parser worker task (OOM / soft-timeout guard).
+STOCK_PARSER_DEFAULT_CHUNK_SIZE = 100
+# Synthetic warehouse when a marketplace returns no per-warehouse stocks.
+STOCK_SNAPSHOT_FALLBACK_WAREHOUSE_ID = "_"
+
+
+def nightly_capture_at(
+    *,
+    now: datetime | None = None,
+    hour: int = 3,
+    minute: int = 0,
+) -> datetime:
+    """Stable UTC timestamp for the nightly Beat slot (idempotent worker restarts)."""
+
+    ts = now if now is not None else datetime.now(UTC)
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=UTC)
+    else:
+        ts = ts.astimezone(UTC)
+    return datetime(ts.year, ts.month, ts.day, hour, minute, 0, tzinfo=UTC)
+
+
+def stabilize_captured_at(value: datetime) -> datetime:
+    """Drop sub-minute noise so mid-batch retries upsert the same fact rows."""
+
+    ts = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    ts = ts.astimezone(UTC)
+    return ts.replace(second=0, microsecond=0)
+
+
+def chunk_sequence(items: Sequence[T], size: int) -> list[list[T]]:
+    """Split ``items`` into contiguous chunks of at most ``size`` (size >= 1)."""
+
+    chunk_size = max(1, int(size))
+    return [list(items[index : index + chunk_size]) for index in range(0, len(items), chunk_size)]
 
 
 class StrictDomainModel(BaseModel):

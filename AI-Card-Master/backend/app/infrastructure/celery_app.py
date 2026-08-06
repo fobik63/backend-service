@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from celery import Celery
+from celery.schedules import crontab
 
 from app.core.config import get_settings
 
@@ -24,6 +25,7 @@ celery_app = Celery(
         "app.workers.pain_analysis_tasks",
         "app.workers.ab_test_tasks",
         "app.workers.stock_parser_tasks",
+        "app.workers.eye_of_god_tasks",
     ],
 )
 
@@ -67,8 +69,10 @@ celery_app.conf.update(
         "ab_test.generate_and_publish": {"queue": "ab_test"},
         "ab_test.poll_active_experiments": {"queue": "ab_test"},
         "ab_test.resolve_experiment": {"queue": "ab_test"},
+        "stock_parser.dispatch_nightly": {"queue": "stock_parser"},
         "stock_parser.parse_sku": {"queue": "stock_parser"},
         "stock_parser.parse_batch": {"queue": "stock_parser"},
+        "claude.run_eye_of_god_vision": {"queue": "claude.reasoning"},
     },
     beat_schedule={
         "dispatch-generation-outbox": {
@@ -106,6 +110,14 @@ celery_app.conf.update(
         "ab-test-poll-active-experiments": {
             "task": "ab_test.poll_active_experiments",
             "schedule": settings.ab_test_poll_seconds,
+        },
+        # Deep-night stock scrape — never touches the FastAPI event loop.
+        "stock-parser-nightly-dispatch": {
+            "task": "stock_parser.dispatch_nightly",
+            "schedule": crontab(
+                hour=settings.stock_parser_beat_hour_utc,
+                minute=settings.stock_parser_beat_minute_utc,
+            ),
         },
     },
 )

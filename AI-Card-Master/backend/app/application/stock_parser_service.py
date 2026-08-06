@@ -2,12 +2,14 @@
 
 Strictly separated from FastAPI: no Request/Response imports.
 Circuit breaker stops scrapes after schema drift or 5 consecutive hard errors.
+Successful parses persist SKU + stock snapshots (idempotent upserts).
 """
 
 from __future__ import annotations
 
 import logging
 import traceback
+from datetime import UTC, datetime
 from typing import Mapping
 
 from app.application.ports.stock_parser import (
@@ -17,11 +19,15 @@ from app.application.ports.stock_parser import (
 )
 from app.domain.stock_parser import (
     CIRCUIT_BREAKER_THRESHOLD,
+    STOCK_SNAPSHOT_FALLBACK_WAREHOUSE_ID,
     ParseSkuRequest,
+    ParsedSkuSnapshot,
     ParserErrorKind,
     ParserHealthStatus,
     ParserMarketplace,
     ParserRunResult,
+    StockSnapshotWrite,
+    stabilize_captured_at,
 )
 from app.infrastructure.stock_parser.exceptions import (
     ParserStoppedError,
@@ -47,7 +53,12 @@ class StockParserService:
         self._alerts = alerts
         self._threshold = max(1, circuit_breaker_threshold)
 
-    async def parse_sku(self, request: ParseSkuRequest) -> ParserRunResult:
+    async def parse_sku(
+        self,
+        request: ParseSkuRequest,
+        *,
+        captured_at: datetime | None = None,
+    ) -> ParserRunResult:
         """Fetch one SKU; on repeated failures mark broken and alert admin."""
 
         health = await self._persistence.get_or_create_health(
@@ -115,6 +126,11 @@ class StockParserService:
         health = await self._persistence.record_success(
             marketplace=request.marketplace
         )
+        await self._persist_snapshot(
+            request=request,
+            snapshot=snapshot,
+            captured_at=captured_at,
+        )
         return ParserRunResult(
             marketplace=request.marketplace,
             sku=request.sku,
@@ -125,7 +141,10 @@ class StockParserService:
         )
 
     async def parse_many(
-        self, requests: list[ParseSkuRequest]
+        self,
+        requests: list[ParseSkuRequest],
+        *,
+        captured_at: datetime | None = None,
     ) -> list[ParserRunResult]:
         """Parse a batch; stop marketplace early once circuit trips."""
 
@@ -145,7 +164,7 @@ class StockParserService:
                     )
                 )
                 continue
-            result = await self.parse_sku(request)
+            result = await self.parse_sku(request, captured_at=captured_at)
             results.append(result)
             if result.parser_stopped or result.health_status is ParserHealthStatus.BROKEN:
                 stopped.add(request.marketplace)
@@ -161,6 +180,56 @@ class StockParserService:
             marketplace=marketplace,
             status=ParserHealthStatus.HEALTHY,
         )
+
+    async def _persist_snapshot(
+        self,
+        *,
+        request: ParseSkuRequest,
+        snapshot: ParsedSkuSnapshot,
+        captured_at: datetime | None,
+    ) -> None:
+        """Upsert tracked SKU + warehouse facts (safe under Celery redelivery)."""
+
+        product_url = (
+            request.product_url
+            or snapshot.product_url
+            or _fallback_product_url(request.marketplace, request.sku)
+        )
+        sku_item = await self._persistence.upsert_sku_item(
+            marketplace=request.marketplace,
+            article=request.sku,
+            product_url=product_url,
+            title=snapshot.title,
+            is_active=True,
+        )
+        ts = stabilize_captured_at(
+            captured_at if captured_at is not None else datetime.now(UTC)
+        )
+        writes: list[StockSnapshotWrite]
+        if snapshot.stocks:
+            writes = [
+                StockSnapshotWrite(
+                    sku_id=sku_item.id,
+                    captured_at=ts,
+                    warehouse_id=level.warehouse_id,
+                    quantity=level.quantity,
+                    price_kopecks=snapshot.price_kopecks,
+                    currency=snapshot.currency,
+                )
+                for level in snapshot.stocks
+            ]
+        else:
+            writes = [
+                StockSnapshotWrite(
+                    sku_id=sku_item.id,
+                    captured_at=ts,
+                    warehouse_id=STOCK_SNAPSHOT_FALLBACK_WAREHOUSE_ID,
+                    quantity=0,
+                    price_kopecks=snapshot.price_kopecks,
+                    currency=snapshot.currency,
+                )
+            ]
+        await self._persistence.insert_stock_snapshots(rows=writes)
 
     async def _handle_failure(
         self,
@@ -230,6 +299,12 @@ class StockParserService:
         )
         if sent:
             await self._persistence.mark_alert_sent(marketplace=health.marketplace)
+
+
+def _fallback_product_url(marketplace: ParserMarketplace, sku: str) -> str:
+    if marketplace is ParserMarketplace.WILDBERRIES:
+        return f"https://www.wildberries.ru/catalog/{sku}/detail.aspx"
+    return f"https://www.ozon.ru/product/{sku}"
 
 
 class StockParserNotConfiguredError(RuntimeError):

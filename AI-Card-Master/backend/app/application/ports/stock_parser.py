@@ -90,7 +90,7 @@ class StockParserPersistencePort(Protocol):
     async def insert_stock_snapshots(
         self, *, rows: Sequence[StockSnapshotWrite]
     ) -> list[StockSnapshotView]:
-        """Bulk-insert raw warehouse observations into partitioned storage."""
+        """Idempotent upsert of warehouse observations (no duplicates on retry)."""
 
     async def list_stock_snapshots(
         self,

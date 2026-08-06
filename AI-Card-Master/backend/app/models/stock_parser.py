@@ -152,6 +152,15 @@ class StockSnapshot(Base):
             "warehouse_id",
             "captured_at",
         ),
+        # Includes partition key so PostgreSQL accepts UNIQUE on the parent.
+        # Worker restarts upsert the same (sku, warehouse, captured_at) row.
+        Index(
+            "uq_stock_snapshots_sku_warehouse_captured",
+            "sku_id",
+            "warehouse_id",
+            "captured_at",
+            unique=True,
+        ),
         {
             "postgresql_partition_by": "RANGE (captured_at)",
         },

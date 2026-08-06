@@ -354,6 +354,19 @@ class Settings(BaseSettings):
         default="https://api.ozon.ru",
         alias="STOCK_PARSER_OZON_API_BASE_URL",
     )
+    # Celery Beat nightly scrape (UTC). Chunk size caps RAM / soft time limits.
+    stock_parser_chunk_size: int = Field(
+        default=100,
+        alias="STOCK_PARSER_CHUNK_SIZE",
+    )
+    stock_parser_beat_hour_utc: int = Field(
+        default=3,
+        alias="STOCK_PARSER_BEAT_HOUR_UTC",
+    )
+    stock_parser_beat_minute_utc: int = Field(
+        default=0,
+        alias="STOCK_PARSER_BEAT_MINUTE_UTC",
+    )
     smart_inpainting_edge_pass_enabled: bool = Field(
         default=False,
         alias="SMART_INPAINTING_EDGE_PASS_ENABLED",
@@ -537,6 +550,42 @@ class Settings(BaseSettings):
     visual_audit_max_rising_stars_for_vision: int = Field(
         default=12,
         alias="VISUAL_AUDIT_MAX_RISING_STARS_FOR_VISION",
+    )
+
+    # Parser ↔ «Глаз Бога» bridge (sales spike +30% / 3d → Claude Vision)
+    eye_of_god_enabled: bool = Field(default=True, alias="EYE_OF_GOD_ENABLED")
+    eye_of_god_recent_window_days: int = Field(
+        default=3,
+        alias="EYE_OF_GOD_RECENT_WINDOW_DAYS",
+    )
+    eye_of_god_baseline_window_days: int = Field(
+        default=7,
+        alias="EYE_OF_GOD_BASELINE_WINDOW_DAYS",
+    )
+    eye_of_god_min_growth_ratio: float = Field(
+        default=0.30,
+        alias="EYE_OF_GOD_MIN_GROWTH_RATIO",
+    )
+    eye_of_god_min_baseline_daily_sales: float = Field(
+        default=1.0,
+        alias="EYE_OF_GOD_MIN_BASELINE_DAILY_SALES",
+    )
+    eye_of_god_min_recent_reliable_days: int = Field(
+        default=2,
+        alias="EYE_OF_GOD_MIN_RECENT_RELIABLE_DAYS",
+    )
+    eye_of_god_cooldown_hours: int = Field(
+        default=24,
+        alias="EYE_OF_GOD_COOLDOWN_HOURS",
+    )
+    eye_of_god_lookback_days: int = Field(
+        default=21,
+        alias="EYE_OF_GOD_LOOKBACK_DAYS",
+    )
+    eye_of_god_max_images: int = Field(default=3, alias="EYE_OF_GOD_MAX_IMAGES")
+    eye_of_god_image_timeout_seconds: float = Field(
+        default=20.0,
+        alias="EYE_OF_GOD_IMAGE_TIMEOUT_SECONDS",
     )
 
     # Market Gap & Trend Prediction (The Oracle)
@@ -723,16 +772,37 @@ class Settings(BaseSettings):
         "visual_audit_rising_min_reviews",
         "visual_audit_rising_max_reviews",
         "visual_audit_max_rising_stars_for_vision",
+        "eye_of_god_recent_window_days",
+        "eye_of_god_baseline_window_days",
+        "eye_of_god_min_recent_reliable_days",
+        "eye_of_god_cooldown_hours",
+        "eye_of_god_lookback_days",
+        "eye_of_god_max_images",
         "oracle_min_recent_query_volume",
         "oracle_max_alerts",
         "oracle_top_rank_ceiling",
         "ai_strategy_max_recommendations",
         "stock_parser_circuit_breaker_threshold",
+        "stock_parser_chunk_size",
     )
     @classmethod
     def validate_generation_positive_ints(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("Generation and queue numeric settings must be positive.")
+        return value
+
+    @field_validator("stock_parser_beat_hour_utc")
+    @classmethod
+    def validate_stock_parser_beat_hour(cls, value: int) -> int:
+        if not 0 <= value <= 23:
+            raise ValueError("STOCK_PARSER_BEAT_HOUR_UTC must be in [0, 23].")
+        return value
+
+    @field_validator("stock_parser_beat_minute_utc")
+    @classmethod
+    def validate_stock_parser_beat_minute(cls, value: int) -> int:
+        if not 0 <= value <= 59:
+            raise ValueError("STOCK_PARSER_BEAT_MINUTE_UTC must be in [0, 59].")
         return value
 
     @field_validator(
@@ -755,6 +825,7 @@ class Settings(BaseSettings):
         "smart_variant_poll_seconds",
         "claude_47_timeout_seconds",
         "claude_47_base_retry_delay_seconds",
+        "eye_of_god_image_timeout_seconds",
     )
     @classmethod
     def validate_positive_floats(cls, value: float) -> float:
@@ -779,6 +850,8 @@ class Settings(BaseSettings):
     @field_validator(
         "visual_audit_min_sales_growth_ratio",
         "visual_audit_min_review_velocity_per_day",
+        "eye_of_god_min_growth_ratio",
+        "eye_of_god_min_baseline_daily_sales",
         "oracle_min_query_growth_ratio",
         "oracle_min_gap_score",
         "ai_strategy_min_ctr_lift_pct",

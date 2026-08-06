@@ -7,6 +7,7 @@ from typing import Sequence
 from uuid import UUID, uuid4
 
 from sqlalchemy import select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.stock_parser import (
@@ -255,6 +256,8 @@ class StockParserRepository:
     async def insert_stock_snapshots(
         self, *, rows: Sequence[StockSnapshotWrite]
     ) -> list[StockSnapshotView]:
+        """Upsert snapshots; retries must not create duplicate fact rows."""
+
         if not rows:
             return []
 
@@ -267,24 +270,36 @@ class StockParserRepository:
                 months_seen.add(key)
                 await self.ensure_stock_snapshot_partition(captured_at=ts)
 
-        entities: list[StockSnapshot] = []
+        views: list[StockSnapshotView] = []
         for item in rows:
-            entity = StockSnapshot(
-                id=uuid4(),
-                sku_id=item.sku_id,
-                captured_at=_as_utc(item.captured_at) or _utc_now(),
-                warehouse_id=item.warehouse_id,
-                quantity=item.quantity,
-                price_kopecks=item.price_kopecks,
-                currency=item.currency,
-                created_at=_utc_now(),
+            captured_at = _as_utc(item.captured_at) or _utc_now()
+            stmt = (
+                pg_insert(StockSnapshot)
+                .values(
+                    id=uuid4(),
+                    sku_id=item.sku_id,
+                    captured_at=captured_at,
+                    warehouse_id=item.warehouse_id,
+                    quantity=item.quantity,
+                    price_kopecks=item.price_kopecks,
+                    currency=item.currency,
+                    created_at=_utc_now(),
+                )
+                .on_conflict_do_update(
+                    index_elements=["sku_id", "warehouse_id", "captured_at"],
+                    set_={
+                        "quantity": item.quantity,
+                        "price_kopecks": item.price_kopecks,
+                        "currency": item.currency,
+                    },
+                )
+                .returning(StockSnapshot)
             )
-            entities.append(entity)
-            self._session.add(entity)
+            result = await self._session.execute(stmt)
+            entity = result.scalar_one()
+            views.append(_snapshot_view(entity))
         await self._session.commit()
-        for entity in entities:
-            await self._session.refresh(entity)
-        return [_snapshot_view(entity) for entity in entities]
+        return views
 
     async def list_stock_snapshots(
         self,

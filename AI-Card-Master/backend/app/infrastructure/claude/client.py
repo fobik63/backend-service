@@ -65,6 +65,12 @@ from app.domain.pain_analysis import (
     normalize_claude_pain_result,
     pain_analysis_system_prompt,
 )
+from app.domain.eye_of_god import (
+    MONEY_CONFIRMED_VISION_JSON_SCHEMA,
+    MoneyConfirmedVisionResult,
+    build_eye_of_god_vision_prompt,
+    eye_of_god_vision_system_prompt,
+)
 from app.domain.visual_audit import (
     RISING_STAR_VISION_JSON_SCHEMA,
     RisingStarVisionDissection,
@@ -269,6 +275,76 @@ class Claude47VisionClient:
         except ValidationError as exc:
             raise ClaudeUpstreamError(
                 "Claude Rising Star vision JSON failed schema validation."
+            ) from exc
+        return result, input_tokens, output_tokens
+
+    async def analyze_money_confirmed_trigger(
+        self,
+        *,
+        sku: str,
+        title: str | None,
+        marketplace: str,
+        growth_ratio: float,
+        recent_avg_daily_sales: float,
+        baseline_avg_daily_sales: float,
+        recent_window_days: int,
+        images: tuple[tuple[bytes, str], ...],
+        user_id: UUID | None = None,
+        job_id: UUID | None = None,
+    ) -> tuple[MoneyConfirmedVisionResult, int, int]:
+        """«Глаз Бога»: dissect current SKU photo after a money-validated sales spike."""
+
+        if not images:
+            raise ClaudeUpstreamError(
+                "At least one SKU image is required for Eye-of-God Vision."
+            )
+        max_images = self._settings.claude_47_max_images_per_request
+        selected = images[:max_images]
+        content: list[dict[str, Any]] = []
+        for image_bytes, mime_type in selected:
+            normalized, media_type = normalize_image_for_claude(
+                image_bytes,
+                media_type=mime_type,
+            )
+            content.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": base64.b64encode(normalized).decode("ascii"),
+                    },
+                }
+            )
+        content.append(
+            {
+                "type": "text",
+                "text": build_eye_of_god_vision_prompt(
+                    sku=sku,
+                    title=title,
+                    marketplace=marketplace,
+                    growth_ratio=growth_ratio,
+                    recent_avg_daily_sales=recent_avg_daily_sales,
+                    baseline_avg_daily_sales=baseline_avg_daily_sales,
+                    recent_window_days=recent_window_days,
+                    image_count=len(selected),
+                ),
+            }
+        )
+        payload_json, input_tokens, output_tokens = await self._messages_json(
+            system=eye_of_god_vision_system_prompt(),
+            content=content,
+            json_schema=MONEY_CONFIRMED_VISION_JSON_SCHEMA,
+            max_tokens=self._settings.claude_47_vision_max_tokens,
+            operation="claude_eye_of_god_money_trigger",
+            user_id=user_id,
+            job_id=job_id,
+        )
+        try:
+            result = MoneyConfirmedVisionResult.model_validate(payload_json)
+        except ValidationError as exc:
+            raise ClaudeUpstreamError(
+                "Claude Eye-of-God Vision JSON failed schema validation."
             ) from exc
         return result, input_tokens, output_tokens
 
