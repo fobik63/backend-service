@@ -33,6 +33,7 @@ from app.domain.generation import (
     SlideStatus,
     SlideWorkItem,
 )
+from app.infrastructure.generation_history_cache import invalidate_generation_history_cache
 from app.models.enums import SubscriptionStatus
 from app.services.ai_engine import (
     AIEngineConfigurationError,
@@ -247,6 +248,7 @@ class GenerationApplicationService:
                 provider_used=provider_used,
                 warning=warning,
             )
+            await invalidate_generation_history_cache(work.user_id)
         except Exception as exc:
             await self._fail_job(work.id, exc)
 
@@ -599,7 +601,10 @@ class GenerationApplicationService:
             error.retryable,
             exc_info=(type(exc), exc, exc.__traceback__),
         )
+        work = await self._repository.get_work_item(job_id)
         await self._repository.fail_job(job_id, error)
+        if work is not None:
+            await invalidate_generation_history_cache(work.user_id)
 
     def _provider_by_name(self, name: str) -> AsyncImageProviderPort | None:
         return next(

@@ -100,24 +100,38 @@ class AmazonSellerClient:
 
         seller_id = credentials["seller_id"]
         async with self._http() as client:
-            access_token = await self._exchange_lwa_token(client, credentials)
-            params = [("marketplaceIds", mid) for mid in marketplace_ids]
-            response = await client.put(
-                f"{self._base_url}/listings/2020-09-01/items/{seller_id}/{vendor_code}",
-                headers={
-                    "x-amz-access-token": access_token,
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                },
-                params=params,
-                json=payload,
-            )
+            try:
+                access_token = await self._exchange_lwa_token(client, credentials)
+                params = [("marketplaceIds", mid) for mid in marketplace_ids]
+                response = await client.put(
+                    f"{self._base_url}/listings/2020-09-01/items/{seller_id}/{vendor_code}",
+                    headers={
+                        "x-amz-access-token": access_token,
+                        "Content-Type": "application/json",
+                        "Accept": "application/json",
+                    },
+                    params=params,
+                    json=payload,
+                )
+            except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as exc:
+                raise MarketplaceSellerError(
+                    f"Amazon SP-API timed out or is unreachable: {exc}"
+                ) from exc
+            except httpx.HTTPError as exc:
+                raise MarketplaceSellerError(
+                    f"Amazon SP-API transport error: {exc}"
+                ) from exc
             if response.status_code >= 400:
                 raise MarketplaceSellerError(
                     f"Amazon putListingsItem failed ({response.status_code}): "
                     f"{response.text[:300]}"
                 )
-            body = response.json()
+            try:
+                body = response.json()
+            except ValueError as exc:
+                raise MarketplaceSellerError(
+                    "Amazon putListingsItem returned non-JSON body."
+                ) from exc
             status = str(body.get("status") or "ACCEPTED")
             submission_id = body.get("submissionId") or body.get("sku") or vendor_code
 
@@ -130,21 +144,35 @@ class AmazonSellerClient:
     async def _exchange_lwa_token(
         self, client: httpx.AsyncClient, credentials: dict[str, str]
     ) -> str:
-        response = await client.post(
-            LWA_TOKEN_URL,
-            data={
-                "grant_type": "refresh_token",
-                "refresh_token": credentials["refresh_token"],
-                "client_id": credentials["lwa_client_id"],
-                "client_secret": credentials["lwa_client_secret"],
-            },
-        )
+        try:
+            response = await client.post(
+                LWA_TOKEN_URL,
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": credentials["refresh_token"],
+                    "client_id": credentials["lwa_client_id"],
+                    "client_secret": credentials["lwa_client_secret"],
+                },
+            )
+        except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as exc:
+            raise MarketplaceSellerError(
+                f"Amazon LWA token exchange timed out or is unreachable: {exc}"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise MarketplaceSellerError(
+                f"Amazon LWA token exchange transport error: {exc}"
+            ) from exc
         if response.status_code >= 400:
             raise MarketplaceSellerError(
                 f"Amazon LWA token exchange failed ({response.status_code}): "
                 f"{response.text[:300]}"
             )
-        body = response.json()
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise MarketplaceSellerError(
+                "Amazon LWA response is not valid JSON."
+            ) from exc
         token = body.get("access_token")
         if not token:
             raise MarketplaceSellerError("Amazon LWA response did not include access_token.")

@@ -15,9 +15,9 @@ settings = get_settings()
 engine: AsyncEngine = create_async_engine(
     settings.async_database_url,
     pool_pre_ping=True,
-    pool_recycle=1800,
-    pool_size=20,
-    max_overflow=40,
+    pool_recycle=settings.db_pool_recycle_seconds,
+    pool_size=settings.db_pool_size,
+    max_overflow=settings.db_max_overflow,
 )
 
 

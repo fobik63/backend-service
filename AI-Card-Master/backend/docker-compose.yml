@@ -1,0 +1,142 @@
+# AI-Card-Master production-oriented stack (plan §16).
+# Usage:
+#   cp .env.example .env   # fill secrets
+#   docker compose up -d --build
+#   docker compose exec api alembic upgrade head
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ai_card_master
+      POSTGRES_USER: ai_card
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme_in_production}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ai_card -d ai_card_master"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    ports:
+      - "6379:6379"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      DATABASE_URL: postgresql://ai_card:${POSTGRES_PASSWORD:-changeme_in_production}@postgres:5432/ai_card_master
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-20}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-40}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      - uploads:/app/uploads
+    command:
+      [
+        "gunicorn",
+        "app.main:app",
+        "-k",
+        "uvicorn.workers.UvicornWorker",
+        "-b",
+        "0.0.0.0:8000",
+        "-w",
+        "${UVICORN_WORKERS:-4}",
+        "--timeout",
+        "120",
+        "--graceful-timeout",
+        "30",
+        "--keep-alive",
+        "5",
+      ]
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      DATABASE_URL: postgresql://ai_card:${POSTGRES_PASSWORD:-changeme_in_production}@postgres:5432/ai_card_master
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command:
+      [
+        "celery",
+        "-A",
+        "app.infrastructure.celery_app.celery_app",
+        "worker",
+        "--loglevel=INFO",
+        "-Q",
+        "generation.submit,generation.finalize,generation.recovery,winback,bulk,smart_variant,claude.reasoning,claude.recovery,ab_test,stock_parser,analytics.scrape",
+        "--concurrency",
+        "${CELERY_CONCURRENCY:-4}",
+      ]
+
+  beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      DATABASE_URL: postgresql://ai_card:${POSTGRES_PASSWORD:-changeme_in_production}@postgres:5432/ai_card_master
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    depends_on:
+      redis:
+        condition: service_healthy
+    command:
+      [
+        "celery",
+        "-A",
+        "app.infrastructure.celery_app.celery_app",
+        "beat",
+        "--loglevel=INFO",
+      ]
+
+volumes:
+  pgdata:
+  redisdata:
+  uploads:

@@ -103,6 +103,84 @@ class Settings(BaseSettings):
     # Hidden admin API gate. Empty value disables /api/v1/admin for everyone.
     admin_allowed_user_id: str = Field(default="", alias="ADMIN_ALLOWED_USER_ID")
 
+    # --- Security layer (plan §14): suspicious activity / sanitization / CF ---
+    security_suspicious_middleware_enabled: bool = Field(
+        default=True,
+        alias="SECURITY_SUSPICIOUS_MIDDLEWARE_ENABLED",
+    )
+    security_input_sanitization_enabled: bool = Field(
+        default=True,
+        alias="SECURITY_INPUT_SANITIZATION_ENABLED",
+    )
+    security_reject_prompt_injection: bool = Field(
+        default=True,
+        alias="SECURITY_REJECT_PROMPT_INJECTION",
+    )
+    security_rate_limit_per_minute: int = Field(
+        default=120,
+        alias="SECURITY_RATE_LIMIT_PER_MINUTE",
+    )
+    security_auto_block_threat_score: int = Field(
+        default=5,
+        alias="SECURITY_AUTO_BLOCK_THREAT_SCORE",
+    )
+    security_ip_block_ttl_seconds: int = Field(
+        default=3600,
+        alias="SECURITY_IP_BLOCK_TTL_SECONDS",
+    )
+    security_max_json_body_bytes: int = Field(
+        default=1_048_576,
+        alias="SECURITY_MAX_JSON_BODY_BYTES",
+    )
+    trusted_proxy_cidrs: str = Field(
+        default="",
+        alias="TRUSTED_PROXY_CIDRS",
+    )
+
+    # Cloudflare edge protection (DDoS + hide origin IP).
+    cloudflare_enabled: bool = Field(default=False, alias="CLOUDFLARE_ENABLED")
+    cloudflare_enforce_edge: bool = Field(
+        default=False,
+        alias="CLOUDFLARE_ENFORCE_EDGE",
+    )
+    cloudflare_trust_headers: bool = Field(
+        default=True,
+        alias="CLOUDFLARE_TRUST_HEADERS",
+    )
+    cloudflare_auto_ban_enabled: bool = Field(
+        default=False,
+        alias="CLOUDFLARE_AUTO_BAN_ENABLED",
+    )
+    cloudflare_api_token: SecretStr | None = Field(
+        default=None,
+        alias="CLOUDFLARE_API_TOKEN",
+    )
+    cloudflare_zone_id: str = Field(default="", alias="CLOUDFLARE_ZONE_ID")
+    cloudflare_account_id: str = Field(default="", alias="CLOUDFLARE_ACCOUNT_ID")
+    cloudflare_api_base_url: str = Field(
+        default="https://api.cloudflare.com",
+        alias="CLOUDFLARE_API_BASE_URL",
+    )
+    cloudflare_timeout_seconds: float = Field(
+        default=10.0,
+        alias="CLOUDFLARE_TIMEOUT_SECONDS",
+    )
+
+    # Isolated admin microservice (AES-GCM encrypted service token).
+    admin_panel_token_secret: SecretStr = Field(
+        default=SecretStr(""),
+        alias="ADMIN_PANEL_TOKEN_SECRET",
+    )
+    admin_panel_bind_host: str = Field(
+        default="127.0.0.1",
+        alias="ADMIN_PANEL_BIND_HOST",
+    )
+    admin_panel_port: int = Field(default=8100, alias="ADMIN_PANEL_PORT")
+    admin_panel_cors_origins: str = Field(
+        default="",
+        alias="ADMIN_PANEL_CORS_ORIGINS",
+    )
+
     # Stable Diffusion immediate/fallback provider.
     stable_diffusion_api_key: SecretStr | None = Field(
         default=None,
@@ -405,6 +483,38 @@ class Settings(BaseSettings):
     style_cache_ttl_seconds: int = Field(default=86400, alias="STYLE_CACHE_TTL_SECONDS")
     style_cache_version: str = Field(default="v1", alias="STYLE_CACHE_VERSION")
 
+    # Highload caches (plan §16): history pages + static catalog responses.
+    generation_history_cache_ttl_seconds: int = Field(
+        default=30,
+        alias="GENERATION_HISTORY_CACHE_TTL_SECONDS",
+    )
+    static_cache_ttl_seconds: int = Field(
+        default=3600,
+        alias="STATIC_CACHE_TTL_SECONDS",
+    )
+    generation_status_cache_ttl_seconds: int = Field(
+        default=5,
+        alias="GENERATION_STATUS_CACHE_TTL_SECONDS",
+    )
+    generation_status_terminal_cache_ttl_seconds: int = Field(
+        default=60,
+        alias="GENERATION_STATUS_TERMINAL_CACHE_TTL_SECONDS",
+    )
+
+    # Production pool / logging knobs.
+    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    db_pool_size: int = Field(default=20, alias="DB_POOL_SIZE")
+    db_max_overflow: int = Field(default=40, alias="DB_MAX_OVERFLOW")
+    db_pool_recycle_seconds: int = Field(default=1800, alias="DB_POOL_RECYCLE_SECONDS")
+    telegram_error_logging_enabled: bool = Field(
+        default=True,
+        alias="TELEGRAM_ERROR_LOGGING_ENABLED",
+    )
+    telegram_error_alert_cooldown_seconds: int = Field(
+        default=60,
+        alias="TELEGRAM_ERROR_ALERT_COOLDOWN_SECONDS",
+    )
+
     # YooKassa payments
     yookassa_shop_id: str | None = Field(default=None, alias="YOOKASSA_SHOP_ID")
     yookassa_secret_key: SecretStr | None = Field(
@@ -422,6 +532,11 @@ class Settings(BaseSettings):
     yookassa_timeout_seconds: float = Field(
         default=30.0,
         alias="YOOKASSA_TIMEOUT_SECONDS",
+    )
+    yookassa_max_retries: int = Field(default=2, alias="YOOKASSA_MAX_RETRIES")
+    yookassa_base_retry_delay_seconds: float = Field(
+        default=0.5,
+        alias="YOOKASSA_BASE_RETRY_DELAY_SECONDS",
     )
     # 1 = НДС не облагается (typical for digital services; adjust per your tax setup)
     yookassa_vat_code: int = Field(default=1, alias="YOOKASSA_VAT_CODE")
@@ -781,6 +896,14 @@ class Settings(BaseSettings):
         "generation_fast_cost_coins",
         "generation_hd_face_fix_cost_coins",
         "style_cache_ttl_seconds",
+        "generation_history_cache_ttl_seconds",
+        "static_cache_ttl_seconds",
+        "generation_status_cache_ttl_seconds",
+        "generation_status_terminal_cache_ttl_seconds",
+        "db_pool_size",
+        "db_max_overflow",
+        "db_pool_recycle_seconds",
+        "telegram_error_alert_cooldown_seconds",
         "stable_diffusion_max_connections",
         "stable_diffusion_max_keepalive_connections",
         "stable_diffusion_max_parallel_requests",
@@ -818,6 +941,11 @@ class Settings(BaseSettings):
         "competitor_audit_redis_ttl_seconds",
         "competitor_audit_max_reviews",
         "competitor_audit_max_vision_images",
+        "security_rate_limit_per_minute",
+        "security_auto_block_threat_score",
+        "security_ip_block_ttl_seconds",
+        "security_max_json_body_bytes",
+        "admin_panel_port",
     )
     @classmethod
     def validate_generation_positive_ints(cls, value: int) -> int:
@@ -861,7 +989,10 @@ class Settings(BaseSettings):
         "smart_variant_poll_seconds",
         "claude_47_timeout_seconds",
         "claude_47_base_retry_delay_seconds",
+        "yookassa_timeout_seconds",
+        "yookassa_base_retry_delay_seconds",
         "eye_of_god_image_timeout_seconds",
+        "cloudflare_timeout_seconds",
     )
     @classmethod
     def validate_positive_floats(cls, value: float) -> float:
@@ -869,11 +1000,11 @@ class Settings(BaseSettings):
             raise ValueError("Timeout/retry settings must be positive.")
         return value
 
-    @field_validator("claude_47_max_retries")
+    @field_validator("claude_47_max_retries", "yookassa_max_retries")
     @classmethod
     def validate_claude_retries(cls, value: int) -> int:
         if value < 0:
-            raise ValueError("CLAUDE_47_MAX_RETRIES cannot be negative.")
+            raise ValueError("Retry count cannot be negative.")
         return value
 
     @field_validator("claude_47_temperature")
@@ -1003,6 +1134,25 @@ class Settings(BaseSettings):
             for host in self.generation_allowed_result_hosts.split(",")
             if host.strip()
         )
+
+    @property
+    def admin_panel_cors_origins_list(self) -> list[str]:
+        """Parse admin-microservice CORS origins (empty = no browser CORS)."""
+
+        return [
+            origin.strip()
+            for origin in self.admin_panel_cors_origins.split(",")
+            if origin.strip()
+        ]
+
+    @property
+    def effective_admin_panel_token_secret(self) -> str:
+        """Admin panel secret; falls back to JWT secret when unset (dev only)."""
+
+        explicit = self.admin_panel_token_secret.get_secret_value().strip()
+        if explicit:
+            return explicit
+        return self.jwt_secret_key.get_secret_value()
 
 
 @lru_cache(maxsize=1)

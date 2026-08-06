@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from celery import Celery
 from celery.schedules import crontab
+from celery.signals import task_failure
 
 from app.core.config import get_settings
 
@@ -124,5 +125,48 @@ celery_app.conf.update(
         },
     },
 )
+
+# --- Operator alerts: Celery task failures → Telegram with file:line ---
+
+
+@task_failure.connect
+def _notify_celery_task_failure(
+    sender: object | None = None,
+    task_id: str | None = None,
+    exception: BaseException | None = None,
+    einfo: object | None = None,
+    **_kwargs: object,
+) -> None:
+    """Push Celery failures to Telegram (error_type + file:line)."""
+
+    if exception is None:
+        return
+    try:
+        from app.core.logging_config import configure_logging
+        from app.services.telegram_alerts import (
+            extract_error_location,
+            notify_error_sync,
+        )
+
+        configure_logging()
+        location = extract_error_location(exception)
+        traceback_text = None
+        if einfo is not None and hasattr(einfo, "traceback"):
+            traceback_text = str(getattr(einfo, "traceback"))
+        notify_error_sync(
+            error_type=type(exception).__name__,
+            message=str(exception),
+            location=location,
+            context={
+                "source": "celery",
+                "task": getattr(sender, "name", str(sender)),
+                "task_id": task_id or "",
+            },
+            traceback_text=traceback_text,
+        )
+    except Exception:
+        # Never break the worker because alerting failed.
+        pass
+
 
 __all__ = ["celery_app"]

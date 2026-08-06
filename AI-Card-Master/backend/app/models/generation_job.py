@@ -11,6 +11,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -43,6 +44,14 @@ class GenerationJob(Base):
         ),
         CheckConstraint(
             "progress >= 0 AND progress <= 100", name="ck_generation_jobs_progress"
+        ),
+        # Highload cabinet history: WHERE user_id ORDER BY created_at DESC.
+        Index("ix_generation_jobs_user_id_created_at", "user_id", "created_at"),
+        Index(
+            "ix_generation_jobs_user_id_status_created_at",
+            "user_id",
+            "status",
+            "created_at",
         ),
     )
 

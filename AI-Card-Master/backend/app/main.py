@@ -48,7 +48,11 @@ from app.api import (
 )
 from app.api.images import ensure_uploads_dir
 from app.core.admin_middleware import AdminOnlyMiddleware
+from app.core.cloudflare_middleware import CloudflareProtectionMiddleware
 from app.core.config import get_settings
+from app.core.input_sanitization_middleware import InputSanitizationMiddleware
+from app.core.logging_config import configure_logging
+from app.core.suspicious_activity_middleware import SuspiciousActivityMiddleware
 from app.infrastructure.redis import close_redis_client, redis_healthcheck
 from app.models.database import SessionLocal, engine
 from app.services.ai_engine import close_ai_engine
@@ -62,12 +66,7 @@ from app.services.s3_storage import (
 from app.services.telegram_alerts import notify_critical_500
 
 
-# Configure module logger.
-# In a production setup, centralized logging config should live in app/core.
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-)
+configure_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -120,6 +119,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
 
 
 settings = get_settings()
+_docs_enabled = settings.app_env != "production"
 
 app = FastAPI(
     title="AI-Card-Master API",
@@ -130,9 +130,9 @@ app = FastAPI(
         "and `/redoc`."
     ),
     lifespan=lifespan,
-    docs_url="/docs",
-    redoc_url="/redoc",
-    openapi_url="/openapi.json",
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
 )
 
 
@@ -144,7 +144,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Security stack (Starlette: last added = outermost).
+# Order of execution: Cloudflare → Suspicious → Sanitization → AdminOnly → CORS → route.
 app.add_middleware(AdminOnlyMiddleware)
+app.add_middleware(InputSanitizationMiddleware)
+app.add_middleware(SuspiciousActivityMiddleware)
+app.add_middleware(CloudflareProtectionMiddleware)
 
 
 # Register API routers.

@@ -30,6 +30,11 @@ from app.api.payments import get_current_user
 from app.core.config import get_settings
 from app.domain.generation import GenerationJobStatus, MarketplaceTextContent, SlideStatus
 from app.domain.generation import GenerationEngineMode, GenerationPostProcessingMode
+from app.infrastructure.generation_history_cache import (
+    get_cached_generation_history,
+    invalidate_generation_history_cache,
+    set_cached_generation_history,
+)
 from app.infrastructure.persistence.generation_repository import GenerationRepository
 from app.infrastructure.redis import (
     RedisUnavailableError,
@@ -343,6 +348,8 @@ async def create_model_generation(
             overlay_texts={},
             slide_tasks=(task,),
         )
+        if created:
+            await invalidate_generation_history_cache(current_user.id)
         return GenerationCreateResponse(
             task_id=job.id,
             status=GenerationJobStatus(job.status),
@@ -442,6 +449,8 @@ async def create_generation(
         )
         if not created:
             await _best_effort_delete(storage, input_key)
+        if created:
+            await invalidate_generation_history_cache(current_user.id)
         return GenerationCreateResponse(
             task_id=job.id,
             status=GenerationJobStatus(job.status),
@@ -490,6 +499,22 @@ async def list_generation_history(
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[GenerationHistoryItemResponse]:
     """Return personal cabinet generation history with durable thumbnails."""
+
+    cached_items = await get_cached_generation_history(
+        user_id=current_user.id,
+        limit=limit,
+        offset=offset,
+    )
+    if cached_items is not None:
+        try:
+            return [
+                GenerationHistoryItemResponse.model_validate_json(
+                    json.dumps(item, ensure_ascii=False)
+                )
+                for item in cached_items
+            ]
+        except (ValueError, TypeError):
+            logger.debug("Generation history cache payload invalid", exc_info=True)
 
     repository = GenerationRepository(db_session)
     jobs = await repository.list_generation_history_for_user(
@@ -554,6 +579,12 @@ async def list_generation_history(
                 completed_at=job.completed_at.isoformat() if job.completed_at else None,
             )
         )
+    await set_cached_generation_history(
+        user_id=current_user.id,
+        limit=limit,
+        offset=offset,
+        items=[item.model_dump(mode="json") for item in response],
+    )
     return response
 
 
@@ -662,7 +693,12 @@ async def get_generation_status(
         await cache_json(
             cache_key,
             response.model_dump(mode="json"),
-            ttl_seconds=5,
+            ttl_seconds=(
+                get_settings().generation_status_terminal_cache_ttl_seconds
+                if response.status
+                in (GenerationJobStatus.COMPLETED, GenerationJobStatus.FAILED)
+                else get_settings().generation_status_cache_ttl_seconds
+            ),
         )
     except RedisUnavailableError:
         pass

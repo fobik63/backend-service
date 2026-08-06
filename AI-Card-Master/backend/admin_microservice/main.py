@@ -1,0 +1,390 @@
+"""Isolated admin-panel microservice.
+
+Runs as a separate process (default 127.0.0.1:8100) and is reachable only with
+an AES-256-GCM encrypted admin token (``Authorization: Bearer adm.v1....`` or
+``X-Admin-Token``). Reuses ``AdminService`` from the main backend package —
+existing monolith ``/api/v1/admin`` JWT routes are left intact.
+"""
+
+from __future__ import annotations
+
+import logging
+from contextlib import asynccontextmanager
+from dataclasses import asdict
+from datetime import datetime
+from decimal import Decimal
+from typing import AsyncGenerator, Literal
+from uuid import UUID
+
+from fastapi import (
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    status,
+)
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.admin_token import AdminTokenClaims, AdminTokenError, verify_admin_panel_token
+from app.core.cloudflare_middleware import CloudflareProtectionMiddleware
+from app.core.config import get_settings
+from app.core.suspicious_activity_middleware import SuspiciousActivityMiddleware
+from app.models.database import engine, get_db_session
+from app.models.enums import SubscriptionStatus
+from app.services.admin_service import (
+    AdminApiCostStatistics,
+    AdminCounterStats,
+    AdminNotFoundError,
+    AdminPaymentStatistics,
+    AdminService,
+    AdminStatistics,
+    AdminUserView,
+    AdminValidationError,
+)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
+logger = logging.getLogger("admin_microservice")
+
+
+class StrictAdminModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, validate_default=True)
+
+
+class AdminStatisticsResponse(StrictAdminModel):
+    generations_today: int
+    generations_last_7_days: int
+    total_generations: int
+    total_users: int
+    registrations_today: int
+    registrations_last_7_days: int
+    total_payments: int
+    successful_payments: int
+    total_revenue_rub: Decimal
+    active_pro_subscriptions: int
+    api_cost_total_usd: Decimal
+    midjourney_cost_total_usd: Decimal
+    claude_47_cost_total_usd: Decimal
+
+
+class AdminCounterStatsResponse(StrictAdminModel):
+    total: int
+    today: int
+    last_7_days: int
+
+
+class AdminPaymentStatsResponse(StrictAdminModel):
+    total: int
+    successful: int
+    today: int
+    last_7_days: int
+    total_revenue_rub: Decimal
+
+
+class AdminApiCostStatsResponse(StrictAdminModel):
+    events_total: int
+    total_cost_usd: Decimal
+    midjourney_cost_usd: Decimal
+    claude_47_cost_usd: Decimal
+
+
+class AdminUserResponse(StrictAdminModel):
+    id: str
+    email: str
+    is_admin: bool
+    subscription_status: SubscriptionStatus
+    ai_coins: int
+    is_banned: bool
+    ban_reason: str | None = None
+    banned_at: datetime | None = None
+    created_at: datetime
+
+
+class AdminUserActionRequest(StrictAdminModel):
+    action: Literal["grant_credits", "ban", "unban"]
+    user_id: str | None = Field(default=None)
+    email: str | None = Field(default=None, min_length=3, max_length=320)
+    credits: int | None = Field(default=None, gt=0, le=1_000_000)
+    reason: str | None = Field(default=None, min_length=2, max_length=2000)
+
+
+class AdminUpdateSubscriptionRequest(StrictAdminModel):
+    email: str = Field(..., min_length=3, max_length=320)
+    subscription_status: SubscriptionStatus
+
+    @field_validator("subscription_status", mode="before")
+    @classmethod
+    def parse_subscription_status(cls, value: object) -> SubscriptionStatus:
+        if isinstance(value, SubscriptionStatus):
+            return value
+        if isinstance(value, str):
+            return SubscriptionStatus(value)
+        raise ValueError("subscription_status must be a valid subscription value.")
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
+    settings = get_settings()
+    secret = settings.admin_panel_token_secret.get_secret_value().strip()
+    if not secret and settings.app_env == "production":
+        raise RuntimeError(
+            "ADMIN_PANEL_TOKEN_SECRET is required for the admin microservice in production."
+        )
+    logger.info(
+        "Admin microservice starting on %s:%s",
+        settings.admin_panel_bind_host,
+        settings.admin_panel_port,
+    )
+    try:
+        yield
+    finally:
+        await engine.dispose()
+
+
+settings = get_settings()
+
+app = FastAPI(
+    title="AI-Card-Master Admin Panel API",
+    version="0.1.0",
+    description="Isolated admin statistics/management API. Token auth only.",
+    lifespan=lifespan,
+    docs_url=None if settings.app_env == "production" else "/docs",
+    redoc_url=None,
+    openapi_url=None if settings.app_env == "production" else "/openapi.json",
+)
+
+if settings.admin_panel_cors_origins_list:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.admin_panel_cors_origins_list,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "PATCH"],
+        allow_headers=["Authorization", "X-Admin-Token", "Content-Type"],
+    )
+
+app.add_middleware(CloudflareProtectionMiddleware)
+app.add_middleware(SuspiciousActivityMiddleware)
+
+
+def _extract_raw_token(
+    authorization: str | None,
+    x_admin_token: str | None,
+) -> str:
+    if x_admin_token and x_admin_token.strip():
+        return x_admin_token.strip()
+    if authorization:
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() == "bearer" and token.strip():
+            return token.strip()
+        if authorization.strip().startswith("adm.v1."):
+            return authorization.strip()
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Encrypted admin panel token is required.",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+async def require_admin_panel_token(
+    authorization: str | None = Header(default=None),
+    x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
+) -> AdminTokenClaims:
+    """Verify the encrypted admin-panel service token."""
+
+    raw = _extract_raw_token(authorization, x_admin_token)
+    try:
+        return verify_admin_panel_token(
+            raw,
+            secret=get_settings().effective_admin_panel_token_secret,
+        )
+    except AdminTokenError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired admin panel token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+
+
+async def get_admin_service(db_session: AsyncSession = Depends(get_db_session)) -> AdminService:
+    return AdminService(db_session)
+
+
+def _admin_user_response(user: AdminUserView) -> AdminUserResponse:
+    return AdminUserResponse(
+        id=user.id,
+        email=user.email,
+        is_admin=user.is_admin,
+        subscription_status=SubscriptionStatus(user.subscription_status),
+        ai_coins=user.ai_coins,
+        is_banned=user.is_banned,
+        ban_reason=user.ban_reason,
+        banned_at=user.banned_at,
+        created_at=user.created_at,
+    )
+
+
+def _parse_optional_user_id(value: str | None) -> UUID | None:
+    if value is None:
+        return None
+    try:
+        return UUID(value)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="user_id must be a valid UUID.",
+        ) from exc
+
+
+@app.get("/health", tags=["system"])
+async def health() -> dict[str, str]:
+    return {"status": "ok", "service": "admin-panel"}
+
+
+@app.get("/stats", response_model=AdminStatisticsResponse)
+async def get_admin_stats(
+    _: AdminTokenClaims = Depends(require_admin_panel_token),
+    admin_service: AdminService = Depends(get_admin_service),
+) -> AdminStatisticsResponse:
+    try:
+        stats: AdminStatistics = await admin_service.get_statistics()
+        return AdminStatisticsResponse(
+            generations_today=stats.generations_today,
+            generations_last_7_days=stats.generations_last_7_days,
+            total_generations=stats.total_generations,
+            total_users=stats.total_users,
+            registrations_today=stats.registrations_today,
+            registrations_last_7_days=stats.registrations_last_7_days,
+            total_payments=stats.total_payments,
+            successful_payments=stats.successful_payments,
+            total_revenue_rub=stats.total_revenue_rub,
+            active_pro_subscriptions=stats.active_pro_subscriptions,
+            api_cost_total_usd=stats.api_cost_total_usd,
+            midjourney_cost_total_usd=stats.midjourney_cost_total_usd,
+            claude_47_cost_total_usd=stats.claude_47_cost_total_usd,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch admin statistics.",
+        ) from exc
+
+
+@app.get("/stats/registrations", response_model=AdminCounterStatsResponse)
+async def get_registration_stats(
+    _: AdminTokenClaims = Depends(require_admin_panel_token),
+    admin_service: AdminService = Depends(get_admin_service),
+) -> AdminCounterStatsResponse:
+    stats: AdminCounterStats = await admin_service.get_registration_statistics()
+    return AdminCounterStatsResponse(**asdict(stats))
+
+
+@app.get("/stats/payments", response_model=AdminPaymentStatsResponse)
+async def get_payment_stats(
+    _: AdminTokenClaims = Depends(require_admin_panel_token),
+    admin_service: AdminService = Depends(get_admin_service),
+) -> AdminPaymentStatsResponse:
+    stats: AdminPaymentStatistics = await admin_service.get_payment_statistics()
+    return AdminPaymentStatsResponse(**asdict(stats))
+
+
+@app.get("/stats/generations", response_model=AdminCounterStatsResponse)
+async def get_generation_stats(
+    _: AdminTokenClaims = Depends(require_admin_panel_token),
+    admin_service: AdminService = Depends(get_admin_service),
+) -> AdminCounterStatsResponse:
+    stats: AdminCounterStats = await admin_service.get_generation_statistics()
+    return AdminCounterStatsResponse(**asdict(stats))
+
+
+@app.get("/monitoring/api-costs", response_model=AdminApiCostStatsResponse)
+async def get_api_cost_stats(
+    _: AdminTokenClaims = Depends(require_admin_panel_token),
+    admin_service: AdminService = Depends(get_admin_service),
+) -> AdminApiCostStatsResponse:
+    stats: AdminApiCostStatistics = await admin_service.get_api_cost_statistics()
+    return AdminApiCostStatsResponse(**asdict(stats))
+
+
+@app.get("/users/by-email", response_model=AdminUserResponse)
+async def get_user_by_email(
+    email: str = Query(..., min_length=3, max_length=320),
+    _: AdminTokenClaims = Depends(require_admin_panel_token),
+    admin_service: AdminService = Depends(get_admin_service),
+) -> AdminUserResponse:
+    try:
+        user = await admin_service.find_user_by_email(email)
+        return _admin_user_response(user)
+    except AdminNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except AdminValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@app.patch("/users/subscription", response_model=AdminUserResponse)
+async def update_user_subscription(
+    payload: AdminUpdateSubscriptionRequest,
+    _: AdminTokenClaims = Depends(require_admin_panel_token),
+    admin_service: AdminService = Depends(get_admin_service),
+) -> AdminUserResponse:
+    try:
+        user = await admin_service.update_user_subscription_status(
+            email=payload.email,
+            subscription_status=payload.subscription_status,
+        )
+        return _admin_user_response(user)
+    except AdminNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except AdminValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@app.post("/users/actions", response_model=AdminUserResponse)
+async def manage_user_action(
+    payload: AdminUserActionRequest,
+    _: AdminTokenClaims = Depends(require_admin_panel_token),
+    admin_service: AdminService = Depends(get_admin_service),
+) -> AdminUserResponse:
+    parsed_user_id = _parse_optional_user_id(payload.user_id)
+    try:
+        if payload.action == "grant_credits":
+            if payload.credits is None:
+                raise AdminValidationError("credits is required for grant_credits.")
+            user = await admin_service.grant_user_credits(
+                user_id=parsed_user_id,
+                email=payload.email,
+                amount=payload.credits,
+            )
+        elif payload.action == "ban":
+            if payload.reason is None:
+                raise AdminValidationError("reason is required for ban.")
+            user = await admin_service.ban_user(
+                user_id=parsed_user_id,
+                email=payload.email,
+                reason=payload.reason,
+            )
+        else:
+            user = await admin_service.unban_user(
+                user_id=parsed_user_id,
+                email=payload.email,
+            )
+        return _admin_user_response(user)
+    except AdminNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except AdminValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.exception("Admin microservice error on %s: %s", request.url.path, exc)
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={"success": False, "detail": "Internal server error."},
+    )

@@ -370,6 +370,15 @@ async def test_generation_history_returns_thumbnail_and_expires_old_archive(
     monkeypatch.setattr(generations_api, "GenerationRepository", Repository)
     monkeypatch.setattr(generations_api, "get_s3_storage", Storage)
 
+    async def cache_miss(**_kwargs: object) -> None:
+        return None
+
+    async def cache_noop(**_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(generations_api, "get_cached_generation_history", cache_miss)
+    monkeypatch.setattr(generations_api, "set_cached_generation_history", cache_noop)
+
     response = await generations_api.list_generation_history(
         current_user=user,
         db_session=object(),  # type: ignore[arg-type]

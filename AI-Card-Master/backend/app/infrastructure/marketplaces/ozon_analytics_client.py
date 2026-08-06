@@ -253,16 +253,30 @@ class OzonAnalyticsClient:
             "Content-Type": "application/json",
         }
         async with self._http() as client:
-            response = await client.post(
-                f"{self._base_url}{path}",
-                headers=headers,
-                json=payload,
-            )
+            try:
+                response = await client.post(
+                    f"{self._base_url}{path}",
+                    headers=headers,
+                    json=payload,
+                )
+            except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as exc:
+                raise MarketplaceSellerError(
+                    f"Ozon analytics timed out or is unreachable ({path}): {exc}"
+                ) from exc
+            except httpx.HTTPError as exc:
+                raise MarketplaceSellerError(
+                    f"Ozon analytics transport error ({path}): {exc}"
+                ) from exc
             if response.status_code >= 400:
                 raise MarketplaceSellerError(
                     f"Ozon {path} failed ({response.status_code}): {response.text[:300]}"
                 )
-            body: Any = response.json()
+            try:
+                body: Any = response.json()
+            except ValueError as exc:
+                raise MarketplaceSellerError(
+                    f"Ozon {path} returned non-JSON body."
+                ) from exc
         if not isinstance(body, dict):
             raise MarketplaceSellerError(f"Ozon {path} returned a non-object payload.")
         return body

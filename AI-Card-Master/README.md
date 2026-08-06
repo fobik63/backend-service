@@ -250,6 +250,20 @@ For local Windows development, add `--pool=solo` to the worker command. Run
 Redis and PostgreSQL before API/worker/beat. `/health/live` checks the process;
 `/health/ready` reports PostgreSQL, Redis, and S3 readiness independently.
 
+### Production deploy (Docker)
+
+```bash
+cd backend
+cp .env.example .env   # fill JWT, S3, Telegram, YooKassa secrets
+docker compose up -d --build
+docker compose exec api alembic upgrade head
+```
+
+Stack: PostgreSQL 16 + Redis 7 (LRU) + gunicorn/uvicorn API + Celery worker + beat.
+Nginx sample: `backend/deploy/nginx.conf`. History lookups use composite indexes
+`(user_id, created_at)` and a short Redis cache; ERROR-level failures notify Telegram
+with explicit `error_type` / `file` / `line`.
+
 ### Clean Architecture boundaries
 
 - `app/domain`: strict Pydantic v2 state and error contracts.

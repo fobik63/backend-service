@@ -92,17 +92,31 @@ class WildberriesSellerClient:
         ]
 
         async with self._http() as client:
-            upload = await client.post(
-                f"{self._base_url}/content/v2/cards/upload",
-                headers=_wb_headers(token),
-                json=payload,
-            )
+            try:
+                upload = await client.post(
+                    f"{self._base_url}/content/v2/cards/upload",
+                    headers=_wb_headers(token),
+                    json=payload,
+                )
+            except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as exc:
+                raise MarketplaceSellerError(
+                    f"Wildberries API timed out or is unreachable: {exc}"
+                ) from exc
+            except httpx.HTTPError as exc:
+                raise MarketplaceSellerError(
+                    f"Wildberries API transport error: {exc}"
+                ) from exc
             if upload.status_code >= 400:
                 raise MarketplaceSellerError(
                     f"Wildberries cards/upload failed ({upload.status_code}): "
                     f"{upload.text[:300]}"
                 )
-            body = upload.json()
+            try:
+                body = upload.json()
+            except ValueError as exc:
+                raise MarketplaceSellerError(
+                    "Wildberries cards/upload returned non-JSON body."
+                ) from exc
             if body.get("error"):
                 raise MarketplaceSellerError(
                     f"Wildberries cards/upload error: {body.get('errorText') or body}"
@@ -112,11 +126,24 @@ class WildberriesSellerClient:
             # when re-exporting media onto an already-created card.
             nm_id = extras.get("nm_id")
             if isinstance(nm_id, int) and nm_id > 0 and image_urls:
-                media = await client.post(
-                    f"{self._base_url}/content/v3/media/save",
-                    headers=_wb_headers(token),
-                    json={"nmId": nm_id, "data": list(image_urls)},
-                )
+                try:
+                    media = await client.post(
+                        f"{self._base_url}/content/v3/media/save",
+                        headers=_wb_headers(token),
+                        json={"nmId": nm_id, "data": list(image_urls)},
+                    )
+                except (
+                    httpx.TimeoutException,
+                    httpx.NetworkError,
+                    httpx.RemoteProtocolError,
+                ) as exc:
+                    raise MarketplaceSellerError(
+                        f"Wildberries media/save timed out or is unreachable: {exc}"
+                    ) from exc
+                except httpx.HTTPError as exc:
+                    raise MarketplaceSellerError(
+                        f"Wildberries media/save transport error: {exc}"
+                    ) from exc
                 if media.status_code >= 400:
                     raise MarketplaceSellerError(
                         f"Wildberries media/save failed ({media.status_code}): "

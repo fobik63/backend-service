@@ -2,6 +2,9 @@
 
 Uses HTTP Basic auth (shopId:secretKey) against api.yookassa.ru/v3.
 Official SDK is synchronous; this client stays async via httpx.
+
+Timeouts and transport failures are mapped to ``YooKassaUpstreamError`` so the
+API never crashes when the payment provider stalls.
 """
 
 from __future__ import annotations
@@ -9,12 +12,16 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import httpx
 
 from app.core.config import Settings, get_settings
+from app.infrastructure.http_resilience import (
+    TRANSIENT_HTTP_CODES,
+    call_with_transport_retry,
+)
 from app.models.enums import TariffCode
 from app.services.tariffs import TariffPlan, get_tariff_plan
 
@@ -68,6 +75,8 @@ class YooKassaService:
         self._base_url = self._settings.yookassa_api_base_url.rstrip("/")
         self._return_url = self._settings.yookassa_return_url
         self._timeout = httpx.Timeout(self._settings.yookassa_timeout_seconds)
+        self._max_retries = self._settings.yookassa_max_retries
+        self._base_retry_delay = self._settings.yookassa_base_retry_delay_seconds
 
     def _auth(self) -> httpx.BasicAuth:
         return httpx.BasicAuth(self._shop_id, self._secret_key)
@@ -97,22 +106,14 @@ class YooKassaService:
             "Content-Type": "application/json",
         }
 
-        try:
-            async with httpx.AsyncClient(
-                base_url=self._base_url,
-                auth=self._auth(),
-                timeout=self._timeout,
-            ) as client:
-                response = await client.post("/payments", json=payload, headers=headers)
-        except httpx.HTTPError as exc:
-            raise YooKassaUpstreamError(f"YooKassa create payment failed: {exc}") from exc
-
-        if response.status_code >= 400:
-            raise YooKassaUpstreamError(
-                f"YooKassa create payment HTTP {response.status_code}: {response.text}"
-            )
-
-        data = response.json()
+        response = await self._request_with_retry(
+            method="POST",
+            path="/payments",
+            headers=headers,
+            json_body=payload,
+            operation_name="YooKassa create payment",
+        )
+        data = self._parse_json_object(response, operation="create payment")
         return self._parse_payment(data, plan=plan)
 
     async def get_payment(self, payment_id: str) -> dict[str, Any]:
@@ -121,21 +122,71 @@ class YooKassaService:
         if not payment_id or not payment_id.strip():
             raise YooKassaError("payment_id is required.")
 
-        try:
+        response = await self._request_with_retry(
+            method="GET",
+            path=f"/payments/{payment_id.strip()}",
+            headers={"Content-Type": "application/json"},
+            json_body=None,
+            operation_name="YooKassa get payment",
+        )
+        return self._parse_json_object(response, operation="get payment")
+
+    async def _request_with_retry(
+        self,
+        *,
+        method: str,
+        path: str,
+        headers: dict[str, str],
+        json_body: dict[str, Any] | None,
+        operation_name: str,
+    ) -> httpx.Response:
+        """Execute HTTP call with transport + transient-status retries."""
+
+        async def _once() -> httpx.Response:
             async with httpx.AsyncClient(
                 base_url=self._base_url,
                 auth=self._auth(),
                 timeout=self._timeout,
             ) as client:
-                response = await client.get(f"/payments/{payment_id.strip()}")
+                return await client.request(
+                    method,
+                    path,
+                    headers=headers,
+                    json=json_body,
+                )
+
+        try:
+            response = await call_with_transport_retry(
+                _once,
+                max_retries=self._max_retries,
+                base_delay_seconds=self._base_retry_delay,
+                operation_name=operation_name,
+                is_transient_result=lambda r: r.status_code in TRANSIENT_HTTP_CODES,
+            )
         except httpx.HTTPError as exc:
-            raise YooKassaUpstreamError(f"YooKassa get payment failed: {exc}") from exc
+            raise YooKassaUpstreamError(
+                f"{operation_name} failed after retries: {exc}"
+            ) from exc
 
         if response.status_code >= 400:
             raise YooKassaUpstreamError(
-                f"YooKassa get payment HTTP {response.status_code}: {response.text}"
+                f"{operation_name} HTTP {response.status_code}: {response.text[:500]}"
             )
-        return response.json()
+        return response
+
+    @staticmethod
+    def _parse_json_object(response: httpx.Response, *, operation: str) -> dict[str, Any]:
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise YooKassaUpstreamError(
+                f"YooKassa {operation} returned non-JSON body."
+            ) from exc
+        if not isinstance(data, dict):
+            raise YooKassaUpstreamError(
+                f"YooKassa {operation} returned a non-object payload."
+            )
+        return data
 
     def _build_payment_payload(
         self,
@@ -204,7 +255,12 @@ class YooKassaService:
             raise YooKassaUpstreamError("YooKassa response missing payment id.")
 
         amount_block = data.get("amount") or {}
-        amount_value = Decimal(str(amount_block.get("value", plan.amount_value)))
+        try:
+            amount_value = Decimal(str(amount_block.get("value", plan.amount_value)))
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise YooKassaUpstreamError(
+                "YooKassa response has an invalid amount value."
+            ) from exc
         currency = str(amount_block.get("currency") or "RUB")
 
         confirmation = data.get("confirmation") or {}
@@ -213,6 +269,8 @@ class YooKassaService:
             confirmation_url = str(confirmation_url)
 
         metadata_raw = data.get("metadata") or {}
+        if not isinstance(metadata_raw, dict):
+            metadata_raw = {}
         metadata = {str(k): str(v) for k, v in metadata_raw.items()}
 
         return YooKassaPaymentCreated(

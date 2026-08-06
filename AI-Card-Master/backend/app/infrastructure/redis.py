@@ -84,6 +84,19 @@ async def get_cached_json(key: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+async def delete_keys_by_prefix(prefix: str, *, scan_count: int = 100) -> int:
+    """Best-effort SCAN+DELETE for a key prefix. Returns deleted key count."""
+
+    deleted = 0
+    try:
+        client = get_redis_client()
+        async for key in client.scan_iter(match=f"{prefix}*", count=scan_count):
+            deleted += int(await client.delete(key))
+    except RedisError as exc:
+        raise RedisUnavailableError("Redis prefix delete failed.") from exc
+    return deleted
+
+
 async def is_provider_circuit_open(provider_name: str) -> bool:
     """Return whether a provider is temporarily removed from the pool."""
 

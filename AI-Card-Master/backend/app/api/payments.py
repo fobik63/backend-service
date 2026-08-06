@@ -32,6 +32,10 @@ from app.services.billing_service import (
     DailyBonusResult,
     describe_tariff,
 )
+from app.infrastructure.generation_history_cache import (
+    get_cached_tariffs,
+    set_cached_tariffs,
+)
 from app.services.tariffs import get_tariff_plan, list_tariff_plans
 from app.services.telegram_user_notify import TelegramUserNotifier
 from app.services.yookassa_service import (
@@ -237,7 +241,19 @@ async def get_yookassa_dependency() -> YooKassaService:
 async def list_tariffs() -> list[TariffResponse]:
     """Return the commercial tariff grid (Старт / Про / Полугодовой / Годовая)."""
 
-    return [TariffResponse(**describe_tariff(plan)) for plan in list_tariff_plans()]
+    cached = await get_cached_tariffs()
+    if cached is not None:
+        try:
+            return [
+                TariffResponse.model_validate_json(json.dumps(item, ensure_ascii=False))
+                for item in cached
+            ]
+        except (ValueError, TypeError):
+            logger.debug("Tariffs cache payload invalid", exc_info=True)
+
+    response = [TariffResponse(**describe_tariff(plan)) for plan in list_tariff_plans()]
+    await set_cached_tariffs([item.model_dump(mode="json") for item in response])
+    return response
 
 
 @router.get("/balance", response_model=BalanceResponse)

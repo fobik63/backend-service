@@ -112,17 +112,31 @@ class OzonSellerClient:
         }
 
         async with self._http() as client:
-            response = await client.post(
-                f"{self._base_url}/v3/product/import",
-                headers=headers,
-                json=payload,
-            )
+            try:
+                response = await client.post(
+                    f"{self._base_url}/v3/product/import",
+                    headers=headers,
+                    json=payload,
+                )
+            except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as exc:
+                raise MarketplaceSellerError(
+                    f"Ozon API timed out or is unreachable: {exc}"
+                ) from exc
+            except httpx.HTTPError as exc:
+                raise MarketplaceSellerError(
+                    f"Ozon API transport error: {exc}"
+                ) from exc
             if response.status_code >= 400:
                 raise MarketplaceSellerError(
                     f"Ozon product/import failed ({response.status_code}): "
                     f"{response.text[:300]}"
                 )
-            body = response.json()
+            try:
+                body = response.json()
+            except ValueError as exc:
+                raise MarketplaceSellerError(
+                    "Ozon product/import returned non-JSON body."
+                ) from exc
             result = body.get("result") or {}
             task_id = result.get("task_id")
             task_id_str = str(task_id) if task_id is not None else None

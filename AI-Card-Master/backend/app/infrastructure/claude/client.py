@@ -20,6 +20,7 @@ from anthropic import (
 from pydantic import BaseModel, ValidationError
 
 from app.core.config import Settings, get_settings
+from app.core.prompt_safety import harden_system_prompt
 from app.domain.ab_test import (
     AB_HYPOTHESES_JSON_SCHEMA,
     AbProductBrief,
@@ -713,63 +714,93 @@ class Claude47VisionClient:
         job_id: UUID | None,
         fallback_schema: dict[str, Any],
     ) -> tuple[Any, int, int]:
-        """Prefer official SDK parse; fall back to schema-constrained create."""
+        """Prefer official SDK parse; fall back to schema-constrained create.
 
-        try:
-            response = await self._sdk.messages.parse(
-                model=self._model,
-                max_tokens=max_tokens,
-                system=system,
-                messages=[{"role": "user", "content": content}],
-                thinking={"type": "adaptive"},
-                output_config={"effort": self._settings.claude_47_effort},
-                output_format=output_format,
-            )
-        except (APITimeoutError, APIConnectionError) as exc:
-            raise ClaudeUpstreamError("Claude request failed after retries.") from exc
-        except APIStatusError as exc:
-            # Older SDK / transitional accounts may reject parse; use JSON schema path.
-            if exc.status_code in {400, 404, 422}:
-                payload_json, input_tokens, output_tokens = await self._messages_json(
-                    system=system,
-                    content=content,
-                    json_schema=fallback_schema,
+        Timeouts and connection errors are retried so a slow Anthropic edge
+        never bubbles as an unhandled crash into the API process.
+        """
+
+        attempts = self._settings.claude_47_max_retries + 1
+        last_transport: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                response = await self._sdk.messages.parse(
+                    model=self._model,
                     max_tokens=max_tokens,
-                    operation=operation,
-                    user_id=user_id,
-                    job_id=job_id,
+                    system=harden_system_prompt(system),
+                    messages=[{"role": "user", "content": content}],
+                    thinking={"type": "adaptive"},
+                    output_config={"effort": self._settings.claude_47_effort},
+                    output_format=output_format,
                 )
-                try:
-                    return (
-                        output_format.model_validate(payload_json),
-                        input_tokens,
-                        output_tokens,
-                    )
-                except ValidationError as validation_exc:
+            except (APITimeoutError, APIConnectionError) as exc:
+                last_transport = exc
+                if attempt >= attempts:
                     raise ClaudeUpstreamError(
-                        "Claude JSON failed schema validation."
-                    ) from validation_exc
-            raise ClaudeUpstreamError(
-                f"Claude API error {exc.status_code}: {str(exc)[:500]}"
-            ) from exc
+                        "Claude request failed after retries."
+                    ) from exc
+                await asyncio.sleep(self._retry_delay(attempt, None))
+                continue
+            except APIStatusError as exc:
+                # Transient upstream / rate-limit: retry before failing the job.
+                if (
+                    exc.status_code in TRANSIENT_HTTP_CODES
+                    and attempt < attempts
+                ):
+                    await asyncio.sleep(self._retry_delay(attempt, None))
+                    continue
+                # Older SDK / transitional accounts may reject parse; use JSON schema path.
+                if exc.status_code in {400, 404, 422}:
+                    payload_json, input_tokens, output_tokens = await self._messages_json(
+                        system=system,
+                        content=content,
+                        json_schema=fallback_schema,
+                        max_tokens=max_tokens,
+                        operation=operation,
+                        user_id=user_id,
+                        job_id=job_id,
+                    )
+                    try:
+                        return (
+                            output_format.model_validate(payload_json),
+                            input_tokens,
+                            output_tokens,
+                        )
+                    except ValidationError as validation_exc:
+                        raise ClaudeUpstreamError(
+                            "Claude JSON failed schema validation."
+                        ) from validation_exc
+                raise ClaudeUpstreamError(
+                    f"Claude API error {exc.status_code}: {str(exc)[:500]}"
+                ) from exc
+            except Exception as exc:  # noqa: BLE001 — map unknown SDK failures
+                raise ClaudeUpstreamError(
+                    f"Claude SDK unexpected failure: {type(exc).__name__}"
+                ) from exc
 
-        if response.parsed_output is None:
-            raise ClaudeUpstreamError("Claude parse returned empty structured output.")
-        usage = getattr(response, "usage", None)
-        input_tokens = _safe_token_count(getattr(usage, "input_tokens", None))
-        output_tokens = _safe_token_count(getattr(usage, "output_tokens", None))
-        await self._record_usage(
-            operation=operation,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            user_id=user_id,
-            job_id=job_id,
-            usage={
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-            },
-        )
-        return response.parsed_output, input_tokens, output_tokens
+            if response.parsed_output is None:
+                raise ClaudeUpstreamError(
+                    "Claude parse returned empty structured output."
+                )
+            usage = getattr(response, "usage", None)
+            input_tokens = _safe_token_count(getattr(usage, "input_tokens", None))
+            output_tokens = _safe_token_count(getattr(usage, "output_tokens", None))
+            await self._record_usage(
+                operation=operation,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                user_id=user_id,
+                job_id=job_id,
+                usage={
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                },
+            )
+            return response.parsed_output, input_tokens, output_tokens
+
+        raise ClaudeUpstreamError(
+            "Claude request failed after retries."
+        ) from last_transport
 
     async def _messages_json(
         self,
@@ -796,7 +827,7 @@ class Claude47VisionClient:
             "model": self._model,
             "max_tokens": max_tokens,
             "thinking": {"type": "adaptive"},
-            "system": system,
+            "system": harden_system_prompt(system),
             "messages": [{"role": "user", "content": content}],
             "output_config": {
                 "effort": self._settings.claude_47_effort,

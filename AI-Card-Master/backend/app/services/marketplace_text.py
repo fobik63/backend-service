@@ -15,6 +15,7 @@ from pydantic import ValidationError
 
 from app.domain.generation import MarketplaceTextContent, SlideWorkItem
 from app.core.config import get_settings
+from app.core.prompt_safety import fence_untrusted_text, harden_system_prompt
 from app.services.api_usage_costs import record_api_usage_cost
 from app.services.ai_engine import _detect_image_mime_type
 from app.services.infographic_service import (
@@ -228,7 +229,8 @@ class MarketplaceTextService:
         )
 
 
-_SYSTEM_PROMPT = (
+
+_SYSTEM_PROMPT = harden_system_prompt(
     "You are a senior Russian marketplace SEO copywriter for Wildberries and Ozon. "
     "Analyze product card images and produce factual, conversion-focused copy. "
     "Return only valid JSON without markdown."
@@ -243,6 +245,8 @@ def _build_user_prompt(
         f"{slide.position}. {slide.slide_key}: {slide.prompt}" for slide in slides
     )
     category = product_category.strip() if product_category else "не указана"
+    fenced_category = fence_untrusted_text(category, label="product_category")
+    fenced_slides = fence_untrusted_text(slide_context, label="slide_context")
     return (
         "Проанализируй сгенерированные изображения товара и подготовь JSON для карточки "
         "WB/Ozon. Структура строго такая: "
@@ -252,7 +256,7 @@ def _build_user_prompt(
         "языке минимум 1000 символов с LSI-ключами, без выдуманных фактов, сертификатов, "
         "гарантий и точных материалов, если их не видно; characteristics - 3-12 коротких "
         "ключевых преимуществ товара. Не используй emoji, markdown и HTML. "
-        f"Категория товара: {category}. Контекст слайдов: {slide_context}."
+        f"Категория товара: {fenced_category}. Контекст слайдов: {fenced_slides}."
     )
 
 

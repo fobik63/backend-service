@@ -118,17 +118,31 @@ class WildberriesAnalyticsClient:
         date_from: str,
     ) -> list[Any]:
         async with self._http() as client:
-            response = await client.get(
-                f"{self._base_url}{path}",
-                headers=_wb_headers(token),
-                params={"dateFrom": date_from, "flag": 0},
-            )
+            try:
+                response = await client.get(
+                    f"{self._base_url}{path}",
+                    headers=_wb_headers(token),
+                    params={"dateFrom": date_from, "flag": 0},
+                )
+            except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as exc:
+                raise MarketplaceSellerError(
+                    f"Wildberries analytics timed out or is unreachable ({path}): {exc}"
+                ) from exc
+            except httpx.HTTPError as exc:
+                raise MarketplaceSellerError(
+                    f"Wildberries analytics transport error ({path}): {exc}"
+                ) from exc
             if response.status_code >= 400:
                 raise MarketplaceSellerError(
                     f"Wildberries {path} failed ({response.status_code}): "
                     f"{response.text[:300]}"
                 )
-            body: Any = response.json()
+            try:
+                body: Any = response.json()
+            except ValueError as exc:
+                raise MarketplaceSellerError(
+                    f"Wildberries {path} returned non-JSON body."
+                ) from exc
         if body is None:
             return []
         if isinstance(body, list):
