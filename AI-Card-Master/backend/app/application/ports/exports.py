@@ -31,7 +31,7 @@ class ExportPersistencePort(Protocol):
     async def get_credentials_ciphertext(
         self, *, user_id: UUID, platform: MarketplacePlatform
     ) -> str | None:
-        """Return Fernet ciphertext or None when not configured."""
+        """Return AES-256 ciphertext or None when not configured."""
 
     async def list_credentials(self, user_id: UUID) -> tuple[MarketplaceCredentialView, ...]:
         """List configured platforms without decrypting secrets."""

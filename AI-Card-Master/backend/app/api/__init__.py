@@ -6,6 +6,7 @@ from app.api.bulk_generations import router as bulk_generations_router
 from app.api.exports import router as exports_router
 from app.api.generations import router as generations_router
 from app.api.images import router as images_router
+from app.api.marketplace_bridge import router as marketplace_bridge_router
 from app.api.payments import router as payments_router
 from app.api.referrals import router as referrals_router
 from app.api.smart_variants import router as smart_variants_router
@@ -21,6 +22,7 @@ __all__ = [
     "exports_router",
     "generations_router",
     "images_router",
+    "marketplace_bridge_router",
     "midjourney_webhook_router",
     "payments_router",
     "referrals_router",

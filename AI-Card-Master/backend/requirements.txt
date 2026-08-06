@@ -8,6 +8,7 @@ sqlalchemy[asyncio]>=2.0.36
 asyncpg>=0.30.0
 alembic>=1.14.0
 python-jose[cryptography]>=3.3.0
+cryptography>=43.0.0
 passlib[argon2]>=1.7.4
 httpx[http2]>=0.28.0
 Pillow>=11.0.0

@@ -83,7 +83,7 @@ class ExportService:
         credentials: dict[str, str],
         label: str | None = None,
     ) -> MarketplaceCredentialView:
-        """Encrypt and store per-user seller API credentials (AES-256 via Fernet)."""
+        """Encrypt and store per-user seller API credentials (AES-256-GCM)."""
 
         normalized = _normalize_credentials(platform, credentials)
         try:

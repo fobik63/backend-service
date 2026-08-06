@@ -83,6 +83,10 @@ def test_generation_and_webhook_contracts_are_exposed() -> None:
     assert "202" in paths["/api/v1/smart-variants"]["post"]["responses"]
     assert "/api/v1/smart-variants/{sync_id}" in paths
     assert "get" in paths["/api/v1/smart-variants/{sync_id}"]
+    assert "/api/v1/marketplace-bridge/dashboard" in paths
+    assert "get" in paths["/api/v1/marketplace-bridge/dashboard"]
+    assert "/api/v1/marketplace-bridge/platforms/{platform}" in paths
+    assert "get" in paths["/api/v1/marketplace-bridge/platforms/{platform}"]
     style_schema = paths["/api/v1/analytics/style-presets"]["get"]["responses"]["200"][
         "content"
     ]["application/json"]["schema"]

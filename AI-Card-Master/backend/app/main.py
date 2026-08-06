@@ -30,6 +30,7 @@ from app.api import (
     exports_router,
     generations_router,
     images_router,
+    marketplace_bridge_router,
     midjourney_webhook_router,
     payments_router,
     referrals_router,
@@ -148,6 +149,7 @@ app.include_router(referrals_router)
 app.include_router(winback_router)
 app.include_router(workspaces_router)
 app.include_router(exports_router)
+app.include_router(marketplace_bridge_router)
 app.include_router(bulk_generations_router)
 app.include_router(smart_variants_router)
 app.include_router(generations_router)

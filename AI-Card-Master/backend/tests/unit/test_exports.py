@@ -115,6 +115,7 @@ def test_credential_roundtrip_encryption() -> None:
     secret = "unit-test-marketplace-secret"
     payload = {"api_token": "wb-token-123"}
     token = encrypt_credentials(payload, secret=secret)
+    assert token.startswith("aes256gcm.v1.")
     assert decrypt_credentials(token, secret=secret) == payload
 
 

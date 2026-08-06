@@ -310,6 +310,10 @@ class Settings(BaseSettings):
         default="https://content-api.wildberries.ru",
         alias="WILDBERRIES_CONTENT_API_BASE_URL",
     )
+    wildberries_statistics_api_base_url: str = Field(
+        default="https://statistics-api.wildberries.ru",
+        alias="WILDBERRIES_STATISTICS_API_BASE_URL",
+    )
     ozon_seller_api_base_url: str = Field(
         default="https://api-seller.ozon.ru",
         alias="OZON_SELLER_API_BASE_URL",
@@ -317,6 +321,10 @@ class Settings(BaseSettings):
     amazon_sp_api_base_url: str = Field(
         default="https://sellingpartnerapi-eu.amazon.com",
         alias="AMAZON_SP_API_BASE_URL",
+    )
+    marketplace_bridge_timeout_seconds: float = Field(
+        default=45.0,
+        alias="MARKETPLACE_BRIDGE_TIMEOUT_SECONDS",
     )
     smart_inpainting_edge_pass_enabled: bool = Field(
         default=False,
@@ -501,6 +509,7 @@ class Settings(BaseSettings):
         "telegram_error_timeout_seconds",
         "telegram_user_timeout_seconds",
         "marketplace_export_timeout_seconds",
+        "marketplace_bridge_timeout_seconds",
         "winback_inactivity_scan_seconds",
         "winback_style_update_scan_seconds",
         "bulk_generation_poll_seconds",
