@@ -8,6 +8,7 @@ from fastapi import HTTPException
 import pytest
 
 import app.api.generations as generations_api
+from app.domain.generation import GenerationEngineMode
 from app.main import app
 from app.models.enums import SubscriptionStatus
 from app.models.user import User
@@ -72,6 +73,36 @@ def test_model_mode_rejects_source_key_from_another_user() -> None:
         )
 
     assert exc_info.value.status_code == 403
+
+
+def test_premium_engine_mode_requires_paid_subscription() -> None:
+    user = User(
+        id=uuid4(),
+        email="free@example.com",
+        hashed_password="hash",
+        subscription_status=SubscriptionStatus.FREE,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        generations_api._ensure_engine_mode_allowed(GenerationEngineMode.PREMIUM, user)
+
+    assert exc_info.value.status_code == 403
+
+
+def test_engine_mode_accepts_client_string_values() -> None:
+    form = generations_api.GenerationForm.model_validate({"engine_mode": "premium"})
+    payload = generations_api.ModelModeRequest.model_validate(
+        {
+            "source_image_object_key": f"user-uploads/{uuid4()}/source.png",
+            "height_cm": 180,
+            "body_type": "athletic",
+            "ethnicity": "mixed",
+            "engine_mode": "standard",
+        }
+    )
+
+    assert form.engine_mode == GenerationEngineMode.PREMIUM
+    assert payload.engine_mode == GenerationEngineMode.STANDARD
 
 
 @pytest.mark.asyncio

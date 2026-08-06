@@ -32,6 +32,7 @@ from app.api import (
     text_generation_router,
 )
 from app.api.images import ensure_uploads_dir
+from app.core.admin_middleware import AdminOnlyMiddleware
 from app.core.config import get_settings
 from app.infrastructure.redis import close_redis_client, redis_healthcheck
 from app.models.database import SessionLocal, engine
@@ -128,6 +129,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(AdminOnlyMiddleware)
 
 
 # Register API routers.

@@ -39,6 +39,13 @@ class GenerationProvider(StrEnum):
     STABLE_DIFFUSION = "stable_diffusion"
 
 
+class GenerationEngineMode(StrEnum):
+    """Client-selected image engine profile."""
+
+    STANDARD = "standard"
+    PREMIUM = "premium"
+
+
 class GenerationErrorCode(StrEnum):
     """Sanitised error categories safe to return to API clients."""
 
@@ -195,6 +202,7 @@ class GenerationWorkItem(DomainModel):
     input_object_key: str = Field(min_length=1, max_length=1024)
     product_category: str | None = Field(default=None, max_length=128)
     subscription_status: str = Field(min_length=1, max_length=32)
+    engine_mode: GenerationEngineMode = GenerationEngineMode.STANDARD
     apply_text_overlays: bool = False
     overlay_texts: dict[str, str] = Field(default_factory=dict)
     marketplace_text: MarketplaceTextContent | None = None

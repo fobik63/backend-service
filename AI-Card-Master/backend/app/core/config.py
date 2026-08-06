@@ -6,6 +6,7 @@ must be validated at startup rather than failing later at runtime.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -97,6 +98,9 @@ class Settings(BaseSettings):
         alias="CORS_ORIGINS",
     )
     cors_allow_credentials: bool = Field(default=True, alias="CORS_ALLOW_CREDENTIALS")
+
+    # Hidden admin API gate. Empty value disables /api/v1/admin for everyone.
+    admin_allowed_user_id: str = Field(default="", alias="ADMIN_ALLOWED_USER_ID")
 
     # Stable Diffusion immediate/fallback provider.
     stable_diffusion_api_key: SecretStr | None = Field(
@@ -194,6 +198,10 @@ class Settings(BaseSettings):
         default=120,
         alias="MIDJOURNEY_CIRCUIT_BREAKER_TTL_SECONDS",
     )
+    midjourney_generation_cost_usd: Decimal = Field(
+        default=Decimal("0"),
+        alias="MIDJOURNEY_GENERATION_COST_USD",
+    )
 
     # Redis, Celery, and durable generation workflow.
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
@@ -276,6 +284,15 @@ class Settings(BaseSettings):
     telegram_error_timeout_seconds: float = Field(
         default=5.0,
         alias="TELEGRAM_ERROR_TIMEOUT_SECONDS",
+    )
+
+    claude_47_input_1k_tokens_cost_usd: Decimal = Field(
+        default=Decimal("0"),
+        alias="CLAUDE_47_INPUT_1K_TOKENS_COST_USD",
+    )
+    claude_47_output_1k_tokens_cost_usd: Decimal = Field(
+        default=Decimal("0"),
+        alias="CLAUDE_47_OUTPUT_1K_TOKENS_COST_USD",
     )
 
     @field_validator("database_url")
@@ -381,6 +398,17 @@ class Settings(BaseSettings):
     def validate_non_negative_retries(cls, value: int) -> int:
         if value < 0:
             raise ValueError("STABLE_DIFFUSION_MAX_RETRIES cannot be negative.")
+        return value
+
+    @field_validator(
+        "midjourney_generation_cost_usd",
+        "claude_47_input_1k_tokens_cost_usd",
+        "claude_47_output_1k_tokens_cost_usd",
+    )
+    @classmethod
+    def validate_non_negative_costs(cls, value: Decimal) -> Decimal:
+        if value < 0:
+            raise ValueError("Provider cost settings cannot be negative.")
         return value
 
     @field_validator("redis_url")

@@ -40,7 +40,11 @@ import httpx
 from pydantic import HttpUrl, TypeAdapter
 
 from app.core.config import get_settings
-from app.domain.generation import ProviderSubmission, ProviderWebhookEvent
+from app.domain.generation import (
+    GenerationEngineMode,
+    ProviderSubmission,
+    ProviderWebhookEvent,
+)
 from app.infrastructure.redis import (
     is_provider_circuit_open,
     record_provider_failure,
@@ -584,6 +588,46 @@ class MidjourneyTariffProfile:
     stylize: int
     mode: Literal["fast", "relax"]
     provider: AIEngineProvider
+    upscale: bool = False
+    photorealism_prompt: str | None = None
+
+
+def resolve_midjourney_profile(
+    engine_mode: GenerationEngineMode | str,
+) -> MidjourneyTariffProfile:
+    """Map explicit API engine mode to Midjourney generation parameters."""
+
+    normalized = (
+        engine_mode.value
+        if isinstance(engine_mode, GenerationEngineMode)
+        else str(engine_mode).strip().lower()
+    )
+    try:
+        mode = GenerationEngineMode(normalized)
+    except ValueError as exc:
+        raise AIEngineValidationError("Unknown generation engine mode.") from exc
+
+    if mode == GenerationEngineMode.PREMIUM:
+        return MidjourneyTariffProfile(
+            version="6",
+            quality="2",
+            stylize=100,
+            mode="fast",
+            provider=AIEngineProvider.MIDJOURNEY,
+            upscale=True,
+            photorealism_prompt=(
+                "maximum photorealism, raw commercial product photography, "
+                "natural materials, realistic lens rendering"
+            ),
+        )
+
+    return MidjourneyTariffProfile(
+        version="5.2",
+        quality="1",
+        stylize=100,
+        mode="fast",
+        provider=AIEngineProvider.MIDJOURNEY,
+    )
 
 
 def resolve_engine_for_tariff(
@@ -602,13 +646,7 @@ def resolve_engine_for_tariff(
     )
 
     if normalized in SubscriptionStatus.paid_values():
-        return MidjourneyTariffProfile(
-            version="6",
-            quality="2",
-            stylize=250,
-            mode="fast",
-            provider=AIEngineProvider.MIDJOURNEY,
-        )
+        return resolve_midjourney_profile(GenerationEngineMode.PREMIUM)
 
     return MidjourneyTariffProfile(
         version="5.2",
@@ -836,6 +874,7 @@ class MidjourneyService:
         reply_url: str,
         reply_ref: str,
         render_mode: Literal["background_plate", "direct_vto"] = "background_plate",
+        engine_mode: GenerationEngineMode = GenerationEngineMode.STANDARD,
     ) -> ProviderSubmission:
         """Submit one provider job and return without polling for its image."""
 
@@ -849,7 +888,7 @@ class MidjourneyService:
         if not reply_ref.strip():
             raise AIEngineValidationError("reply_ref cannot be empty.")
 
-        profile = resolve_engine_for_tariff(SubscriptionStatus.PRO)
+        profile = resolve_midjourney_profile(engine_mode)
         if render_mode == "direct_vto":
             provider_prompt = prompt.strip()
         else:
@@ -1047,6 +1086,8 @@ class MidjourneyService:
             f"--q {profile.quality}",
             f"--stylize {profile.stylize}",
         ]
+        if profile.photorealism_prompt:
+            prompt_chunks.insert(2, profile.photorealism_prompt)
         if profile.mode == "relax":
             prompt_chunks.append("--relax")
         return " ".join(prompt_chunks)
@@ -1067,6 +1108,8 @@ class MidjourneyService:
             "image": f"data:{mime_type};base64,{image_base64}",
             "mode": profile.mode,
         }
+        if profile.upscale:
+            payload["upscale"] = True
         if reply_url is not None and reply_ref is not None:
             payload.update(
                 {

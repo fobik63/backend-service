@@ -21,7 +21,12 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.domain.generation import GenerationJobStatus, OutboxEventType, SlideStatus
+from app.domain.generation import (
+    GenerationEngineMode,
+    GenerationJobStatus,
+    OutboxEventType,
+    SlideStatus,
+)
 from app.models.base import Base
 
 
@@ -68,6 +73,12 @@ class GenerationJob(Base):
     )
     product_category: Mapped[str | None] = mapped_column(String(128), nullable=True)
     subscription_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    engine_mode: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default=GenerationEngineMode.STANDARD.value,
+        server_default=text("'standard'"),
+    )
     input_object_key: Mapped[str] = mapped_column(String(1024), nullable=False)
     archive_object_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     thumbnail_object_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)

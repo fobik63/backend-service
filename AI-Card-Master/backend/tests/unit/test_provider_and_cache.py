@@ -14,6 +14,7 @@ from PIL import Image
 import app.infrastructure.redis as redis_module
 import app.infrastructure.style_cache as style_cache_module
 from app.config.style_presets import get_niche_preset_cached
+from app.domain.generation import GenerationEngineMode
 from app.infrastructure.redis import (
     is_provider_circuit_open,
     record_provider_failure,
@@ -64,6 +65,41 @@ async def test_midjourney_submit_returns_without_polling() -> None:
     assert request_json["replyUrl"] == "https://api.test/webhook?token=secret"
     assert request_json["replyRef"] == "signed.reply.reference"
     assert request_json["stream"] is False
+    assert "upscale" not in request_json
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_midjourney_premium_submit_uses_v6_upscale_profile() -> None:
+    route = respx.post("https://provider.test/jobs/imagine").mock(
+        return_value=Response(201, json={"jobid": "job-premium", "status": "created"})
+    )
+    service = MidjourneyService(
+        MidjourneyConfig(
+            api_key="provider-key",
+            base_url="https://provider.test",
+            name="primary",
+            webhook_token="webhook-secret",
+            max_retries=0,
+        )
+    )
+    try:
+        await service.submit(
+            product_image=_product_png(),
+            selected_style="studio",
+            prompt="clean premium background",
+            reply_url="https://api.test/webhook?token=secret",
+            reply_ref="signed.reply.reference",
+            engine_mode=GenerationEngineMode.PREMIUM,
+        )
+    finally:
+        await service.aclose()
+
+    assert route.call_count == 1
+    request_json = json.loads(route.calls[0].request.content)
+    assert "--v 6" in request_json["prompt"]
+    assert "maximum photorealism" in request_json["prompt"]
+    assert request_json["upscale"] is True
 
 
 @pytest.mark.asyncio

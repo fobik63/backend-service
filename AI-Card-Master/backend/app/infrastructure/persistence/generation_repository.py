@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -15,6 +16,7 @@ from sqlalchemy.orm import selectinload
 from app.core.config import get_settings
 from app.domain.generation import (
     AttemptWorkItem,
+    GenerationEngineMode,
     GenerationErrorInfo,
     GenerationJobStatus,
     GenerationWorkItem,
@@ -34,6 +36,7 @@ from app.models.generation_job import (
     GenerationSlide,
     GenerationWebhookEvent,
 )
+from app.models.api_usage_cost import ApiUsageCost
 from app.models.user import User
 from app.services.billing_service import BillingValidationError
 from app.services.series_generator import SeriesTask
@@ -68,6 +71,7 @@ class GenerationRepository:
         user_id: UUID,
         idempotency_key: str | None,
         subscription_status: str,
+        engine_mode: GenerationEngineMode,
         input_object_key: str,
         product_category: str | None,
         apply_text_overlays: bool,
@@ -104,6 +108,7 @@ class GenerationRepository:
                 progress=0,
                 product_category=product_category,
                 subscription_status=subscription_status,
+                engine_mode=engine_mode.value,
                 input_object_key=input_object_key,
                 apply_text_overlays=apply_text_overlays,
                 overlay_texts=dict(overlay_texts) or None,
@@ -202,6 +207,7 @@ class GenerationRepository:
             input_object_key=job.input_object_key,
             product_category=job.product_category,
             subscription_status=job.subscription_status,
+            engine_mode=GenerationEngineMode(job.engine_mode),
             apply_text_overlays=job.apply_text_overlays,
             overlay_texts=dict(job.overlay_texts or {}),
             marketplace_text=(
@@ -295,6 +301,11 @@ class GenerationRepository:
         if slide is not None:
             slide.status = SlideStatus.WAITING_WEBHOOK.value
             slide.progress = max(slide.progress, 5)
+            await self._record_midjourney_cost(
+                slide=slide,
+                provider_name=submission.provider,
+                external_job_id=submission.external_job_id,
+            )
         await self._session.commit()
 
     async def mark_attempt_failed(
@@ -740,6 +751,40 @@ class GenerationRepository:
             return
         user.ai_coins += 1
         job.coin_refunded = True
+
+    async def _record_midjourney_cost(
+        self,
+        *,
+        slide: GenerationSlide,
+        provider_name: str,
+        external_job_id: str,
+    ) -> None:
+        normalized_provider = provider_name.strip().lower()
+        if normalized_provider == "stable_diffusion":
+            return
+
+        job = await self._session.get(GenerationJob, slide.job_id)
+        if job is None:
+            return
+
+        unit_cost = Decimal(str(get_settings().midjourney_generation_cost_usd))
+        self._session.add(
+            ApiUsageCost(
+                user_id=job.user_id,
+                generation_job_id=job.id,
+                provider="midjourney",
+                model_name=provider_name[:128],
+                operation="image_generation_submit",
+                units=1,
+                unit_cost_usd=unit_cost,
+                total_cost_usd=unit_cost,
+                usage_metadata={
+                    "slide_id": str(slide.id),
+                    "external_job_id": external_job_id,
+                    "provider_name": provider_name,
+                },
+            )
+        )
 
     @staticmethod
     def _attempt_to_work_item(

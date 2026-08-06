@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.payments import get_current_user
 from app.core.config import get_settings
 from app.domain.generation import GenerationJobStatus, MarketplaceTextContent, SlideStatus
+from app.domain.generation import GenerationEngineMode
 from app.infrastructure.persistence.generation_repository import GenerationRepository
 from app.infrastructure.redis import (
     RedisUnavailableError,
@@ -140,8 +141,14 @@ class GenerationForm(StrictAPIModel):
     """Strictly validated non-file fields from multipart input."""
 
     product_category: str | None = Field(default=None, max_length=128)
+    engine_mode: GenerationEngineMode = GenerationEngineMode.STANDARD
     apply_text_overlays: bool = False
     overlay_texts: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("engine_mode", mode="before")
+    @classmethod
+    def parse_engine_mode(cls, value: object) -> GenerationEngineMode:
+        return _parse_engine_mode(value)
 
     @field_validator("product_category")
     @classmethod
@@ -178,8 +185,14 @@ class ModelModeRequest(StrictAPIModel):
     height_cm: int = Field(ge=140, le=220, description="AI model height in centimeters.")
     body_type: BodyType
     ethnicity: Ethnicity
+    engine_mode: GenerationEngineMode = GenerationEngineMode.STANDARD
     background: str | None = Field(default=None, min_length=3, max_length=160)
     pose: str | None = Field(default=None, min_length=3, max_length=160)
+
+    @field_validator("engine_mode", mode="before")
+    @classmethod
+    def parse_engine_mode(cls, value: object) -> GenerationEngineMode:
+        return _parse_engine_mode(value)
 
     @field_validator("source_image_object_key")
     @classmethod
@@ -203,6 +216,7 @@ class ModelModeRequest(StrictAPIModel):
 
 async def parse_generation_form(
     product_category: Annotated[str | None, Form(max_length=128)] = None,
+    engine_mode: Annotated[GenerationEngineMode, Form()] = GenerationEngineMode.STANDARD,
     apply_text_overlays: Annotated[bool, Form()] = False,
     overlay_texts: Annotated[str | None, Form(max_length=3000)] = None,
 ) -> GenerationForm:
@@ -227,6 +241,7 @@ async def parse_generation_form(
     try:
         return GenerationForm(
             product_category=product_category,
+            engine_mode=engine_mode,
             apply_text_overlays=apply_text_overlays,
             overlay_texts=parsed_overlays,
         )
@@ -264,6 +279,7 @@ async def create_model_generation(
     """Queue the JSON-only Model mode without blocking on external VTO APIs."""
 
     _validate_owned_source_object_key(payload.source_image_object_key, current_user.id)
+    _ensure_engine_mode_allowed(payload.engine_mode, current_user)
     repository = GenerationRepository(db_session)
     if idempotency_key:
         idempotency_key = idempotency_key.strip()
@@ -300,6 +316,7 @@ async def create_model_generation(
             user_id=current_user.id,
             idempotency_key=idempotency_key,
             subscription_status=current_user.subscription_status.value,
+            engine_mode=payload.engine_mode,
             input_object_key=payload.source_image_object_key,
             product_category=MODEL_VTO_PRODUCT_CATEGORY,
             apply_text_overlays=False,
@@ -347,6 +364,7 @@ async def create_generation(
 ) -> GenerationCreateResponse:
     """Persist a durable generation command and return before AI work begins."""
 
+    _ensure_engine_mode_allowed(form.engine_mode, current_user)
     repository = GenerationRepository(db_session)
     if idempotency_key:
         idempotency_key = idempotency_key.strip()
@@ -392,6 +410,7 @@ async def create_generation(
             user_id=current_user.id,
             idempotency_key=idempotency_key,
             subscription_status=current_user.subscription_status.value,
+            engine_mode=form.engine_mode,
             input_object_key=input_key,
             product_category=form.product_category,
             apply_text_overlays=form.apply_text_overlays,
@@ -638,6 +657,26 @@ def _validate_owned_source_object_key(object_key: str, user_id: UUID) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Source image object key does not belong to the current user.",
         )
+
+
+def _ensure_engine_mode_allowed(engine_mode: GenerationEngineMode, user: User) -> None:
+    if engine_mode == GenerationEngineMode.PREMIUM and not user.subscription_status.is_paid():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Premium generation mode requires an active paid subscription.",
+        )
+
+
+def _parse_engine_mode(value: object) -> GenerationEngineMode:
+    if isinstance(value, GenerationEngineMode):
+        return value
+    if isinstance(value, str):
+        cleaned = value.strip().lower()
+        try:
+            return GenerationEngineMode(cleaned)
+        except ValueError as exc:
+            raise ValueError("engine_mode must be 'standard' or 'premium'.") from exc
+    raise ValueError("engine_mode must be 'standard' or 'premium'.")
 
 
 def _marketplace_text_response(value: object) -> MarketplaceTextResponse | None:

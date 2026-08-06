@@ -23,6 +23,7 @@ from app.application.ports.text_generation import MarketplaceTextProviderPort
 from app.core.config import get_settings
 from app.core.webhook_security import create_reply_ref, verify_reply_ref
 from app.domain.generation import (
+    GenerationEngineMode,
     GenerationErrorCode,
     GenerationErrorInfo,
     GenerationJobStatus,
@@ -113,6 +114,7 @@ class GenerationApplicationService:
                     slide=slide,
                     product_image=product_image,
                     subscription_status=work.subscription_status,
+                    engine_mode=work.engine_mode,
                     excluded_providers=await self._repository.get_attempted_providers(
                         slide.id
                     ),
@@ -323,6 +325,7 @@ class GenerationApplicationService:
                 slide=slide,
                 product_image=product_image,
                 subscription_status=work.subscription_status,
+                engine_mode=work.engine_mode,
                 excluded_providers=await self._repository.get_attempted_providers(
                     slide.id
                 ),
@@ -374,6 +377,7 @@ class GenerationApplicationService:
                     max_bytes=self._settings.generation_max_upload_bytes,
                 ),
                 subscription_status=work.subscription_status,
+                engine_mode=work.engine_mode,
                 excluded_providers=await self._repository.get_attempted_providers(
                     attempt.slide_id
                 ),
@@ -388,13 +392,17 @@ class GenerationApplicationService:
         slide: SlideWorkItem,
         product_image: bytes,
         subscription_status: str,
+        engine_mode: GenerationEngineMode,
         excluded_providers: frozenset[str],
         apply_text_overlays: bool,
         overlay_texts: dict[str, str],
     ) -> None:
-        paid = subscription_status in SubscriptionStatus.paid_values()
+        requested_midjourney = engine_mode in {
+            GenerationEngineMode.STANDARD,
+            GenerationEngineMode.PREMIUM,
+        }
         callback_base = self._settings.midjourney_callback_base_url.rstrip("/")
-        if paid and callback_base:
+        if requested_midjourney and callback_base:
             for provider in self._async_providers:
                 if provider.name in excluded_providers:
                     continue
@@ -423,6 +431,7 @@ class GenerationApplicationService:
                         reply_url=callback_url,
                         reply_ref=reply_ref,
                         render_mode=_render_mode_for_slide(slide),
+                        engine_mode=engine_mode,
                     )
                     await self._repository.mark_attempt_submitted(
                         attempt.id, submission
@@ -446,7 +455,7 @@ class GenerationApplicationService:
 
         warning = (
             "Midjourney pool unavailable; generated with Stable Diffusion."
-            if paid
+            if requested_midjourney
             else None
         )
         try:

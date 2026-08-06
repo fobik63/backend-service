@@ -7,12 +7,15 @@ import base64
 import json
 import logging
 import random
+from decimal import Decimal
 from typing import Any
 
 import httpx
 from pydantic import ValidationError
 
 from app.domain.generation import MarketplaceTextContent, SlideWorkItem
+from app.core.config import get_settings
+from app.services.api_usage_costs import record_api_usage_cost
 from app.services.ai_engine import _detect_image_mime_type
 from app.services.infographic_service import (
     LLMConfig,
@@ -175,6 +178,10 @@ class MarketplaceTextService:
             raise MarketplaceTextUpstreamError("Unexpected Anthropic response shape.") from exc
         if not isinstance(text, str) or not text.strip():
             raise MarketplaceTextUpstreamError("Anthropic returned empty text.")
+        await _record_anthropic_usage_cost(
+            model_name=self._llm_config.model,
+            response_payload=payload_json,
+        )
         return text
 
     async def _post_with_retry(
@@ -253,6 +260,49 @@ def _image_data_uri(image: bytes) -> str:
     mime_type, _extension = _detect_image_mime_type(image)
     encoded = base64.b64encode(image).decode("ascii")
     return f"data:{mime_type};base64,{encoded}"
+
+
+async def _record_anthropic_usage_cost(
+    *,
+    model_name: str,
+    response_payload: dict[str, Any],
+) -> None:
+    usage = response_payload.get("usage")
+    if not isinstance(usage, dict):
+        return
+
+    input_tokens = _safe_token_count(usage.get("input_tokens"))
+    output_tokens = _safe_token_count(usage.get("output_tokens"))
+    total_tokens = input_tokens + output_tokens
+    settings = get_settings()
+    total_cost = (
+        Decimal(input_tokens)
+        / Decimal(1000)
+        * settings.claude_47_input_1k_tokens_cost_usd
+        + Decimal(output_tokens)
+        / Decimal(1000)
+        * settings.claude_47_output_1k_tokens_cost_usd
+    )
+    units = max(total_tokens, 1)
+    await record_api_usage_cost(
+        provider="anthropic",
+        model_name=model_name,
+        operation="marketplace_text_generation",
+        units=units,
+        unit_cost_usd=total_cost / Decimal(units),
+        total_cost_usd=total_cost,
+        metadata={
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "anthropic_usage": usage,
+        },
+    )
+
+
+def _safe_token_count(value: object) -> int:
+    if isinstance(value, int) and value > 0:
+        return value
+    return 0
 
 
 def _parse_marketplace_text(raw_text: str) -> MarketplaceTextContent:

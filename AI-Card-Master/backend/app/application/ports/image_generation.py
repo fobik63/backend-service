@@ -5,7 +5,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Literal, Protocol, runtime_checkable
 
-from app.domain.generation import ProviderSubmission, ProviderWebhookEvent
+from app.domain.generation import (
+    GenerationEngineMode,
+    ProviderSubmission,
+    ProviderWebhookEvent,
+)
 
 
 @runtime_checkable
@@ -25,6 +29,7 @@ class AsyncImageProviderPort(Protocol):
         reply_url: str,
         reply_ref: str,
         render_mode: Literal["background_plate", "direct_vto"] = "background_plate",
+        engine_mode: GenerationEngineMode = GenerationEngineMode.STANDARD,
     ) -> ProviderSubmission:
         """Submit work and return immediately after receiving an upstream id."""
 
