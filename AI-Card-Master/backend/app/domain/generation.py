@@ -81,6 +81,30 @@ class GenerationErrorInfo(DomainModel):
     attempts: int = Field(default=0, ge=0, le=100)
 
 
+class MarketplaceTextContent(DomainModel):
+    """AI-generated marketplace copy derived from completed generation images."""
+
+    title: str = Field(min_length=10, max_length=180)
+    description: str = Field(min_length=1000, max_length=5000)
+    characteristics: tuple[str, ...] = Field(min_length=3, max_length=12)
+
+    @field_validator("title", "description")
+    @classmethod
+    def clean_text(cls, value: str) -> str:
+        cleaned = " ".join(value.strip().split())
+        if not cleaned:
+            raise ValueError("Text value cannot be empty.")
+        return cleaned
+
+    @field_validator("characteristics")
+    @classmethod
+    def clean_characteristics(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        cleaned = tuple(" ".join(item.strip().split()) for item in value if item.strip())
+        if len(cleaned) < 3:
+            raise ValueError("At least three characteristics are required.")
+        return cleaned
+
+
 class ProviderSubmission(DomainModel):
     """Result returned by a submit-only asynchronous provider call."""
 
@@ -139,6 +163,7 @@ class GenerationStatus(DomainModel):
     provider_used: str | None = Field(default=None, max_length=64)
     warning: str | None = Field(default=None, max_length=500)
     archive_url: HttpUrl | None = None
+    marketplace_text: MarketplaceTextContent | None = None
     slides: tuple[SlideStatusResult, ...] = ()
     error: GenerationErrorInfo | None = None
     created_at: datetime
@@ -172,6 +197,7 @@ class GenerationWorkItem(DomainModel):
     subscription_status: str = Field(min_length=1, max_length=32)
     apply_text_overlays: bool = False
     overlay_texts: dict[str, str] = Field(default_factory=dict)
+    marketplace_text: MarketplaceTextContent | None = None
     slides: tuple[SlideWorkItem, ...]
 
 

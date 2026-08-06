@@ -13,6 +13,7 @@ from app.domain.generation import (
     AttemptWorkItem,
     GenerationJobStatus,
     GenerationWorkItem,
+    MarketplaceTextContent,
     OutboxEventType,
     ProviderSubmission,
     ProviderWebhookEvent,
@@ -55,6 +56,7 @@ class FakeRepository:
         self.outbox: dict[str, tuple[OutboxEventType, UUID, dict[str, object]]] = {}
         self.webhooks: dict[UUID, dict[str, object]] = {}
         self.processed_webhooks: set[UUID] = set()
+        self.completed_marketplace_text: MarketplaceTextContent | None = None
         self.failed = 0
 
     async def get_work_item(self, job_id: UUID) -> GenerationWorkItem | None:
@@ -191,8 +193,12 @@ class FakeRepository:
         self.work = self.work.model_copy(update={"status": GenerationJobStatus.FAILED})
 
     async def complete_job(self, *args: Any, **kwargs: Any) -> None:
+        self.completed_marketplace_text = kwargs.get("marketplace_text")
         self.work = self.work.model_copy(
-            update={"status": GenerationJobStatus.COMPLETED}
+            update={
+                "status": GenerationJobStatus.COMPLETED,
+                "marketplace_text": self.completed_marketplace_text,
+            }
         )
 
     async def add_outbox(
@@ -268,6 +274,24 @@ class ImmediateProvider:
     async def generate(self, **kwargs: Any) -> bytes:
         self.calls += 1
         return _png((100, 170, 230))
+
+
+class TextProvider:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def generate_marketplace_text(self, **kwargs: Any) -> MarketplaceTextContent:
+        self.calls += 1
+        assert kwargs["images"]
+        return MarketplaceTextContent(
+            title="SEO заголовок для WB и Ozon с ключевыми словами",
+            description=" ".join(["Продающее описание товара с LSI ключами"] * 40),
+            characteristics=(
+                "Показывает товар в выгодном ракурсе",
+                "Подчеркивает преимущества для покупателя",
+                "Подходит для карточки маркетплейса",
+            ),
+        )
 
 
 def _work() -> GenerationWorkItem:
@@ -387,3 +411,38 @@ async def test_duplicate_webhook_does_not_download_or_store_twice() -> None:
     assert any(key.endswith("card_series.zip") for key in storage.objects)
     assert any(key.endswith("thumbnail.jpg") for key in storage.objects)
     assert webhook_id in repository.processed_webhooks
+
+
+@pytest.mark.asyncio
+async def test_finalize_generates_marketplace_text_from_completed_images() -> None:
+    base_work = _work()
+    work = base_work.model_copy(
+        update={
+            "slides": (
+                base_work.slides[0].model_copy(
+                    update={
+                        "status": SlideStatus.COMPLETED,
+                        "result_object_key": "slides/cover.png",
+                        "result_mime_type": "image/png",
+                    }
+                ),
+            )
+        }
+    )
+    repository = FakeRepository(work)
+    storage = FakeStorage()
+    storage.objects["slides/cover.png"] = _png((100, 170, 230), product=True)
+    text_provider = TextProvider()
+    service = GenerationApplicationService(
+        repository=repository,
+        storage=storage,
+        async_providers=(),
+        immediate_provider=ImmediateProvider(),
+        text_provider=text_provider,
+    )
+
+    await service.finalize_job(work.id)
+
+    assert text_provider.calls == 1
+    assert repository.work.marketplace_text is not None
+    assert repository.work.marketplace_text.description

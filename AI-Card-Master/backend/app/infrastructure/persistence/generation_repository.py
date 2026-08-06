@@ -18,6 +18,7 @@ from app.domain.generation import (
     GenerationErrorInfo,
     GenerationJobStatus,
     GenerationWorkItem,
+    MarketplaceTextContent,
     OutboxEventType,
     OutboxMessage,
     ProviderSubmission,
@@ -203,6 +204,11 @@ class GenerationRepository:
             subscription_status=job.subscription_status,
             apply_text_overlays=job.apply_text_overlays,
             overlay_texts=dict(job.overlay_texts or {}),
+            marketplace_text=(
+                MarketplaceTextContent.model_validate(job.marketplace_text)
+                if job.marketplace_text
+                else None
+            ),
             slides=tuple(
                 SlideWorkItem(
                     id=slide.id,
@@ -545,6 +551,7 @@ class GenerationRepository:
         thumbnail_object_key: str,
         thumbnail_mime_type: str,
         thumbnail_size_bytes: int,
+        marketplace_text: MarketplaceTextContent | None,
         provider_used: str,
         warning: str | None,
     ) -> None:
@@ -557,6 +564,9 @@ class GenerationRepository:
         job.thumbnail_object_key = thumbnail_object_key
         job.thumbnail_mime_type = thumbnail_mime_type
         job.thumbnail_size_bytes = thumbnail_size_bytes
+        job.marketplace_text = (
+            marketplace_text.model_dump(mode="json") if marketplace_text else None
+        )
         job.provider_used = provider_used
         job.warning = warning[:500] if warning else None
         job.error_code = None

@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.payments import get_current_user
 from app.core.config import get_settings
-from app.domain.generation import GenerationJobStatus, SlideStatus
+from app.domain.generation import GenerationJobStatus, MarketplaceTextContent, SlideStatus
 from app.infrastructure.persistence.generation_repository import GenerationRepository
 from app.infrastructure.redis import (
     RedisUnavailableError,
@@ -38,6 +38,13 @@ from app.infrastructure.redis import (
 from app.models.database import get_db_session
 from app.models.user import User
 from app.services.billing_service import BillingValidationError
+from app.services.model_vto import (
+    MODEL_VTO_PRODUCT_CATEGORY,
+    BodyType,
+    Ethnicity,
+    ModelTypage,
+    build_model_vto_task,
+)
 from app.services.s3_storage import (
     S3StorageConfigurationError,
     S3StorageError,
@@ -83,6 +90,20 @@ class GenerationSlideResponse(StrictAPIModel):
     error: GenerationErrorResponse | None = None
 
 
+class MarketplaceTextResponse(StrictAPIModel):
+    title: str = Field(min_length=10, max_length=180)
+    description: str = Field(min_length=1000, max_length=5000)
+    characteristics: tuple[str, ...] = Field(min_length=3, max_length=12)
+
+    @classmethod
+    def from_domain(cls, content: MarketplaceTextContent) -> "MarketplaceTextResponse":
+        return cls(
+            title=content.title,
+            description=content.description,
+            characteristics=content.characteristics,
+        )
+
+
 class GenerationStatusResponse(StrictAPIModel):
     task_id: UUID
     status: GenerationJobStatus
@@ -90,6 +111,7 @@ class GenerationStatusResponse(StrictAPIModel):
     provider_used: str | None = None
     warning: str | None = None
     archive_url: str | None = None
+    marketplace_text: MarketplaceTextResponse | None = None
     slides: tuple[GenerationSlideResponse, ...]
     error: GenerationErrorResponse | None = None
     created_at: str
@@ -144,6 +166,41 @@ class GenerationForm(StrictAPIModel):
         return cleaned
 
 
+class ModelModeRequest(StrictAPIModel):
+    """JSON contract for clothing virtual try-on on an AI model."""
+
+    source_image_object_key: str = Field(
+        min_length=16,
+        max_length=1024,
+        pattern=r"^[A-Za-z0-9._/\-]+$",
+        description="Private S3 object key of the uploaded clothing source image.",
+    )
+    height_cm: int = Field(ge=140, le=220, description="AI model height in centimeters.")
+    body_type: BodyType
+    ethnicity: Ethnicity
+    background: str | None = Field(default=None, min_length=3, max_length=160)
+    pose: str | None = Field(default=None, min_length=3, max_length=160)
+
+    @field_validator("source_image_object_key")
+    @classmethod
+    def validate_source_key(cls, value: str) -> str:
+        cleaned = value.strip().replace("\\", "/")
+        parts = [part for part in cleaned.split("/") if part]
+        if cleaned.startswith("/") or "//" in cleaned or ".." in parts:
+            raise ValueError("source_image_object_key must be a safe relative S3 key.")
+        if not cleaned.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+            raise ValueError("source_image_object_key must point to JPEG, PNG, or WebP.")
+        return cleaned
+
+    @field_validator("background", "pose")
+    @classmethod
+    def clean_optional_prompt(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = " ".join(value.strip().split())
+        return cleaned or None
+
+
 async def parse_generation_form(
     product_category: Annotated[str | None, Form(max_length=128)] = None,
     apply_text_overlays: Annotated[bool, Form()] = False,
@@ -177,6 +234,94 @@ async def parse_generation_form(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
+        ) from exc
+
+
+@router.post(
+    "/model",
+    response_model=GenerationCreateResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Create AI Model virtual try-on generation",
+    description=(
+        "Accepts JSON typage parameters and queues a realistic virtual try-on task "
+        "that transfers clothing from a private source image onto an AI model."
+    ),
+)
+async def create_model_generation(
+    payload: ModelModeRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db_session: Annotated[AsyncSession, Depends(get_db_session)],
+    idempotency_key: Annotated[
+        str | None,
+        Header(
+            alias="Idempotency-Key",
+            min_length=8,
+            max_length=255,
+            pattern=r"^[A-Za-z0-9._:-]+$",
+        ),
+    ] = None,
+) -> GenerationCreateResponse:
+    """Queue the JSON-only Model mode without blocking on external VTO APIs."""
+
+    _validate_owned_source_object_key(payload.source_image_object_key, current_user.id)
+    repository = GenerationRepository(db_session)
+    if idempotency_key:
+        idempotency_key = idempotency_key.strip()
+        existing = await repository.find_idempotent_job(
+            user_id=current_user.id,
+            idempotency_key=idempotency_key,
+        )
+        if existing is not None:
+            return GenerationCreateResponse(
+                task_id=existing.id,
+                status=GenerationJobStatus(existing.status),
+                status_url=f"/api/v1/generations/{existing.id}",
+                idempotent_replay=True,
+            )
+
+    settings = get_settings()
+    if settings.generation_charge_coins and current_user.ai_coins < 1:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="Insufficient AI-coin balance.",
+        )
+
+    task = build_model_vto_task(
+        typage=ModelTypage(
+            height_cm=payload.height_cm,
+            body_type=payload.body_type,
+            ethnicity=payload.ethnicity,
+        ),
+        background=payload.background,
+        pose=payload.pose,
+    )
+    try:
+        job, created = await repository.create_job(
+            user_id=current_user.id,
+            idempotency_key=idempotency_key,
+            subscription_status=current_user.subscription_status.value,
+            input_object_key=payload.source_image_object_key,
+            product_category=MODEL_VTO_PRODUCT_CATEGORY,
+            apply_text_overlays=False,
+            overlay_texts={},
+            slide_tasks=(task,),
+        )
+        return GenerationCreateResponse(
+            task_id=job.id,
+            status=GenerationJobStatus(job.status),
+            status_url=f"/api/v1/generations/{job.id}",
+            idempotent_replay=not created,
+        )
+    except BillingValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        logger.exception("Could not create durable model generation job")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create model generation task.",
         ) from exc
 
 
@@ -456,6 +601,7 @@ async def get_generation_status(
             message=job.error_message,
             retryable=job.error_retryable,
         )
+    marketplace_text = _marketplace_text_response(getattr(job, "marketplace_text", None))
     response = GenerationStatusResponse(
         task_id=job.id,
         status=GenerationJobStatus(job.status),
@@ -463,6 +609,7 @@ async def get_generation_status(
         provider_used=job.provider_used,
         warning=job.warning,
         archive_url=archive_url,
+        marketplace_text=marketplace_text,
         slides=slides,
         error=job_error,
         created_at=job.created_at.isoformat(),
@@ -478,6 +625,29 @@ async def get_generation_status(
     except RedisUnavailableError:
         pass
     return response
+
+
+def _validate_owned_source_object_key(object_key: str, user_id: UUID) -> None:
+    allowed_prefixes = (
+        f"generation-inputs/{user_id}/",
+        f"model-inputs/{user_id}/",
+        f"user-uploads/{user_id}/",
+    )
+    if not object_key.startswith(allowed_prefixes):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Source image object key does not belong to the current user.",
+        )
+
+
+def _marketplace_text_response(value: object) -> MarketplaceTextResponse | None:
+    if not value:
+        return None
+    if isinstance(value, MarketplaceTextContent):
+        return MarketplaceTextResponse.from_domain(value)
+    if isinstance(value, dict):
+        return MarketplaceTextResponse.from_domain(MarketplaceTextContent.model_validate(value))
+    return None
 
 
 async def _read_bounded_upload(file: UploadFile, *, max_bytes: int) -> bytes:

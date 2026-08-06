@@ -7,6 +7,7 @@ import io
 import logging
 import zipfile
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 from urllib.parse import quote, urlencode
 from uuid import UUID
 
@@ -18,6 +19,7 @@ from app.application.ports.persistence import (
     GenerationRepositoryPort,
     ObjectStoragePort,
 )
+from app.application.ports.text_generation import MarketplaceTextProviderPort
 from app.core.config import get_settings
 from app.core.webhook_security import create_reply_ref, verify_reply_ref
 from app.domain.generation import (
@@ -54,6 +56,7 @@ from app.services.product_compositor import (
     ProductCompositorError,
     composite_product_on_background,
 )
+from app.services.model_vto import MODEL_VTO_SLIDE_KEY
 from app.services.series_generator import (
     DEFAULT_SLIDE_OVERLAY_TEXTS,
     SLIDE_OVERLAY_STYLES,
@@ -72,11 +75,13 @@ class GenerationApplicationService:
         storage: ObjectStoragePort,
         async_providers: tuple[AsyncImageProviderPort, ...],
         immediate_provider: ImmediateImageProviderPort,
+        text_provider: MarketplaceTextProviderPort | None = None,
     ) -> None:
         self._repository = repository
         self._storage = storage
         self._async_providers = async_providers
         self._immediate_provider = immediate_provider
+        self._text_provider = text_provider
         self._settings = get_settings()
 
     async def submit_job(self, job_id: UUID) -> None:
@@ -184,6 +189,15 @@ class GenerationApplicationService:
                     for slide in work.slides
                 )
             )
+            marketplace_text = (
+                await self._text_provider.generate_marketplace_text(
+                    product_category=work.product_category,
+                    slides=work.slides,
+                    images=tuple(images),
+                )
+                if self._text_provider is not None
+                else work.marketplace_text
+            )
             zip_bytes = await asyncio.to_thread(
                 _build_archive,
                 tuple(zip(work.slides, images, strict=True)),
@@ -224,6 +238,7 @@ class GenerationApplicationService:
                 thumbnail_object_key=thumbnail_key,
                 thumbnail_mime_type=thumbnail.mime_type,
                 thumbnail_size_bytes=thumbnail.size_bytes,
+                marketplace_text=marketplace_text,
                 provider_used=provider_used,
                 warning=warning,
             )
@@ -407,6 +422,7 @@ class GenerationApplicationService:
                         prompt=slide.prompt,
                         reply_url=callback_url,
                         reply_ref=reply_ref,
+                        render_mode=_render_mode_for_slide(slide),
                     )
                     await self._repository.mark_attempt_submitted(
                         attempt.id, submission
@@ -466,6 +482,9 @@ class GenerationApplicationService:
         apply_text_overlays: bool,
         overlay_texts: dict[str, str],
     ) -> OptimizedImage:
+        if _is_model_vto_slide(slide):
+            return await optimize_image_lossless(generated_background)
+
         composited = await composite_product_on_background(
             product_image=product_image,
             background_image=generated_background,
@@ -594,6 +613,16 @@ def _normalise_error(exc: Exception) -> GenerationErrorInfo:
         retryable=retryable,
         attempts=0,
     )
+
+
+def _is_model_vto_slide(slide: SlideWorkItem) -> bool:
+    return slide.slide_key == MODEL_VTO_SLIDE_KEY
+
+
+def _render_mode_for_slide(
+    slide: SlideWorkItem,
+) -> Literal["background_plate", "direct_vto"]:
+    return "direct_vto" if _is_model_vto_slide(slide) else "background_plate"
 
 
 def _build_archive(items: tuple[tuple[SlideWorkItem, bytes], ...]) -> bytes:

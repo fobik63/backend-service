@@ -12,6 +12,7 @@ from app.domain.generation import (
     GenerationErrorInfo,
     GenerationJobStatus,
     GenerationWorkItem,
+    MarketplaceTextContent,
     OutboxEventType,
     OutboxMessage,
     ProviderSubmission,
@@ -99,6 +100,7 @@ class GenerationRepositoryPort(Protocol):
         thumbnail_object_key: str,
         thumbnail_mime_type: str,
         thumbnail_size_bytes: int,
+        marketplace_text: MarketplaceTextContent | None,
         provider_used: str,
         warning: str | None,
     ) -> None: ...

@@ -835,6 +835,7 @@ class MidjourneyService:
         prompt: str,
         reply_url: str,
         reply_ref: str,
+        render_mode: Literal["background_plate", "direct_vto"] = "background_plate",
     ) -> ProviderSubmission:
         """Submit one provider job and return without polling for its image."""
 
@@ -849,14 +850,17 @@ class MidjourneyService:
             raise AIEngineValidationError("reply_ref cannot be empty.")
 
         profile = resolve_engine_for_tariff(SubscriptionStatus.PRO)
-        background_prompt = (
-            f"{prompt.strip()} Generate a clean background plate for product compositing. "
-            "Leave the central product area empty, preserve realistic light direction and "
-            "ground plane, no text, no logos, no duplicate products."
-        )
+        if render_mode == "direct_vto":
+            provider_prompt = prompt.strip()
+        else:
+            provider_prompt = (
+                f"{prompt.strip()} Generate a clean background plate for product compositing. "
+                "Leave the central product area empty, preserve realistic light direction and "
+                "ground plane, no text, no logos, no duplicate products."
+            )
         merged_prompt = self._build_prompt(
             selected_style=selected_style,
-            user_text=background_prompt,
+            user_text=provider_prompt,
             profile=profile,
         )
         mime_type, _extension = _detect_image_mime_type(product_image)

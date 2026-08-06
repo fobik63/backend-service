@@ -21,6 +21,11 @@ from app.services.ai_engine import (
     get_healthy_async_midjourney_providers,
     get_stable_diffusion_adapter,
 )
+from app.services.marketplace_text import (
+    MarketplaceTextConfigurationError,
+    close_marketplace_text_service,
+    get_marketplace_text_service,
+)
 from app.services.s3_storage import get_s3_storage
 
 logger = logging.getLogger(__name__)
@@ -47,6 +52,7 @@ def _run_async(factory: Callable[[], Awaitable[T]]) -> T:
             return await factory()
         finally:
             await close_ai_engine()
+            await close_marketplace_text_service()
             await close_redis_client()
             await engine.dispose()
 
@@ -56,11 +62,17 @@ def _run_async(factory: Callable[[], Awaitable[T]]) -> T:
 async def _build_service(
     repository: GenerationRepository,
 ) -> GenerationApplicationService:
+    text_provider = None
+    try:
+        text_provider = get_marketplace_text_service()
+    except MarketplaceTextConfigurationError:
+        logger.warning("Marketplace text generation is disabled: LLM is not configured.")
     return GenerationApplicationService(
         repository=repository,
         storage=get_s3_storage(),
         async_providers=await get_healthy_async_midjourney_providers(),
         immediate_provider=get_stable_diffusion_adapter(),
+        text_provider=text_provider,
     )
 
 

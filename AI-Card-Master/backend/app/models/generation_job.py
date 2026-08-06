@@ -73,6 +73,7 @@ class GenerationJob(Base):
     thumbnail_object_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     thumbnail_mime_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
     thumbnail_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    marketplace_text: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     apply_text_overlays: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,

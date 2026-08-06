@@ -29,6 +29,7 @@ from app.api import (
     images_router,
     midjourney_webhook_router,
     payments_router,
+    text_generation_router,
 )
 from app.api.images import ensure_uploads_dir
 from app.core.config import get_settings
@@ -36,6 +37,7 @@ from app.infrastructure.redis import close_redis_client, redis_healthcheck
 from app.models.database import SessionLocal, engine
 from app.services.ai_engine import close_ai_engine
 from app.services.infographic_service import close_infographic_service
+from app.services.marketplace_text import close_marketplace_text_service
 from app.services.s3_storage import (
     S3StorageError,
     close_s3_storage,
@@ -94,6 +96,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
         yield
     finally:
         await close_ai_engine()
+        await close_marketplace_text_service()
         await close_infographic_service()
         await close_redis_client()
         await close_s3_storage()
@@ -132,6 +135,7 @@ app.include_router(admin_router)
 app.include_router(images_router)
 app.include_router(payments_router)
 app.include_router(generations_router)
+app.include_router(text_generation_router)
 app.include_router(midjourney_webhook_router)
 
 
