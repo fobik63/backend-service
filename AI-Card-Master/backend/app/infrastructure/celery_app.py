@@ -17,6 +17,9 @@ celery_app = Celery(
         "app.workers.winback_tasks",
         "app.workers.bulk_generation_tasks",
         "app.workers.smart_variant_tasks",
+        "app.workers.claude_reasoning_tasks",
+        "app.workers.visual_audit_tasks",
+        "app.workers.oracle_tasks",
     ],
 )
 
@@ -50,6 +53,9 @@ celery_app.conf.update(
         "bulk.poll_active_batches": {"queue": "bulk"},
         "smart_variant.recolor_and_enqueue": {"queue": "smart_variant"},
         "smart_variant.poll_active_syncs": {"queue": "smart_variant"},
+        "claude.run_chain_of_thought": {"queue": "claude.reasoning"},
+        "claude.run_visual_audit": {"queue": "claude.reasoning"},
+        "claude.run_oracle_prediction": {"queue": "claude.reasoning"},
     },
     beat_schedule={
         "dispatch-generation-outbox": {

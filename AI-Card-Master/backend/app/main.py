@@ -27,11 +27,14 @@ from app.api import (
     admin_router,
     analytics_router,
     bulk_generations_router,
+    claude_reasoning_router,
+    visual_audit_router,
     exports_router,
     generations_router,
     images_router,
     marketplace_bridge_router,
     midjourney_webhook_router,
+    oracle_router,
     payments_router,
     referrals_router,
     smart_variants_router,
@@ -152,6 +155,9 @@ app.include_router(exports_router)
 app.include_router(marketplace_bridge_router)
 app.include_router(bulk_generations_router)
 app.include_router(smart_variants_router)
+app.include_router(claude_reasoning_router)
+app.include_router(visual_audit_router)
+app.include_router(oracle_router)
 app.include_router(generations_router)
 app.include_router(text_generation_router)
 app.include_router(midjourney_webhook_router)

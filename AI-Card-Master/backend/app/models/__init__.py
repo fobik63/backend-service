@@ -7,7 +7,10 @@ from app.models.bulk_generation import (
     BulkGenerationItem,
     UserPushNotification,
 )
+from app.models.claude_reasoning import ClaudeReasoningJob
 from app.models.generation_error_log import GenerationErrorLog
+from app.models.visual_audit import VisualAuditJob
+from app.models.oracle import OraclePredictionJob
 from app.models.generation import Generation
 from app.models.generation_job import (
     GenerationJob,
@@ -29,6 +32,9 @@ __all__ = [
     "ApiUsageCost",
     "BulkGenerationBatch",
     "BulkGenerationItem",
+    "ClaudeReasoningJob",
+    "VisualAuditJob",
+    "OraclePredictionJob",
     "Generation",
     "GenerationErrorLog",
     "GenerationJob",

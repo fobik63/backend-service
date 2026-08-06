@@ -396,6 +396,64 @@ class Settings(BaseSettings):
         alias="TELEGRAM_USER_TIMEOUT_SECONDS",
     )
 
+    # Claude 4.7 Opus Vision & Reasoning Integration Layer
+    claude_47_api_key: SecretStr | None = Field(
+        default=None,
+        alias="CLAUDE_47_API_KEY",
+    )
+    claude_47_base_url: str = Field(
+        default="https://api.anthropic.com",
+        alias="CLAUDE_47_BASE_URL",
+    )
+    claude_47_model: str = Field(
+        default="claude-opus-4-7",
+        alias="CLAUDE_47_MODEL",
+    )
+    claude_47_api_version: str = Field(
+        default="2023-06-01",
+        alias="CLAUDE_47_API_VERSION",
+    )
+    claude_47_structured_outputs_beta: str = Field(
+        default="structured-outputs-2025-11-13",
+        alias="CLAUDE_47_STRUCTURED_OUTPUTS_BETA",
+    )
+    claude_47_timeout_seconds: float = Field(
+        default=120.0,
+        alias="CLAUDE_47_TIMEOUT_SECONDS",
+    )
+    claude_47_max_connections: int = Field(
+        default=40,
+        alias="CLAUDE_47_MAX_CONNECTIONS",
+    )
+    claude_47_max_keepalive_connections: int = Field(
+        default=20,
+        alias="CLAUDE_47_MAX_KEEPALIVE_CONNECTIONS",
+    )
+    claude_47_max_retries: int = Field(default=2, alias="CLAUDE_47_MAX_RETRIES")
+    claude_47_base_retry_delay_seconds: float = Field(
+        default=0.5,
+        alias="CLAUDE_47_BASE_RETRY_DELAY_SECONDS",
+    )
+    claude_47_temperature: float = Field(
+        default=0.2,
+        alias="CLAUDE_47_TEMPERATURE",
+    )
+    claude_47_vision_max_tokens: int = Field(
+        default=4096,
+        alias="CLAUDE_47_VISION_MAX_TOKENS",
+    )
+    claude_47_reasoning_max_tokens: int = Field(
+        default=4096,
+        alias="CLAUDE_47_REASONING_MAX_TOKENS",
+    )
+    claude_47_max_images_per_request: int = Field(
+        default=5,
+        alias="CLAUDE_47_MAX_IMAGES_PER_REQUEST",
+    )
+    claude_47_stage_cache_ttl_seconds: int = Field(
+        default=3600,
+        alias="CLAUDE_47_STAGE_CACHE_TTL_SECONDS",
+    )
     claude_47_input_1k_tokens_cost_usd: Decimal = Field(
         default=Decimal("0"),
         alias="CLAUDE_47_INPUT_1K_TOKENS_COST_USD",
@@ -403,6 +461,60 @@ class Settings(BaseSettings):
     claude_47_output_1k_tokens_cost_usd: Decimal = Field(
         default=Decimal("0"),
         alias="CLAUDE_47_OUTPUT_1K_TOKENS_COST_USD",
+    )
+
+    # Intelligent visual audit (Brand Dominant filter → Rising Stars)
+    visual_audit_top_n: int = Field(default=50, alias="VISUAL_AUDIT_TOP_N")
+    visual_audit_brand_dominant_soft_reviews: int = Field(
+        default=5000,
+        alias="VISUAL_AUDIT_BRAND_DOMINANT_SOFT_REVIEWS",
+    )
+    visual_audit_brand_dominant_hard_reviews: int = Field(
+        default=7000,
+        alias="VISUAL_AUDIT_BRAND_DOMINANT_HARD_REVIEWS",
+    )
+    visual_audit_rising_min_reviews: int = Field(
+        default=50,
+        alias="VISUAL_AUDIT_RISING_MIN_REVIEWS",
+    )
+    visual_audit_rising_max_reviews: int = Field(
+        default=1500,
+        alias="VISUAL_AUDIT_RISING_MAX_REVIEWS",
+    )
+    visual_audit_min_sales_growth_ratio: float = Field(
+        default=0.30,
+        alias="VISUAL_AUDIT_MIN_SALES_GROWTH_RATIO",
+    )
+    visual_audit_min_review_velocity_per_day: float = Field(
+        default=3.0,
+        alias="VISUAL_AUDIT_MIN_REVIEW_VELOCITY_PER_DAY",
+    )
+    visual_audit_max_rising_stars_for_vision: int = Field(
+        default=12,
+        alias="VISUAL_AUDIT_MAX_RISING_STARS_FOR_VISION",
+    )
+
+    # Market Gap & Trend Prediction (The Oracle)
+    oracle_min_query_growth_ratio: float = Field(
+        default=0.25,
+        alias="ORACLE_MIN_QUERY_GROWTH_RATIO",
+    )
+    oracle_min_recent_query_volume: int = Field(
+        default=500,
+        alias="ORACLE_MIN_RECENT_QUERY_VOLUME",
+    )
+    oracle_max_top_cards_for_gap: int = Field(
+        default=3,
+        alias="ORACLE_MAX_TOP_CARDS_FOR_GAP",
+    )
+    oracle_min_gap_score: float = Field(
+        default=40.0,
+        alias="ORACLE_MIN_GAP_SCORE",
+    )
+    oracle_max_alerts: int = Field(default=10, alias="ORACLE_MAX_ALERTS")
+    oracle_top_rank_ceiling: int = Field(
+        default=50,
+        alias="ORACLE_TOP_RANK_CEILING",
     )
 
     @field_validator("database_url")
@@ -490,6 +602,21 @@ class Settings(BaseSettings):
         "stable_diffusion_steps",
         "face_fix_max_connections",
         "face_fix_max_retries",
+        "claude_47_max_connections",
+        "claude_47_max_keepalive_connections",
+        "claude_47_vision_max_tokens",
+        "claude_47_reasoning_max_tokens",
+        "claude_47_max_images_per_request",
+        "claude_47_stage_cache_ttl_seconds",
+        "visual_audit_top_n",
+        "visual_audit_brand_dominant_soft_reviews",
+        "visual_audit_brand_dominant_hard_reviews",
+        "visual_audit_rising_min_reviews",
+        "visual_audit_rising_max_reviews",
+        "visual_audit_max_rising_stars_for_vision",
+        "oracle_min_recent_query_volume",
+        "oracle_max_alerts",
+        "oracle_top_rank_ceiling",
     )
     @classmethod
     def validate_generation_positive_ints(cls, value: int) -> int:
@@ -514,11 +641,46 @@ class Settings(BaseSettings):
         "winback_style_update_scan_seconds",
         "bulk_generation_poll_seconds",
         "smart_variant_poll_seconds",
+        "claude_47_timeout_seconds",
+        "claude_47_base_retry_delay_seconds",
     )
     @classmethod
     def validate_positive_floats(cls, value: float) -> float:
         if value <= 0:
             raise ValueError("Timeout/retry settings must be positive.")
+        return value
+
+    @field_validator("claude_47_max_retries")
+    @classmethod
+    def validate_claude_retries(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("CLAUDE_47_MAX_RETRIES cannot be negative.")
+        return value
+
+    @field_validator("claude_47_temperature")
+    @classmethod
+    def validate_claude_temperature(cls, value: float) -> float:
+        if not 0.0 <= value <= 1.0:
+            raise ValueError("CLAUDE_47_TEMPERATURE must be in [0, 1].")
+        return value
+
+    @field_validator(
+        "visual_audit_min_sales_growth_ratio",
+        "visual_audit_min_review_velocity_per_day",
+        "oracle_min_query_growth_ratio",
+        "oracle_min_gap_score",
+    )
+    @classmethod
+    def validate_visual_audit_non_negative_floats(cls, value: float) -> float:
+        if value < 0:
+            raise ValueError("Visual audit ratio/velocity settings cannot be negative.")
+        return value
+
+    @field_validator("oracle_max_top_cards_for_gap")
+    @classmethod
+    def validate_oracle_max_top_cards(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("ORACLE_MAX_TOP_CARDS_FOR_GAP cannot be negative.")
         return value
 
     @field_validator("stable_diffusion_image_strength")
