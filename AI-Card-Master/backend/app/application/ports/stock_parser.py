@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from datetime import datetime
+from typing import Protocol, Sequence
 from uuid import UUID
 
 from app.domain.stock_parser import (
@@ -12,11 +13,14 @@ from app.domain.stock_parser import (
     ParserHealthStatus,
     ParserHealthView,
     ParserMarketplace,
+    SkuItemView,
+    StockSnapshotView,
+    StockSnapshotWrite,
 )
 
 
 class StockParserPersistencePort(Protocol):
-    """Durable health / circuit-breaker state for marketplace parsers."""
+    """Durable health / circuit-breaker + raw SKU / snapshot storage."""
 
     async def get_or_create_health(
         self, *, marketplace: ParserMarketplace
@@ -56,6 +60,47 @@ class StockParserPersistencePort(Protocol):
         status: ParserHealthStatus,
     ) -> ParserHealthView:
         """Manual / ops status override (e.g. re-enable after fix)."""
+
+    async def upsert_sku_item(
+        self,
+        *,
+        marketplace: ParserMarketplace,
+        article: str,
+        product_url: str,
+        title: str | None = None,
+        is_active: bool = True,
+    ) -> SkuItemView:
+        """Create or refresh a tracked SKU row."""
+
+    async def get_sku_item(
+        self, *, marketplace: ParserMarketplace, article: str
+    ) -> SkuItemView | None:
+        """Lookup SKU by marketplace + article."""
+
+    async def list_active_sku_items(
+        self, *, marketplace: ParserMarketplace | None = None
+    ) -> list[SkuItemView]:
+        """Return tracked SKUs for nightly parser Beat jobs."""
+
+    async def ensure_stock_snapshot_partition(
+        self, *, captured_at: datetime
+    ) -> str:
+        """Ensure the monthly RANGE partition for ``captured_at`` exists."""
+
+    async def insert_stock_snapshots(
+        self, *, rows: Sequence[StockSnapshotWrite]
+    ) -> list[StockSnapshotView]:
+        """Bulk-insert raw warehouse observations into partitioned storage."""
+
+    async def list_stock_snapshots(
+        self,
+        *,
+        sku_id: UUID,
+        captured_from: datetime | None = None,
+        captured_to: datetime | None = None,
+        limit: int = 500,
+    ) -> list[StockSnapshotView]:
+        """Time-ordered snapshots for one SKU (uses sku_id + captured_at index)."""
 
 
 class MarketplaceMobileParserPort(Protocol):

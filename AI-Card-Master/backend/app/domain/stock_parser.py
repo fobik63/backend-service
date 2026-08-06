@@ -6,7 +6,7 @@ Health/circuit-breaker state lives here so FastAPI never imports scraper IO.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 from uuid import UUID
@@ -132,6 +132,67 @@ class ParserRunResult(StrictDomainModel):
     error_message: str | None = None
     parser_stopped: bool = False
     health_status: ParserHealthStatus | None = None
+
+
+class SkuItemView(StrictDomainModel):
+    """Tracked marketplace SKU (dimension for raw stock time-series)."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, from_attributes=False)
+
+    id: UUID
+    marketplace: ParserMarketplace
+    article: str = Field(min_length=1, max_length=64)
+    product_url: str = Field(min_length=1, max_length=1024)
+    title: str | None = Field(default=None, max_length=500)
+    is_active: bool = True
+    created_at: datetime
+    updated_at: datetime
+
+
+class StockSnapshotView(StrictDomainModel):
+    """One raw stock/price observation at a warehouse (fact row)."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, from_attributes=False)
+
+    id: UUID
+    sku_id: UUID
+    captured_at: datetime
+    warehouse_id: str = Field(min_length=1, max_length=64)
+    quantity: int = Field(ge=0)
+    price_kopecks: int = Field(ge=0)
+    currency: str = Field(default="RUB", min_length=3, max_length=8)
+    created_at: datetime
+
+
+class StockSnapshotWrite(StrictDomainModel):
+    """Insert payload for a partitioned stock_snapshots row."""
+
+    sku_id: UUID
+    captured_at: datetime
+    warehouse_id: str = Field(min_length=1, max_length=64)
+    quantity: int = Field(ge=0)
+    price_kopecks: int = Field(ge=0)
+    currency: str = Field(default="RUB", min_length=3, max_length=8)
+
+
+def month_partition_bounds(captured_at: datetime) -> tuple[datetime, datetime]:
+    """Return [start, end) UTC month window for RANGE partitioning."""
+
+    ts = captured_at if captured_at.tzinfo is not None else captured_at.replace(tzinfo=UTC)
+    ts = ts.astimezone(UTC)
+    start = datetime(ts.year, ts.month, 1, tzinfo=UTC)
+    if ts.month == 12:
+        end = datetime(ts.year + 1, 1, 1, tzinfo=UTC)
+    else:
+        end = datetime(ts.year, ts.month + 1, 1, tzinfo=UTC)
+    return start, end
+
+
+def stock_snapshot_partition_name(captured_at: datetime) -> str:
+    """Physical partition table name for a capture timestamp (yyyy_mm)."""
+
+    start, _ = month_partition_bounds(captured_at)
+    return f"stock_snapshots_{start.year:04d}_{start.month:02d}"
 
 
 def normalize_marketplace(value: str) -> ParserMarketplace:

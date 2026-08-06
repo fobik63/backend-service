@@ -17,8 +17,13 @@ from app.domain.stock_parser import (
     ParserHealthStatus,
     ParserHealthView,
     ParserMarketplace,
+    SkuItemView,
     StockLevel,
+    StockSnapshotView,
+    StockSnapshotWrite,
+    month_partition_bounds,
     normalize_marketplace,
+    stock_snapshot_partition_name,
 )
 from app.infrastructure.stock_parser.exceptions import (
     ParserHttpError,
@@ -133,6 +138,8 @@ def test_map_wb_product_aggregates_stocks() -> None:
 class _FakeHealthRepo:
     def __init__(self) -> None:
         self.rows: dict[ParserMarketplace, ParserHealthView] = {}
+        self.sku_items: dict[tuple[str, str], SkuItemView] = {}
+        self.snapshots: list[StockSnapshotView] = []
 
     def _blank(self, marketplace: ParserMarketplace) -> ParserHealthView:
         now = datetime.now(UTC)
@@ -238,6 +245,95 @@ class _FakeHealthRepo:
         )
         self.rows[marketplace] = updated
         return updated
+
+    async def upsert_sku_item(
+        self,
+        *,
+        marketplace: ParserMarketplace,
+        article: str,
+        product_url: str,
+        title: str | None = None,
+        is_active: bool = True,
+    ) -> SkuItemView:
+        key = (marketplace.value, article.strip())
+        now = datetime.now(UTC)
+        existing = self.sku_items.get(key)
+        if existing is None:
+            view = SkuItemView(
+                id=uuid4(),
+                marketplace=marketplace,
+                article=article.strip(),
+                product_url=product_url,
+                title=title,
+                is_active=is_active,
+                created_at=now,
+                updated_at=now,
+            )
+        else:
+            view = existing.model_copy(
+                update={
+                    "product_url": product_url,
+                    "title": title if title is not None else existing.title,
+                    "is_active": is_active,
+                    "updated_at": now,
+                }
+            )
+        self.sku_items[key] = view
+        return view
+
+    async def get_sku_item(
+        self, *, marketplace: ParserMarketplace, article: str
+    ) -> SkuItemView | None:
+        return self.sku_items.get((marketplace.value, article.strip()))
+
+    async def list_active_sku_items(
+        self, *, marketplace: ParserMarketplace | None = None
+    ) -> list[SkuItemView]:
+        items = [v for v in self.sku_items.values() if v.is_active]
+        if marketplace is not None:
+            items = [v for v in items if v.marketplace is marketplace]
+        return items
+
+    async def ensure_stock_snapshot_partition(
+        self, *, captured_at: datetime
+    ) -> str:
+        return stock_snapshot_partition_name(captured_at)
+
+    async def insert_stock_snapshots(
+        self, *, rows: list[StockSnapshotWrite]
+    ) -> list[StockSnapshotView]:
+        now = datetime.now(UTC)
+        out: list[StockSnapshotView] = []
+        for row in rows:
+            view = StockSnapshotView(
+                id=uuid4(),
+                sku_id=row.sku_id,
+                captured_at=row.captured_at,
+                warehouse_id=row.warehouse_id,
+                quantity=row.quantity,
+                price_kopecks=row.price_kopecks,
+                currency=row.currency,
+                created_at=now,
+            )
+            out.append(view)
+            self.snapshots.append(view)
+        return out
+
+    async def list_stock_snapshots(
+        self,
+        *,
+        sku_id: UUID,
+        captured_from: datetime | None = None,
+        captured_to: datetime | None = None,
+        limit: int = 500,
+    ) -> list[StockSnapshotView]:
+        items = [s for s in self.snapshots if s.sku_id == sku_id]
+        if captured_from is not None:
+            items = [s for s in items if s.captured_at >= captured_from]
+        if captured_to is not None:
+            items = [s for s in items if s.captured_at < captured_to]
+        items.sort(key=lambda s: s.captured_at, reverse=True)
+        return items[:limit]
 
 
 class _FailingParser:
@@ -424,3 +520,54 @@ async def test_parse_many_stops_marketplace_after_break() -> None:
     assert results[1].parser_stopped is True
     assert "Skipped" in (results[1].error_message or "")
     assert len(alerts.calls) == 1
+
+
+def test_month_partition_bounds_and_name() -> None:
+    ts = datetime(2026, 8, 15, 12, 0, tzinfo=UTC)
+    start, end = month_partition_bounds(ts)
+    assert start == datetime(2026, 8, 1, tzinfo=UTC)
+    assert end == datetime(2026, 9, 1, tzinfo=UTC)
+    assert stock_snapshot_partition_name(ts) == "stock_snapshots_2026_08"
+
+
+def test_month_partition_december_wraps_year() -> None:
+    ts = datetime(2026, 12, 31, 23, 59, tzinfo=UTC)
+    start, end = month_partition_bounds(ts)
+    assert start == datetime(2026, 12, 1, tzinfo=UTC)
+    assert end == datetime(2027, 1, 1, tzinfo=UTC)
+    assert stock_snapshot_partition_name(ts) == "stock_snapshots_2026_12"
+
+
+@pytest.mark.asyncio
+async def test_fake_repo_stores_sku_and_snapshots() -> None:
+    repo = _FakeHealthRepo()
+    sku = await repo.upsert_sku_item(
+        marketplace=ParserMarketplace.OZON,
+        article=" 998877 ",
+        product_url="https://www.ozon.ru/product/998877",
+        title="Test chair",
+    )
+    assert sku.article == "998877"
+    now = datetime.now(UTC)
+    written = await repo.insert_stock_snapshots(
+        rows=[
+            StockSnapshotWrite(
+                sku_id=sku.id,
+                captured_at=now,
+                warehouse_id="WH-1",
+                quantity=12,
+                price_kopecks=199900,
+            ),
+            StockSnapshotWrite(
+                sku_id=sku.id,
+                captured_at=now,
+                warehouse_id="WH-2",
+                quantity=3,
+                price_kopecks=199900,
+            ),
+        ]
+    )
+    assert len(written) == 2
+    listed = await repo.list_stock_snapshots(sku_id=sku.id)
+    assert len(listed) == 2
+    assert listed[0].warehouse_id in {"WH-1", "WH-2"}

@@ -1,10 +1,12 @@
-"""SQLAlchemy persistence for stock-parser health / circuit-breaker state."""
+"""SQLAlchemy persistence for stock-parser health + raw SKU / snapshots."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Sequence
+from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.stock_parser import (
@@ -12,8 +14,11 @@ from app.domain.stock_parser import (
     ParserHealthStatus,
     ParserHealthView,
     ParserMarketplace,
+    SkuItemView,
+    StockSnapshotView,
+    StockSnapshotWrite,
 )
-from app.models.stock_parser import ParserHealth
+from app.models.stock_parser import ParserHealth, SkuItem, StockSnapshot
 
 
 def _utc_now() -> datetime:
@@ -44,6 +49,32 @@ def _health_view(row: ParserHealth) -> ParserHealthView:
         broken_at=_as_utc(row.broken_at),
         alert_sent_at=_as_utc(row.alert_sent_at),
         updated_at=_as_utc(row.updated_at) or _utc_now(),
+        created_at=_as_utc(row.created_at) or _utc_now(),
+    )
+
+
+def _sku_view(row: SkuItem) -> SkuItemView:
+    return SkuItemView(
+        id=row.id,
+        marketplace=ParserMarketplace(row.marketplace),
+        article=row.article,
+        product_url=row.product_url,
+        title=row.title,
+        is_active=bool(row.is_active),
+        created_at=_as_utc(row.created_at) or _utc_now(),
+        updated_at=_as_utc(row.updated_at) or _utc_now(),
+    )
+
+
+def _snapshot_view(row: StockSnapshot) -> StockSnapshotView:
+    return StockSnapshotView(
+        id=row.id,
+        sku_id=row.sku_id,
+        captured_at=_as_utc(row.captured_at) or _utc_now(),
+        warehouse_id=row.warehouse_id,
+        quantity=int(row.quantity),
+        price_kopecks=int(row.price_kopecks),
+        currency=row.currency,
         created_at=_as_utc(row.created_at) or _utc_now(),
     )
 
@@ -147,6 +178,134 @@ class StockParserRepository:
         await self._session.commit()
         await self._session.refresh(row)
         return _health_view(row)
+
+    async def upsert_sku_item(
+        self,
+        *,
+        marketplace: ParserMarketplace,
+        article: str,
+        product_url: str,
+        title: str | None = None,
+        is_active: bool = True,
+    ) -> SkuItemView:
+        normalized_article = article.strip()
+        result = await self._session.execute(
+            select(SkuItem).where(
+                SkuItem.marketplace == marketplace.value,
+                SkuItem.article == normalized_article,
+            )
+        )
+        row = result.scalar_one_or_none()
+        now = _utc_now()
+        if row is None:
+            row = SkuItem(
+                marketplace=marketplace.value,
+                article=normalized_article,
+                product_url=product_url[:1024],
+                title=(title[:500] if title else None),
+                is_active=is_active,
+                created_at=now,
+                updated_at=now,
+            )
+            self._session.add(row)
+        else:
+            row.product_url = product_url[:1024]
+            if title is not None:
+                row.title = title[:500]
+            row.is_active = is_active
+            row.updated_at = now
+        await self._session.commit()
+        await self._session.refresh(row)
+        return _sku_view(row)
+
+    async def get_sku_item(
+        self, *, marketplace: ParserMarketplace, article: str
+    ) -> SkuItemView | None:
+        result = await self._session.execute(
+            select(SkuItem).where(
+                SkuItem.marketplace == marketplace.value,
+                SkuItem.article == article.strip(),
+            )
+        )
+        row = result.scalar_one_or_none()
+        return _sku_view(row) if row is not None else None
+
+    async def list_active_sku_items(
+        self, *, marketplace: ParserMarketplace | None = None
+    ) -> list[SkuItemView]:
+        stmt = select(SkuItem).where(SkuItem.is_active.is_(True))
+        if marketplace is not None:
+            stmt = stmt.where(SkuItem.marketplace == marketplace.value)
+        stmt = stmt.order_by(SkuItem.marketplace, SkuItem.article)
+        result = await self._session.execute(stmt)
+        return [_sku_view(row) for row in result.scalars().all()]
+
+    async def ensure_stock_snapshot_partition(
+        self, *, captured_at: datetime
+    ) -> str:
+        ts = _as_utc(captured_at) or _utc_now()
+        result = await self._session.execute(
+            text("SELECT ensure_stock_snapshot_month_partition(:ts)"),
+            {"ts": ts},
+        )
+        name = result.scalar_one()
+        await self._session.commit()
+        return str(name)
+
+    async def insert_stock_snapshots(
+        self, *, rows: Sequence[StockSnapshotWrite]
+    ) -> list[StockSnapshotView]:
+        if not rows:
+            return []
+
+        # Ensure every month bucket exists before INSERT (DEFAULT is fallback).
+        months_seen: set[tuple[int, int]] = set()
+        for item in rows:
+            ts = _as_utc(item.captured_at) or _utc_now()
+            key = (ts.year, ts.month)
+            if key not in months_seen:
+                months_seen.add(key)
+                await self.ensure_stock_snapshot_partition(captured_at=ts)
+
+        entities: list[StockSnapshot] = []
+        for item in rows:
+            entity = StockSnapshot(
+                id=uuid4(),
+                sku_id=item.sku_id,
+                captured_at=_as_utc(item.captured_at) or _utc_now(),
+                warehouse_id=item.warehouse_id,
+                quantity=item.quantity,
+                price_kopecks=item.price_kopecks,
+                currency=item.currency,
+                created_at=_utc_now(),
+            )
+            entities.append(entity)
+            self._session.add(entity)
+        await self._session.commit()
+        for entity in entities:
+            await self._session.refresh(entity)
+        return [_snapshot_view(entity) for entity in entities]
+
+    async def list_stock_snapshots(
+        self,
+        *,
+        sku_id: UUID,
+        captured_from: datetime | None = None,
+        captured_to: datetime | None = None,
+        limit: int = 500,
+    ) -> list[StockSnapshotView]:
+        stmt = select(StockSnapshot).where(StockSnapshot.sku_id == sku_id)
+        if captured_from is not None:
+            stmt = stmt.where(
+                StockSnapshot.captured_at >= (_as_utc(captured_from) or captured_from)
+            )
+        if captured_to is not None:
+            stmt = stmt.where(
+                StockSnapshot.captured_at < (_as_utc(captured_to) or captured_to)
+            )
+        stmt = stmt.order_by(StockSnapshot.captured_at.desc()).limit(max(1, min(limit, 5000)))
+        result = await self._session.execute(stmt)
+        return [_snapshot_view(row) for row in result.scalars().all()]
 
     async def _require_row(self, marketplace: ParserMarketplace) -> ParserHealth:
         result = await self._session.execute(
