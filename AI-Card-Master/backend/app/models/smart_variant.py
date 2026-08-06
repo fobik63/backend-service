@@ -76,6 +76,13 @@ class SmartVariantSync(Base):
         server_default=text("false"),
     )
     source_image_object_key: Mapped[str] = mapped_column(String(1024), nullable=False)
+    source_retention_status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="available",
+        server_default=text("'available'"),
+        index=True,
+    )
     source_mime_type: Mapped[str] = mapped_column(
         String(64),
         nullable=False,

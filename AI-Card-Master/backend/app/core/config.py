@@ -167,6 +167,45 @@ class Settings(BaseSettings):
         default=1_048_576,
         alias="SECURITY_MAX_JSON_BODY_BYTES",
     )
+    # Behavioral generation rate limit by visitorId (plan §35) → CAPTCHA_REQUIRED.
+    security_behavioral_rate_enabled: bool = Field(
+        default=True,
+        alias="SECURITY_BEHAVIORAL_RATE_ENABLED",
+    )
+    security_generation_requests_per_minute: int = Field(
+        default=8,
+        alias="SECURITY_GENERATION_REQUESTS_PER_MINUTE",
+    )
+    security_generation_rate_window_seconds: int = Field(
+        default=60,
+        alias="SECURITY_GENERATION_RATE_WINDOW_SECONDS",
+    )
+    security_captcha_block_ttl_seconds: int = Field(
+        default=900,
+        alias="SECURITY_CAPTCHA_BLOCK_TTL_SECONDS",
+    )
+    captcha_provider: str = Field(
+        default="auto",
+        alias="CAPTCHA_PROVIDER",
+        description="auto | turnstile | recaptcha",
+    )
+    turnstile_secret_key: SecretStr | None = Field(
+        default=None,
+        alias="TURNSTILE_SECRET_KEY",
+    )
+    recaptcha_secret_key: SecretStr | None = Field(
+        default=None,
+        alias="RECAPTCHA_SECRET_KEY",
+    )
+    captcha_verify_timeout_seconds: float = Field(
+        default=8.0,
+        alias="CAPTCHA_VERIFY_TIMEOUT_SECONDS",
+    )
+    captcha_bypass_when_unconfigured: bool = Field(
+        default=False,
+        alias="CAPTCHA_BYPASS_WHEN_UNCONFIGURED",
+        description="Dev-only: accept tokens when provider secrets are missing.",
+    )
     trusted_proxy_cidrs: str = Field(
         default="",
         alias="TRUSTED_PROXY_CIDRS",
@@ -377,6 +416,17 @@ class Settings(BaseSettings):
     winback_style_campaign_key: str = Field(
         default="luxury_loft_update_v1",
         alias="WINBACK_STYLE_CAMPAIGN_KEY",
+    )
+
+    # Zero-Knowledge source retention (heavy ZIP + originals → deleted after N hours)
+    source_retention_hours: int = Field(default=24, alias="SOURCE_RETENTION_HOURS")
+    source_retention_scan_seconds: float = Field(
+        default=900.0,
+        alias="SOURCE_RETENTION_SCAN_SECONDS",
+    )
+    source_retention_batch_size: int = Field(
+        default=200,
+        alias="SOURCE_RETENTION_BATCH_SIZE",
     )
 
     # Bulk Generation (ZIP of 1–20 products → background preset run)
@@ -923,6 +973,8 @@ class Settings(BaseSettings):
         "winback_free_generations",
         "winback_discount_percent",
         "winback_offer_ttl_hours",
+        "source_retention_hours",
+        "source_retention_batch_size",
         "bulk_generation_max_products",
         "bulk_generation_max_zip_bytes",
         "bulk_generation_poll_batch_size",
@@ -980,6 +1032,9 @@ class Settings(BaseSettings):
         "security_auto_block_threat_score",
         "security_ip_block_ttl_seconds",
         "security_max_json_body_bytes",
+        "security_generation_requests_per_minute",
+        "security_generation_rate_window_seconds",
+        "security_captcha_block_ttl_seconds",
         "admin_panel_port",
     )
     @classmethod
@@ -1020,6 +1075,7 @@ class Settings(BaseSettings):
         "competitor_audit_image_timeout_seconds",
         "winback_inactivity_scan_seconds",
         "winback_style_update_scan_seconds",
+        "source_retention_scan_seconds",
         "bulk_generation_poll_seconds",
         "smart_variant_poll_seconds",
         "claude_47_timeout_seconds",
@@ -1028,12 +1084,21 @@ class Settings(BaseSettings):
         "yookassa_base_retry_delay_seconds",
         "eye_of_god_image_timeout_seconds",
         "cloudflare_timeout_seconds",
+        "captcha_verify_timeout_seconds",
     )
     @classmethod
     def validate_positive_floats(cls, value: float) -> float:
         if value <= 0:
             raise ValueError("Timeout/retry settings must be positive.")
         return value
+
+    @field_validator("captcha_provider")
+    @classmethod
+    def validate_captcha_provider(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"auto", "turnstile", "recaptcha"}:
+            raise ValueError("CAPTCHA_PROVIDER must be auto, turnstile, or recaptcha.")
+        return normalized
 
     @field_validator("claude_47_max_retries", "yookassa_max_retries")
     @classmethod

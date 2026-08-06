@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.captcha import enforce_generation_behavioral_limit
 from app.api.payments import get_current_user
 from app.application.bulk_generation_service import (
     BulkGenerationNotFoundError,
@@ -260,6 +261,7 @@ async def create_bulk_generation(
     file: Annotated[UploadFile, File(description="ZIP with 1–20 product images")],
     current_user: Annotated[User, Depends(get_current_user)],
     db_session: Annotated[AsyncSession, Depends(get_db_session)],
+    _: Annotated[None, Depends(enforce_generation_behavioral_limit)],
     product_category: Annotated[str | None, Form(max_length=128)] = None,
     engine_mode: Annotated[str, Form()] = "standard",
     post_processing_mode: Annotated[str, Form()] = "fast",

@@ -76,6 +76,13 @@ class BulkGenerationBatch(Base):
         server_default=text("false"),
     )
     source_zip_object_key: Mapped[str] = mapped_column(String(1024), nullable=False)
+    source_zip_retention_status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="available",
+        server_default=text("'available'"),
+        index=True,
+    )
     total_items: Mapped[int] = mapped_column(
         Integer,
         nullable=False,
@@ -185,6 +192,13 @@ class BulkGenerationItem(Base):
         index=True,
     )
     input_object_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    input_retention_status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="available",
+        server_default=text("'available'"),
+        index=True,
+    )
     generation_job_id: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True),
         ForeignKey("generation_jobs.id", ondelete="SET NULL"),

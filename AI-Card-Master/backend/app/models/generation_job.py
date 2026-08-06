@@ -96,7 +96,21 @@ class GenerationJob(Base):
         server_default=text("'fast'"),
     )
     input_object_key: Mapped[str] = mapped_column(String(1024), nullable=False)
+    input_retention_status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="available",
+        server_default=text("'available'"),
+        index=True,
+    )
     archive_object_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    archive_retention_status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="available",
+        server_default=text("'available'"),
+        index=True,
+    )
     thumbnail_object_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     thumbnail_mime_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
     thumbnail_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)

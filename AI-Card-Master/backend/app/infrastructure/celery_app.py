@@ -28,6 +28,7 @@ celery_app = Celery(
         "app.workers.stock_parser_tasks",
         "app.workers.eye_of_god_tasks",
         "app.workers.competitor_audit_tasks",
+        "app.workers.source_retention_tasks",
     ],
 )
 
@@ -77,6 +78,7 @@ celery_app.conf.update(
         "claude.run_eye_of_god_vision": {"queue": "claude.reasoning"},
         "analytics.run_competitor_audit": {"queue": "analytics.scrape"},
         "claude.run_competitor_deep_analysis": {"queue": "claude.reasoning"},
+        "privacy.purge_expired_sources": {"queue": "privacy.retention"},
     },
     beat_schedule={
         "dispatch-generation-outbox": {
@@ -122,6 +124,11 @@ celery_app.conf.update(
                 hour=settings.stock_parser_beat_hour_utc,
                 minute=settings.stock_parser_beat_minute_utc,
             ),
+        },
+        # Zero-Knowledge: purge heavy ZIP/originals after retention window.
+        "privacy-purge-expired-sources": {
+            "task": "privacy.purge_expired_sources",
+            "schedule": settings.source_retention_scan_seconds,
         },
     },
 )

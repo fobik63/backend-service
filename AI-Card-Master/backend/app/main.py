@@ -30,6 +30,7 @@ from app.api import (
     ai_strategy_router,
     analytics_router,
     bulk_generations_router,
+    captcha_router,
     claude_analyses_router,
     claude_reasoning_router,
     visual_audit_router,
@@ -52,6 +53,7 @@ from app.api.images import ensure_uploads_dir
 from app.core.admin_middleware import AdminOnlyMiddleware
 from app.core.cloudflare_middleware import CloudflareProtectionMiddleware
 from app.core.config import get_settings
+from app.core.http_errors import shape_http_exception_body
 from app.core.input_sanitization_middleware import InputSanitizationMiddleware
 from app.core.logging_config import configure_logging
 from app.core.suspicious_activity_middleware import SuspiciousActivityMiddleware
@@ -160,6 +162,7 @@ app.include_router(analytics_router)
 app.include_router(images_router)
 app.include_router(legal_router)
 app.include_router(account_router)
+app.include_router(captcha_router)
 app.include_router(payments_router)
 app.include_router(referrals_router)
 app.include_router(winback_router)
@@ -186,10 +189,8 @@ async def http_exception_handler(_: Request, exc: HTTPException) -> JSONResponse
 
     return JSONResponse(
         status_code=exc.status_code,
-        content={
-            "success": False,
-            "detail": exc.detail,
-        },
+        content=shape_http_exception_body(exc),
+        headers=exc.headers,
     )
 
 

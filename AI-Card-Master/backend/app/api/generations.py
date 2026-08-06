@@ -26,10 +26,12 @@ from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.captcha import enforce_generation_behavioral_limit
 from app.api.payments import get_current_user
 from app.core.config import get_settings
 from app.domain.generation import GenerationJobStatus, MarketplaceTextContent, SlideStatus
 from app.domain.generation import GenerationEngineMode, GenerationPostProcessingMode
+from app.domain.source_retention import SourceRetentionStatus
 from app.infrastructure.generation_history_cache import (
     get_cached_generation_history,
     invalidate_generation_history_cache,
@@ -60,7 +62,10 @@ from app.services.series_generator import build_series_tasks_cached
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/generations", tags=["generations"])
-_ARCHIVE_RETENTION = timedelta(hours=24)
+
+
+def _archive_retention() -> timedelta:
+    return timedelta(hours=get_settings().source_retention_hours)
 
 _MIME_BY_SIGNATURE: tuple[tuple[bytes, str, str], ...] = (
     (b"\x89PNG\r\n\x1a\n", "image/png", ".png"),
@@ -133,7 +138,7 @@ class GenerationHistoryItemResponse(StrictAPIModel):
     thumbnail_url: str | None = None
     thumbnail_mime_type: str | None = None
     thumbnail_size_bytes: int | None = Field(default=None, ge=1, le=100 * 1024)
-    archive_status: Literal["available", "expired", "pending", "unavailable"]
+    archive_status: Literal["available", "expired", "pending", "unavailable", "deleted"]
     archive_url: str | None = None
     archive_expires_at: str | None = None
     provider_used: str | None = None
@@ -288,6 +293,7 @@ async def create_model_generation(
     payload: ModelModeRequest,
     current_user: Annotated[User, Depends(get_current_user)],
     db_session: Annotated[AsyncSession, Depends(get_db_session)],
+    _: Annotated[None, Depends(enforce_generation_behavioral_limit)],
     idempotency_key: Annotated[
         str | None,
         Header(
@@ -379,6 +385,7 @@ async def create_generation(
     form: Annotated[GenerationForm, Depends(parse_generation_form)],
     current_user: Annotated[User, Depends(get_current_user)],
     db_session: Annotated[AsyncSession, Depends(get_db_session)],
+    _: Annotated[None, Depends(enforce_generation_behavioral_limit)],
     idempotency_key: Annotated[
         str | None,
         Header(
@@ -835,7 +842,14 @@ async def _best_effort_delete(storage: Any, object_key: str) -> None:
 def _archive_access_state(
     job: Any,
     now: datetime,
-) -> tuple[Literal["available", "expired", "pending", "unavailable"], datetime | None]:
+) -> tuple[
+    Literal["available", "expired", "pending", "unavailable", "deleted"],
+    datetime | None,
+]:
+    retention_status = getattr(job, "archive_retention_status", None)
+    if retention_status == SourceRetentionStatus.DELETED.value:
+        return "deleted", None
+
     if not job.archive_object_key:
         if job.status == GenerationJobStatus.FAILED.value:
             return "unavailable", None
@@ -845,7 +859,7 @@ def _archive_access_state(
     if job.completed_at is None:
         return "pending", None
 
-    expires_at = _to_utc(job.completed_at) + _ARCHIVE_RETENTION
+    expires_at = _to_utc(job.completed_at) + _archive_retention()
     if _to_utc(now) < expires_at:
         return "available", expires_at
     return "expired", expires_at
