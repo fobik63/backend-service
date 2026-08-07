@@ -29,6 +29,7 @@ from app.api import (
     admin_router,
     ai_strategy_router,
     analytics_router,
+    brand_loras_router,
     bulk_generations_router,
     captcha_router,
     claude_analyses_router,
@@ -53,6 +54,7 @@ from app.api.images import ensure_uploads_dir
 from app.core.admin_middleware import AdminOnlyMiddleware
 from app.core.cloudflare_middleware import CloudflareProtectionMiddleware
 from app.core.config import get_settings
+from app.core.dead_mans_switch_middleware import DeadMansSwitchMiddleware
 from app.core.http_errors import shape_http_exception_body
 from app.core.input_sanitization_middleware import InputSanitizationMiddleware
 from app.core.logging_config import configure_logging
@@ -149,11 +151,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 # Security stack (Starlette: last added = outermost).
-# Order of execution: Cloudflare → Suspicious → Sanitization → AdminOnly → CORS → route.
+# Order: DeadMans → Cloudflare → Suspicious → Sanitization → AdminOnly → CORS → route.
 app.add_middleware(AdminOnlyMiddleware)
 app.add_middleware(InputSanitizationMiddleware)
 app.add_middleware(SuspiciousActivityMiddleware)
 app.add_middleware(CloudflareProtectionMiddleware)
+app.add_middleware(DeadMansSwitchMiddleware)
 
 
 # Register API routers.
@@ -171,6 +174,7 @@ app.include_router(exports_router)
 app.include_router(marketplace_bridge_router)
 app.include_router(bulk_generations_router)
 app.include_router(smart_variants_router)
+app.include_router(brand_loras_router)
 app.include_router(claude_analyses_router)
 app.include_router(claude_reasoning_router)
 app.include_router(visual_audit_router)

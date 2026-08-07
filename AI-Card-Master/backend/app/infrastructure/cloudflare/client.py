@@ -106,6 +106,50 @@ class CloudflareClient:
             logger.warning("Cloudflare zone verify failed", exc_info=True)
             return False
 
+    async def set_security_level(self, level: str) -> bool:
+        """Set zone security level (e.g. ``under_attack``, ``high``, ``medium``).
+
+        Used by Dead Man's Switch to immediately challenge/block public traffic
+        at the Cloudflare edge while origin lockdown runs.
+        """
+
+        if not self._settings.cloudflare_enabled or not self.is_configured:
+            return False
+        if not self._zone_id:
+            return False
+        normalized = level.strip().lower()
+        allowed = {"off", "essentially_off", "low", "medium", "high", "under_attack"}
+        if normalized not in allowed:
+            logger.warning("Invalid Cloudflare security level: %s", level)
+            return False
+        url = (
+            f"{self._base_url}/client/v4/zones/{self._zone_id}"
+            f"/settings/security_level"
+        )
+        headers = {
+            "Authorization": f"Bearer {self._api_token}",
+            "Content-Type": "application/json",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                response = await client.patch(
+                    url,
+                    headers=headers,
+                    json={"value": normalized},
+                )
+                if response.status_code == 200 and response.json().get("success"):
+                    logger.warning("Cloudflare security_level → %s", normalized)
+                    return True
+                logger.warning(
+                    "Cloudflare set_security_level failed: status=%s body=%s",
+                    response.status_code,
+                    response.text[:300],
+                )
+                return False
+        except Exception:
+            logger.warning("Cloudflare set_security_level error", exc_info=True)
+            return False
+
 
 _client: CloudflareClient | None = None
 

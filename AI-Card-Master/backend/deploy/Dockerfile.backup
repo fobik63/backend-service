@@ -1,0 +1,12 @@
+# Minimal image for encrypted pg_dump → S3 (plan §36).
+FROM postgres:16-alpine
+
+RUN apk add --no-cache \
+      aws-cli \
+      openssl \
+      bash \
+      curl \
+      python3 \
+    && rm -rf /var/cache/apk/*
+
+WORKDIR /scripts

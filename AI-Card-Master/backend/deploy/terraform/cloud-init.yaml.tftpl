@@ -1,0 +1,75 @@
+#cloud-config
+# AI-Card-Master host bootstrap (plan §40). Installs Docker and clones the repo;
+# secrets (.env) must be copied via scp/age before one_click_deploy runs.
+package_update: true
+package_upgrade: true
+
+packages:
+  - curl
+  - ca-certificates
+  - gnupg
+  - git
+  - ufw
+  - jq
+  - python3
+  - python3-pip
+  - openssl
+
+users:
+  - default
+  - name: deploy
+    groups: [sudo, docker]
+    shell: /bin/bash
+    sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+    ssh_authorized_keys:
+      - ${ssh_public_key}
+
+write_files:
+  - path: /etc/ai-card-master/bootstrap.env
+    permissions: "0644"
+    content: |
+      DEPLOY_REPO_URL=${deploy_repo_url}
+      DEPLOY_REPO_REF=${deploy_repo_ref}
+      DEPLOY_PROFILE=${deploy_profile}
+      DEPLOY_ROOT=/opt/ai-card-master
+      ROLE=${role}
+
+  - path: /usr/local/sbin/ai-card-bootstrap.sh
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      # shellcheck disable=SC1091
+      source /etc/ai-card-master/bootstrap.env
+      mkdir -p "$DEPLOY_ROOT"
+      if [[ ! -d "$DEPLOY_ROOT/.git" ]]; then
+        git clone --depth 1 --branch "$DEPLOY_REPO_REF" "$DEPLOY_REPO_URL" "$DEPLOY_ROOT"
+      else
+        git -C "$DEPLOY_ROOT" fetch --depth 1 origin "$DEPLOY_REPO_REF"
+        git -C "$DEPLOY_ROOT" checkout "$DEPLOY_REPO_REF"
+        git -C "$DEPLOY_ROOT" pull --ff-only || true
+      fi
+      chown -R deploy:deploy "$DEPLOY_ROOT"
+      echo "[bootstrap] repo ready at $DEPLOY_ROOT (role=$ROLE profile=$DEPLOY_PROFILE)"
+      echo "[bootstrap] copy backend/.env then: sudo -u deploy bash $DEPLOY_ROOT/AI-Card-Master/backend/deploy/one_click_deploy.sh --profile $DEPLOY_PROFILE"
+      # Path may vary if repo root IS the backend — detect:
+      if [[ -f "$DEPLOY_ROOT/backend/deploy/one_click_deploy.sh" ]]; then
+        echo "[bootstrap] hint: $DEPLOY_ROOT/backend/deploy/one_click_deploy.sh"
+      elif [[ -f "$DEPLOY_ROOT/deploy/one_click_deploy.sh" ]]; then
+        echo "[bootstrap] hint: $DEPLOY_ROOT/deploy/one_click_deploy.sh"
+      fi
+
+runcmd:
+  - |
+    install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+    chmod a+r /etc/apt/keyrings/docker.gpg
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list
+    apt-get update
+    apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+    usermod -aG docker deploy || true
+    systemctl enable --now docker
+    /usr/local/sbin/ai-card-bootstrap.sh
+    touch /var/lib/ai-card-master-bootstrap.done
+
+final_message: "AI-Card-Master cloud-init finished. Await .env + one_click_deploy."

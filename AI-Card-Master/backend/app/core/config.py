@@ -39,6 +39,8 @@ class MidjourneyProviderSettings(BaseModel):
     status_path_template: str = "/jobs/{job_id}"
     authorization_scheme: Literal["bearer", "token", "api-key"] = "bearer"
     webhook_token: SecretStr | None = None
+    # Geo tag for regional failover (plan §36), e.g. eu-nl / eu-de / us-east.
+    region: str = Field(default="", max_length=64)
 
     @field_validator("base_url")
     @classmethod
@@ -47,6 +49,11 @@ class MidjourneyProviderSettings(BaseModel):
         if not normalized.startswith(("https://", "http://")):
             raise ValueError("Provider base_url must be an absolute HTTP(S) URL.")
         return normalized
+
+    @field_validator("region")
+    @classmethod
+    def normalize_region(cls, value: str) -> str:
+        return value.strip().lower()
 
 
 class Settings(BaseSettings):
@@ -240,6 +247,53 @@ class Settings(BaseSettings):
         alias="CLOUDFLARE_TIMEOUT_SECONDS",
     )
 
+    # Private tunnel / VPN gateway (plan §37). Admin & SSH stay off the public net.
+    vpn_gateway_cidrs: str = Field(
+        default="10.8.0.0/24,10.7.0.0/24,fd42:42:42::/64",
+        alias="VPN_GATEWAY_CIDRS",
+        description="WireGuard / private CIDRs allowed during Dead Man's lockdown.",
+    )
+    ssh_allow_cidrs: str = Field(
+        default="",
+        alias="SSH_ALLOW_CIDRS",
+        description="Comma-separated CIDRs permitted to reach SSH (host firewall).",
+    )
+
+    # Dead Man's Switch — DB password brute-force → lock external traffic (plan §37).
+    dead_mans_switch_enabled: bool = Field(
+        default=True,
+        alias="DEAD_MANS_SWITCH_ENABLED",
+    )
+    dead_mans_switch_fail_threshold: int = Field(
+        default=5,
+        alias="DEAD_MANS_SWITCH_FAIL_THRESHOLD",
+    )
+    dead_mans_switch_window_seconds: int = Field(
+        default=60,
+        alias="DEAD_MANS_SWITCH_WINDOW_SECONDS",
+    )
+    dead_mans_switch_redis_key: str = Field(
+        default="security:dead_mans_switch",
+        alias="DEAD_MANS_SWITCH_REDIS_KEY",
+    )
+    dead_mans_switch_cloudflare_under_attack: bool = Field(
+        default=True,
+        alias="DEAD_MANS_SWITCH_CLOUDFLARE_UNDER_ATTACK",
+    )
+    dead_mans_switch_run_host_lockdown: bool = Field(
+        default=False,
+        alias="DEAD_MANS_SWITCH_RUN_HOST_LOCKDOWN",
+        description="If true, invoke deploy/lockdown.sh on trigger (needs host mount).",
+    )
+    dead_mans_switch_lockdown_script: str = Field(
+        default="/opt/ai-card-master/deploy/lockdown.sh",
+        alias="DEAD_MANS_SWITCH_LOCKDOWN_SCRIPT",
+    )
+    dead_mans_switch_unlock_script: str = Field(
+        default="/opt/ai-card-master/deploy/unlock.sh",
+        alias="DEAD_MANS_SWITCH_UNLOCK_SCRIPT",
+    )
+
     # Isolated admin microservice (AES-GCM encrypted service token).
     admin_panel_token_secret: SecretStr = Field(
         default=SecretStr(""),
@@ -355,6 +409,16 @@ class Settings(BaseSettings):
         default=Decimal("0"),
         alias="MIDJOURNEY_GENERATION_COST_USD",
     )
+    # Preferred neural geo-region; empty = no preference (plan §36).
+    neural_preferred_region: str = Field(
+        default="",
+        alias="NEURAL_PREFERRED_REGION",
+    )
+    # Comma-separated failover order after preferred, e.g. eu-de,us-east
+    neural_failover_regions: str = Field(
+        default="",
+        alias="NEURAL_FAILOVER_REGIONS",
+    )
     face_fix_api_key: SecretStr | None = Field(default=None, alias="FACE_FIX_API_KEY")
     face_fix_base_url: str = Field(default="", alias="FACE_FIX_BASE_URL")
     face_fix_path: str = Field(default="/v1/face-fix", alias="FACE_FIX_PATH")
@@ -459,6 +523,72 @@ class Settings(BaseSettings):
     smart_variant_poll_batch_size: int = Field(
         default=50,
         alias="SMART_VARIANT_POLL_BATCH_SIZE",
+    )
+
+    # Custom Brand LoRA (enterprise style training)
+    brand_lora_min_references: int = Field(
+        default=20,
+        alias="BRAND_LORA_MIN_REFERENCES",
+    )
+    brand_lora_max_references: int = Field(
+        default=30,
+        alias="BRAND_LORA_MAX_REFERENCES",
+    )
+    brand_lora_training_cost_coins: int = Field(
+        default=50,
+        alias="BRAND_LORA_TRAINING_COST_COINS",
+    )
+    brand_lora_poll_seconds: float = Field(
+        default=20.0,
+        alias="BRAND_LORA_POLL_SECONDS",
+    )
+    brand_lora_poll_batch_size: int = Field(
+        default=50,
+        alias="BRAND_LORA_POLL_BATCH_SIZE",
+    )
+    brand_lora_auto_activate: bool = Field(
+        default=True,
+        alias="BRAND_LORA_AUTO_ACTIVATE",
+    )
+    brand_lora_prefer_replicate: bool = Field(
+        default=True,
+        alias="BRAND_LORA_PREFER_REPLICATE",
+    )
+    replicate_api_token: SecretStr | None = Field(
+        default=None,
+        alias="REPLICATE_API_TOKEN",
+    )
+    replicate_api_base_url: str = Field(
+        default="https://api.replicate.com/v1",
+        alias="REPLICATE_API_BASE_URL",
+    )
+    replicate_timeout_seconds: float = Field(
+        default=60.0,
+        alias="REPLICATE_TIMEOUT_SECONDS",
+    )
+    replicate_lora_destination: str = Field(
+        default="",
+        alias="REPLICATE_LORA_DESTINATION",
+    )
+    replicate_lora_dataset_url_override: str = Field(
+        default="",
+        alias="REPLICATE_LORA_DATASET_URL_OVERRIDE",
+    )
+    replicate_lora_trainer_model: str = Field(
+        default="ostris/flux-dev-lora-trainer",
+        alias="REPLICATE_LORA_TRAINER_MODEL",
+    )
+    replicate_lora_trainer_version: str = Field(
+        default="latest",
+        alias="REPLICATE_LORA_TRAINER_VERSION",
+    )
+    replicate_lora_training_steps: int = Field(
+        default=1000,
+        alias="REPLICATE_LORA_TRAINING_STEPS",
+    )
+    replicate_lora_use_model_trainings_endpoint: bool = Field(
+        default=False,
+        alias="REPLICATE_LORA_USE_MODEL_TRAININGS_ENDPOINT",
     )
 
     # Direct Export (WB / Ozon / Amazon seller drafts)
@@ -980,6 +1110,11 @@ class Settings(BaseSettings):
         "bulk_generation_poll_batch_size",
         "smart_variant_max_colors",
         "smart_variant_poll_batch_size",
+        "brand_lora_min_references",
+        "brand_lora_max_references",
+        "brand_lora_training_cost_coins",
+        "brand_lora_poll_batch_size",
+        "replicate_lora_training_steps",
         "generation_fast_cost_coins",
         "generation_hd_face_fix_cost_coins",
         "style_cache_ttl_seconds",
@@ -1036,6 +1171,8 @@ class Settings(BaseSettings):
         "security_generation_rate_window_seconds",
         "security_captcha_block_ttl_seconds",
         "admin_panel_port",
+        "dead_mans_switch_fail_threshold",
+        "dead_mans_switch_window_seconds",
     )
     @classmethod
     def validate_generation_positive_ints(cls, value: int) -> int:
@@ -1078,6 +1215,8 @@ class Settings(BaseSettings):
         "source_retention_scan_seconds",
         "bulk_generation_poll_seconds",
         "smart_variant_poll_seconds",
+        "brand_lora_poll_seconds",
+        "replicate_timeout_seconds",
         "claude_47_timeout_seconds",
         "claude_47_base_retry_delay_seconds",
         "yookassa_timeout_seconds",
@@ -1233,6 +1372,16 @@ class Settings(BaseSettings):
             host.strip().lower()
             for host in self.generation_allowed_result_hosts.split(",")
             if host.strip()
+        )
+
+    @property
+    def neural_failover_regions_list(self) -> tuple[str, ...]:
+        """Ordered neural geo failover chain after the preferred region (§36)."""
+
+        return tuple(
+            region.strip().lower()
+            for region in self.neural_failover_regions.split(",")
+            if region.strip()
         )
 
     @property

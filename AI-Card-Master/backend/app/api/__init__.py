@@ -5,6 +5,7 @@ from app.api.admin import router as admin_router
 from app.api.ab_tests import router as ab_tests_router
 from app.api.ai_strategy import router as ai_strategy_router
 from app.api.analytics import router as analytics_router
+from app.api.brand_loras import router as brand_loras_router
 from app.api.bulk_generations import router as bulk_generations_router
 from app.api.captcha import router as captcha_router
 from app.api.claude_analyses import router as claude_analyses_router
@@ -31,6 +32,7 @@ __all__ = [
     "ab_tests_router",
     "ai_strategy_router",
     "analytics_router",
+    "brand_loras_router",
     "bulk_generations_router",
     "captcha_router",
     "claude_analyses_router",

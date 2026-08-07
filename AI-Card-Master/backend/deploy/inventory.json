@@ -1,0 +1,113 @@
+{
+  "$schema_comment": "Declarative runtime inventory (plan §40). Consumed by one_click_deploy.py.",
+  "project": "ai-card-master",
+  "plan_section": 40,
+  "target_rto_minutes": 10,
+  "compose": {
+    "project_dir": ".",
+    "base": "docker-compose.yml",
+    "overlays": {
+      "scale": "deploy/docker-compose.scale.yml",
+      "backup": "deploy/docker-compose.backup.yml",
+      "tunnel": "deploy/docker-compose.tunnel.yml"
+    },
+    "profiles": {
+      "minimal": ["base"],
+      "production": ["base", "scale", "backup"],
+      "production_tunnel": ["base", "scale", "backup", "tunnel"],
+      "disaster_recovery": ["base", "scale", "backup"]
+    }
+  },
+  "services": [
+    {
+      "name": "postgres",
+      "role": "database",
+      "image": "postgres:16-alpine",
+      "persistence": ["pgdata"],
+      "ports_public": false,
+      "health": "pg_isready"
+    },
+    {
+      "name": "redis",
+      "role": "cache_broker",
+      "image": "redis:7-alpine",
+      "persistence": ["redisdata"],
+      "ports_public": false,
+      "health": "redis-cli ping"
+    },
+    {
+      "name": "api",
+      "role": "application",
+      "image": "ai-card-master-backend:${IMAGE_TAG}",
+      "replicas_env": "API_REPLICAS",
+      "depends_on": ["postgres", "redis"],
+      "health": "/health/live"
+    },
+    {
+      "name": "worker",
+      "role": "async_worker",
+      "image": "ai-card-master-backend:${IMAGE_TAG}",
+      "replicas_env": "WORKER_REPLICAS",
+      "depends_on": ["postgres", "redis"]
+    },
+    {
+      "name": "beat",
+      "role": "scheduler",
+      "image": "ai-card-master-backend:${IMAGE_TAG}",
+      "replicas": 1,
+      "depends_on": ["redis"]
+    },
+    {
+      "name": "nginx",
+      "role": "edge_proxy",
+      "image": "nginx:1.27-alpine",
+      "overlay": "scale",
+      "public_entry": true,
+      "health": "/health/live"
+    },
+    {
+      "name": "pg-backup",
+      "role": "backup_sidecar",
+      "overlay": "backup",
+      "schedule": "every 6h → isolated S3 vault"
+    },
+    {
+      "name": "cloudflared",
+      "role": "private_tunnel",
+      "overlay": "tunnel",
+      "optional": true
+    }
+  ],
+  "volumes": ["pgdata", "redisdata", "uploads"],
+  "required_env_production": [
+    "POSTGRES_PASSWORD",
+    "JWT_SECRET_KEY",
+    "ADMIN_PANEL_TOKEN_SECRET",
+    "DATABASE_URL",
+    "REDIS_URL"
+  ],
+  "recommended_env_production": [
+    "BACKUP_S3_ENDPOINT_URL",
+    "BACKUP_S3_ACCESS_KEY_ID",
+    "BACKUP_S3_SECRET_ACCESS_KEY",
+    "BACKUP_S3_BUCKET",
+    "BACKUP_ENCRYPTION_KEY",
+    "TELEGRAM_ERROR_BOT_TOKEN",
+    "TELEGRAM_ERROR_CHAT_ID",
+    "CLOUDFLARE_TUNNEL_TOKEN"
+  ],
+  "terraform": {
+    "path": "deploy/terraform",
+    "provider": "hetzner",
+    "resources": ["hcloud_server.primary", "hcloud_server.secondary", "hcloud_firewall.origin"]
+  },
+  "bootstrap_steps": [
+    "preflight_env",
+    "compose_build",
+    "compose_up",
+    "alembic_upgrade",
+    "optional_restore",
+    "health_ready",
+    "optional_harden"
+  ]
+}

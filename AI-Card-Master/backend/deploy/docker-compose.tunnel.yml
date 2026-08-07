@@ -1,0 +1,31 @@
+# Cloudflare Tunnel overlay — hide origin IP completely (plan §37).
+# Origin accepts NO public inbound HTTP; cloudflared dials out to Cloudflare edge.
+#
+# Prerequisites:
+#   1. Create a tunnel in Zero Trust → Networks → Tunnels
+#   2. Set CLOUDFLARE_TUNNEL_TOKEN in .env
+#   3. Route hostname api.example.com → http://nginx:80 (or http://api:8000)
+#
+# Usage from backend/:
+#   docker compose -f docker-compose.yml -f deploy/docker-compose.scale.yml \
+#     -f deploy/docker-compose.tunnel.yml up -d
+#
+# Admin panel stays on 127.0.0.1 / WireGuard only (never publish :8100).
+
+services:
+  # Remove public host port mapping; nginx is internal-only for the tunnel.
+  nginx:
+    ports: !reset []
+    expose:
+      - "80"
+
+  cloudflared:
+    image: cloudflare/cloudflared:2025.2.0
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      nginx:
+        condition: service_healthy
+    # Outbound-only; no ports published.

@@ -20,6 +20,7 @@ from app.models import Base
 # Ensure all ORM models are registered on Base.metadata before autogenerate.
 from app.models import api_usage_cost as _api_usage_cost  # noqa: F401
 from app.models import bulk_generation as _bulk_generation  # noqa: F401
+from app.models import brand_lora as _brand_lora  # noqa: F401
 from app.models import claude_reasoning as _claude_reasoning  # noqa: F401
 from app.models import generation as _generation  # noqa: F401
 from app.models import smart_variant as _smart_variant  # noqa: F401

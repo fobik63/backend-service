@@ -178,6 +178,22 @@ def _format_http_alert(request: Request, exc: Exception) -> str:
     )
 
 
+async def send_operator_telegram(message: str) -> None:
+    """Best-effort alert to the operator Telegram chat (no exception traceback)."""
+
+    settings = get_settings()
+    token = (
+        settings.telegram_error_bot_token.get_secret_value().strip()
+        if settings.telegram_error_bot_token is not None
+        else ""
+    )
+    chat_id = (settings.telegram_error_chat_id or "").strip()
+    if not token or not chat_id:
+        logger.warning("Operator Telegram not configured; alert skipped")
+        return
+    await _send_telegram_async(token=token, chat_id=chat_id, message=message)
+
+
 async def _send_telegram_async(*, token: str, chat_id: str, message: str) -> None:
     settings = get_settings()
     url = f"https://api.telegram.org/bot{token}/sendMessage"

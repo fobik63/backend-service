@@ -698,6 +698,7 @@ class MidjourneyConfig:
     job_status_path_template: str = "/jobs/{job_id}"
     max_result_bytes: int = 30 * 1024 * 1024
     allowed_result_hosts: tuple[str, ...] = ()
+    region: str = ""
 
     @classmethod
     def from_env(cls) -> "MidjourneyConfig":
@@ -988,6 +989,12 @@ class MidjourneyService:
         """Stable provider adapter name used by webhook routing."""
 
         return self._config.name
+
+    @property
+    def region(self) -> str:
+        """Geo region tag for failover ordering (plan §36)."""
+
+        return self._config.region
 
     @property
     def callback_token(self) -> str:
@@ -1708,6 +1715,7 @@ def get_async_midjourney_providers() -> tuple[MidjourneyService, ...]:
                     job_status_path_template=provider.status_path_template,
                     max_result_bytes=settings.generation_max_result_bytes,
                     allowed_result_hosts=tuple(settings.allowed_result_hosts),
+                    region=provider.region,
                 )
             )
         _async_midjourney_services = services
@@ -1727,15 +1735,49 @@ async def get_healthy_async_midjourney_providers(
     *,
     exclude: frozenset[str] = frozenset(),
 ) -> tuple[MidjourneyService, ...]:
-    """Return configured providers whose Redis circuit is currently closed."""
+    """Return healthy providers, preferred neural region first (plan §36)."""
 
+    settings = get_settings()
     providers: list[MidjourneyService] = []
     for provider in get_async_midjourney_providers():
         if provider.name in exclude:
             continue
         if not await is_provider_circuit_open(provider.name):
             providers.append(provider)
-    return tuple(providers)
+    return tuple(
+        order_providers_by_region(
+            providers,
+            preferred_region=settings.neural_preferred_region,
+            failover_regions=settings.neural_failover_regions_list,
+        )
+    )
+
+
+def order_providers_by_region(
+    providers: list[MidjourneyService] | tuple[MidjourneyService, ...],
+    *,
+    preferred_region: str = "",
+    failover_regions: tuple[str, ...] = (),
+) -> list[MidjourneyService]:
+    """Stable sort: preferred → failover chain → unlabeled → other regions."""
+
+    preferred = preferred_region.strip().lower()
+    failover = tuple(r.strip().lower() for r in failover_regions if r.strip())
+    rank: dict[str, int] = {}
+    if preferred:
+        rank[preferred] = 0
+    for index, region in enumerate(failover, start=1):
+        rank.setdefault(region, index)
+    unlabeled = len(rank) + 1
+    other = unlabeled + 1
+
+    def _key(provider: MidjourneyService) -> tuple[int, str]:
+        region = (provider.region or "").strip().lower()
+        if not region:
+            return (unlabeled, provider.name)
+        return (rank.get(region, other), provider.name)
+
+    return sorted(providers, key=_key)
 
 
 def get_stable_diffusion_adapter() -> StableDiffusionImmediateAdapter:

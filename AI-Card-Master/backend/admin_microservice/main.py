@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.admin_token import AdminTokenClaims, AdminTokenError, verify_admin_panel_token
 from app.core.cloudflare_middleware import CloudflareProtectionMiddleware
 from app.core.config import get_settings
+from app.core.dead_mans_switch_middleware import DeadMansSwitchMiddleware
 from app.core.suspicious_activity_middleware import SuspiciousActivityMiddleware
 from app.models.database import engine, get_db_session
 from app.models.enums import SubscriptionStatus
@@ -45,6 +46,13 @@ from app.services.admin_service import (
     AdminStatistics,
     AdminUserView,
     AdminValidationError,
+)
+from app.services.dead_mans_switch import (
+    AuthFailureEvent,
+    DeadMansSwitchState,
+    extract_source_ip,
+    get_dead_mans_switch,
+    looks_like_db_auth_failure,
 )
 
 logging.basicConfig(
@@ -129,6 +137,29 @@ class AdminUpdateSubscriptionRequest(StrictAdminModel):
         raise ValueError("subscription_status must be a valid subscription value.")
 
 
+class DeadMansSwitchStatusResponse(StrictAdminModel):
+    active: bool
+    triggered_at: str | None = None
+    reason: str | None = None
+    source_ip: str | None = None
+    fail_count: int = 0
+    cloudflare_under_attack: bool = False
+    host_lockdown: bool = False
+
+
+class DbAuthFailureReportRequest(StrictAdminModel):
+    """Ingest a Postgres auth-failure observation from the host watchdog."""
+
+    line: str = Field(..., min_length=8, max_length=4000)
+    source_ip: str | None = Field(default=None, max_length=64)
+    user: str | None = Field(default=None, max_length=128)
+
+
+class DeadMansTriggerRequest(StrictAdminModel):
+    reason: str = Field(..., min_length=4, max_length=1000)
+    source_ip: str = Field(default="manual", max_length=64)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
     settings = get_settings()
@@ -171,6 +202,7 @@ if settings.admin_panel_cors_origins_list:
 
 app.add_middleware(CloudflareProtectionMiddleware)
 app.add_middleware(SuspiciousActivityMiddleware)
+app.add_middleware(DeadMansSwitchMiddleware)
 
 
 def _extract_raw_token(
@@ -245,6 +277,101 @@ def _parse_optional_user_id(value: str | None) -> UUID | None:
 @app.get("/health", tags=["system"])
 async def health() -> dict[str, str]:
     return {"status": "ok", "service": "admin-panel"}
+
+
+def _dms_response(state: DeadMansSwitchState) -> DeadMansSwitchStatusResponse:
+    return DeadMansSwitchStatusResponse(
+        active=state.active,
+        triggered_at=state.triggered_at,
+        reason=state.reason,
+        source_ip=state.source_ip,
+        fail_count=state.fail_count,
+        cloudflare_under_attack=state.cloudflare_under_attack,
+        host_lockdown=state.host_lockdown,
+    )
+
+
+@app.get(
+    "/security/dead-mans-switch",
+    response_model=DeadMansSwitchStatusResponse,
+    tags=["security"],
+)
+@app.get(
+    "/security/dead-mans-switch/status",
+    response_model=DeadMansSwitchStatusResponse,
+    tags=["security"],
+)
+async def dead_mans_switch_status(
+    _: AdminTokenClaims = Depends(require_admin_panel_token),
+) -> DeadMansSwitchStatusResponse:
+    """Return current Dead Man's Switch lockdown state."""
+
+    return _dms_response(await get_dead_mans_switch().get_state())
+
+
+@app.post(
+    "/security/dead-mans-switch/db-auth-failure",
+    response_model=DeadMansSwitchStatusResponse,
+    tags=["security"],
+)
+async def report_db_auth_failure(
+    payload: DbAuthFailureReportRequest,
+    _: AdminTokenClaims = Depends(require_admin_panel_token),
+) -> DeadMansSwitchStatusResponse:
+    """Admin panel ingestion point for Postgres password brute-force events.
+
+    The host watchdog (`deploy/dead_mans_watchdog.py`) tails Postgres logs and
+    POSTs matching lines here. Crossing ``DEAD_MANS_SWITCH_FAIL_THRESHOLD``
+    within the sliding window activates full external lockdown + Telegram.
+    """
+
+    if not looks_like_db_auth_failure(payload.line):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Line does not look like a PostgreSQL authentication failure.",
+        )
+    source_ip = (payload.source_ip or "").strip() or extract_source_ip(payload.line)
+    event = AuthFailureEvent(
+        source_ip=source_ip,
+        raw_line=payload.line[:500],
+        user=payload.user,
+    )
+    state = await get_dead_mans_switch().record_auth_failure(event)
+    return _dms_response(state)
+
+
+@app.post(
+    "/security/dead-mans-switch/trigger",
+    response_model=DeadMansSwitchStatusResponse,
+    tags=["security"],
+)
+async def trigger_dead_mans_switch(
+    payload: DeadMansTriggerRequest,
+    _: AdminTokenClaims = Depends(require_admin_panel_token),
+) -> DeadMansSwitchStatusResponse:
+    """Manually arm Dead Man's Switch (drill / confirmed incident)."""
+
+    state = await get_dead_mans_switch().trigger(
+        reason=payload.reason,
+        source_ip=payload.source_ip,
+        fail_count=0,
+    )
+    return _dms_response(state)
+
+
+@app.post(
+    "/security/dead-mans-switch/clear",
+    response_model=DeadMansSwitchStatusResponse,
+    tags=["security"],
+)
+async def clear_dead_mans_switch(
+    claims: AdminTokenClaims = Depends(require_admin_panel_token),
+) -> DeadMansSwitchStatusResponse:
+    """Clear lockdown after investigation (VPN / localhost only recommended)."""
+
+    operator = claims.operator_label or "admin"
+    state = await get_dead_mans_switch().clear(operator=str(operator))
+    return _dms_response(state)
 
 
 @app.get("/stats", response_model=AdminStatisticsResponse)

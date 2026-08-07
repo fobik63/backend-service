@@ -1,0 +1,18 @@
+# Example cloudflared config when using a credentials file instead of TUNNEL_TOKEN.
+# Prefer TUNNEL_TOKEN via docker-compose.tunnel.yml in production.
+#
+# Place as /etc/cloudflared/config.yml on the host (or mount into the container).
+
+tunnel: REPLACE_TUNNEL_UUID
+credentials-file: /etc/cloudflared/REPLACE_TUNNEL_UUID.json
+
+ingress:
+  - hostname: api.example.com
+    service: http://nginx:80
+    originRequest:
+      noTLSVerify: true
+      connectTimeout: 10s
+  # Optional: Cloudflare Access–protected admin (still prefer VPN bind)
+  # - hostname: admin.example.com
+  #   service: http://127.0.0.1:8100
+  - service: http_status:404

@@ -1,4 +1,4 @@
-# Launch Checklist — AI-Card-Master (plan §24)
+# Launch Checklist — AI-Card-Master (plan §24 / §40)
 
 Use this list before opening public traffic. Check items in order; do not skip security or payments.
 
@@ -7,9 +7,12 @@ Use this list before opening public traffic. Check items in order; do not skip s
 ```bash
 cd backend
 python deploy/preflight_audit.py
+python deploy/one_click_deploy.py --print-inventory
 ```
 
 Must exit `0`. Scans `app/` + `admin_microservice/` for `print`/`console.log`, debuggers, and hardcoded / test API keys.
+
+IaC inventory (`deploy/inventory.json`) must list postgres, redis, api, worker, beat, nginx, pg-backup. See `deploy/IAC.md`.
 
 ## 1) Secrets & environment
 
@@ -27,17 +30,25 @@ Must exit `0`. Scans `app/` + `admin_microservice/` for `print`/`console.log`, d
 - [ ] Legal block filled: operator name, address, support/privacy emails, public site URL
 - [ ] `CORS_ORIGINS` = production frontend origin(s) only
 - [ ] `ADMIN_ALLOWED_USER_ID` = your user UUID
-- [ ] Cloudflare: orange-cloud DNS, `CLOUDFLARE_ENABLED=true`, consider `CLOUDFLARE_ENFORCE_EDGE=true`
+- [ ] Cloudflare: orange-cloud DNS **or** Tunnel (`deploy/docker-compose.tunnel.yml`), `CLOUDFLARE_ENABLED=true`, `CLOUDFLARE_ENFORCE_EDGE=true`
+- [ ] Origin harden: `sudo bash deploy/harden_host.sh` (SSH keys + IP allowlist, unused ports closed) — see `deploy/PRIVATE_TUNNEL.md`
+- [ ] WireGuard VPN for admin/SSH; `ADMIN_PANEL_BIND_HOST` not public
+- [ ] Dead Man's Switch watchdog running (`deploy/dead_mans_watchdog.py`) + Telegram drill
 
 ## 2) Database & migrations
 
-- [ ] PostgreSQL reachable; backups scheduled (target: every 6h — plan §36)
+- [ ] PostgreSQL reachable; backups every 6h to **isolated** vault (`deploy/docker-compose.backup.yml`, plan §36)
+- [ ] Restore drill documented: `bash deploy/postgres_restore.sh s3://…`
+- [ ] Geo failover watchdog configured (`deploy/failover_watchdog.py`, ≤30s SLO)
 - [ ] `alembic upgrade head` on release (done by `deploy/release.sh`)
 - [ ] History indexes present (`ix_generation_jobs_user_id_created_at`, …)
 - [ ] Smoke: create user → trial/payment path → one generation job
-
+- [ ] Midjourney providers tagged with `region` + `NEURAL_PREFERRED_REGION` / failover list
 ## 3) Runtime stack
 
+- [ ] **One-click / IaC:** stack brought up via `bash deploy/one_click_deploy.sh --profile production_tunnel` (or Terraform → cloud-init → same script) — `deploy/IAC.md`
+- [ ] Terraform (optional): `deploy/terraform` applied; firewall does **not** expose 5432/6379/8100
+- [ ] DR drill: new VM + `--restore s3://…` finishes within **≈10 minutes**
 - [ ] Redis healthy (`/health/ready` → redis true)
 - [ ] API via Nginx only (`deploy/docker-compose.scale.yml`); `:8000` not public
 - [ ] Postgres/Redis ports not published to the internet
@@ -67,7 +78,9 @@ python deploy/autoscale.py
 - [ ] Admin `/api/v1/admin` blocked for non-admin users
 - [ ] Admin microservice bound to localhost / VPN only
 - [ ] Rate limits + CAPTCHA path smoke-tested (429 / `CAPTCHA_REQUIRED`)
-- [ ] SSH keys only; unused ports closed (plan §37)
+- [ ] SSH keys only; unused ports closed (plan §37) — `harden_host.sh` + Tunnel
+- [ ] Dead Man's Switch drill: inject 5 Postgres auth-fail lines → Telegram + API 503
+- [ ] Clear lockdown from VPN (`POST /security/dead-mans-switch/clear`)
 
 ## 6) Payments & legal (GDPR)
 

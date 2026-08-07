@@ -1,0 +1,17 @@
+# Copy to terraform.tfvars (never commit secrets).
+#   cp terraform.tfvars.example terraform.tfvars
+
+hcloud_token    = "replace_with_hetzner_api_token"
+ssh_public_key = "ssh-ed25519 AAAA... deploy@ai-card-master"
+
+project_name        = "ai-card-master"
+primary_location    = "fsn1"   # DE
+secondary_location  = "hel1"   # FI — different DC for geo failover (§36)
+server_type         = "cpx31"
+enable_secondary    = true
+enable_public_http  = false    # false = Cloudflare Tunnel only (§37)
+ssh_allow_cidrs     = ["203.0.113.10/32"]  # jump / VPN egress
+
+deploy_repo_url = "https://github.com/YOUR_ORG/AI-Card-Master.git"
+deploy_repo_ref = "main"
+deploy_profile  = "production_tunnel"

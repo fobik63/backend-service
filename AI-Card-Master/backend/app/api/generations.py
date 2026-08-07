@@ -29,9 +29,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.captcha import enforce_generation_behavioral_limit
 from app.api.payments import get_current_user
 from app.core.config import get_settings
+from app.domain.brand_lora import (
+    apply_brand_filter_to_prompt,
+    apply_brand_filter_to_style,
+)
 from app.domain.generation import GenerationJobStatus, MarketplaceTextContent, SlideStatus
 from app.domain.generation import GenerationEngineMode, GenerationPostProcessingMode
 from app.domain.source_retention import SourceRetentionStatus
+from app.infrastructure.brand_lora_factory import build_brand_lora_service
 from app.infrastructure.generation_history_cache import (
     get_cached_generation_history,
     invalidate_generation_history_cache,
@@ -58,10 +63,43 @@ from app.services.s3_storage import (
     S3StorageError,
     get_s3_storage,
 )
-from app.services.series_generator import build_series_tasks_cached
+from app.services.series_generator import SeriesTask, build_series_tasks_cached
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/generations", tags=["generations"])
+
+
+async def _slide_tasks_with_brand_lora(
+    db_session: AsyncSession,
+    *,
+    user_id: UUID,
+    slide_tasks: tuple[SeriesTask, ...] | list[SeriesTask],
+) -> tuple[SeriesTask, ...]:
+    """Auto-inject the user's active Custom Brand LoRA into every slide."""
+
+    try:
+        brand_filter = await build_brand_lora_service(db_session).get_active_filter(
+            user_id=user_id
+        )
+    except Exception:
+        logger.warning(
+            "Active Brand LoRA lookup failed user_id=%s; continuing without filter",
+            user_id,
+            exc_info=True,
+        )
+        brand_filter = None
+    if brand_filter is None:
+        return tuple(slide_tasks)
+    return tuple(
+        SeriesTask(
+            slide_key=task.slide_key,
+            selected_style=apply_brand_filter_to_style(
+                task.selected_style, brand_filter
+            ),
+            user_text=apply_brand_filter_to_prompt(task.user_text, brand_filter),
+        )
+        for task in slide_tasks
+    )
 
 
 def _archive_retention() -> timedelta:
@@ -341,6 +379,11 @@ async def create_model_generation(
         background=payload.background,
         pose=payload.pose,
     )
+    slide_tasks = await _slide_tasks_with_brand_lora(
+        db_session,
+        user_id=current_user.id,
+        slide_tasks=(task,),
+    )
     try:
         job, created = await repository.create_job(
             user_id=current_user.id,
@@ -352,7 +395,7 @@ async def create_model_generation(
             product_category=MODEL_VTO_PRODUCT_CATEGORY,
             apply_text_overlays=False,
             overlay_texts={},
-            slide_tasks=(task,),
+            slide_tasks=slide_tasks,
         )
         if created:
             await invalidate_generation_history_cache(current_user.id)
@@ -442,6 +485,11 @@ async def create_generation(
             presign=False,
         )
         uploaded = True
+        slide_tasks = await _slide_tasks_with_brand_lora(
+            db_session,
+            user_id=current_user.id,
+            slide_tasks=await build_series_tasks_cached(form.product_category),
+        )
         job, created = await repository.create_job(
             user_id=current_user.id,
             idempotency_key=idempotency_key,
@@ -452,7 +500,7 @@ async def create_generation(
             product_category=form.product_category,
             apply_text_overlays=form.apply_text_overlays,
             overlay_texts=form.overlay_texts,
-            slide_tasks=await build_series_tasks_cached(form.product_category),
+            slide_tasks=slide_tasks,
         )
         if not created:
             await _best_effort_delete(storage, input_key)

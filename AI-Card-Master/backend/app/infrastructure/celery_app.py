@@ -19,6 +19,7 @@ celery_app = Celery(
         "app.workers.winback_tasks",
         "app.workers.bulk_generation_tasks",
         "app.workers.smart_variant_tasks",
+        "app.workers.brand_lora_tasks",
         "app.workers.claude_reasoning_tasks",
         "app.workers.visual_audit_tasks",
         "app.workers.oracle_tasks",
@@ -62,6 +63,8 @@ celery_app.conf.update(
         "bulk.poll_active_batches": {"queue": "bulk"},
         "smart_variant.recolor_and_enqueue": {"queue": "smart_variant"},
         "smart_variant.poll_active_syncs": {"queue": "smart_variant"},
+        "brand_lora.start_training": {"queue": "brand_lora"},
+        "brand_lora.poll_active_trainings": {"queue": "brand_lora"},
         "claude.run_chain_of_thought": {"queue": "claude.reasoning"},
         "claude.dispatch_outbox": {"queue": "claude.recovery"},
         "claude.recover_stalled": {"queue": "claude.recovery"},
@@ -112,6 +115,10 @@ celery_app.conf.update(
         "smart-variant-poll-active-syncs": {
             "task": "smart_variant.poll_active_syncs",
             "schedule": settings.smart_variant_poll_seconds,
+        },
+        "brand-lora-poll-active-trainings": {
+            "task": "brand_lora.poll_active_trainings",
+            "schedule": settings.brand_lora_poll_seconds,
         },
         "ab-test-poll-active-experiments": {
             "task": "ab_test.poll_active_experiments",
