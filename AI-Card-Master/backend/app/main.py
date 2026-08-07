@@ -59,9 +59,11 @@ from app.core.cloudflare_middleware import CloudflareProtectionMiddleware
 from app.core.config import get_settings
 from app.core.dead_mans_switch_middleware import DeadMansSwitchMiddleware
 from app.core.http_errors import shape_http_exception_body
+from app.core.idempotency_middleware import IdempotencyMiddleware
 from app.core.input_sanitization_middleware import InputSanitizationMiddleware
 from app.core.logging_config import configure_logging
 from app.core.payload_size_limiter_middleware import PayloadSizeLimiterMiddleware
+from app.core.rate_limit import limiter, rate_limit_exceeded_handler
 from app.core.request_context_middleware import RequestContextMiddleware
 from app.core.security_headers_middleware import SecurityHeadersMiddleware
 from app.core.suspicious_activity_middleware import SuspiciousActivityMiddleware
@@ -76,7 +78,8 @@ from app.services.s3_storage import (
     get_s3_storage,
 )
 from app.services.telegram_alerts import notify_critical_500
-
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIASGIMiddleware
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -148,6 +151,10 @@ app = FastAPI(
     openapi_url="/openapi.json" if _docs_enabled else None,
 )
 
+# Cascading slowapi rate limits (Redis). Must be attached before middleware.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+
 
 # CORS: allow only explicitly configured frontend origins (ALLOWED_ORIGINS).
 # Wildcard origins/methods/headers are rejected in production via Settings.
@@ -161,9 +168,11 @@ app.add_middleware(
     max_age=600,
 )
 # Security stack (Starlette: last added = outermost).
-# Order: DeadMans → SecurityHeaders → Cloudflare → PayloadSize → RequestContext
-#        → Great Wall → Sanitization → AdminOnly → CORS → route.
+# Order: SlowAPI → DeadMans → SecurityHeaders → Cloudflare → PayloadSize
+#        → RequestContext → Great Wall → Sanitization → Idempotency
+#        → AdminOnly → CORS → route.
 app.add_middleware(AdminOnlyMiddleware)
+app.add_middleware(IdempotencyMiddleware)
 app.add_middleware(InputSanitizationMiddleware)
 app.add_middleware(SuspiciousActivityMiddleware)
 app.add_middleware(RequestContextMiddleware)
@@ -171,6 +180,7 @@ app.add_middleware(PayloadSizeLimiterMiddleware)
 app.add_middleware(CloudflareProtectionMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(DeadMansSwitchMiddleware)
+app.add_middleware(SlowAPIASGIMiddleware)
 
 
 # Register API routers.
@@ -247,6 +257,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 
 
 @app.get("/", response_model=RootResponse, tags=["system"])
+@limiter.exempt
 async def root() -> RootResponse:
     """Basic root route.
 
@@ -269,6 +280,7 @@ async def root() -> RootResponse:
 
 
 @app.get("/health", response_model=HealthResponse, tags=["system"])
+@limiter.exempt
 async def health() -> HealthResponse:
     """Simple health check endpoint."""
 
@@ -283,6 +295,7 @@ async def health() -> HealthResponse:
 
 
 @app.get("/health/live", response_model=HealthResponse, tags=["system"])
+@limiter.exempt
 async def liveness() -> HealthResponse:
     """Process-only liveness; orchestration should restart on failure."""
 
@@ -290,6 +303,7 @@ async def liveness() -> HealthResponse:
 
 
 @app.get("/health/ready", response_model=ReadinessResponse, tags=["system"])
+@limiter.exempt
 async def readiness(response: Response) -> ReadinessResponse:
     """Check critical dependencies while keeping liveness independent."""
 

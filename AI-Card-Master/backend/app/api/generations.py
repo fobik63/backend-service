@@ -19,6 +19,7 @@ from fastapi import (
     Header,
     HTTPException,
     Query,
+    Request,
     UploadFile,
     status,
 )
@@ -30,6 +31,7 @@ from app.api.captcha import enforce_generation_behavioral_limit
 from app.api.payments import get_current_user
 from app.application.generation_cabinet_service import GenerationCabinetService
 from app.core.config import get_settings
+from app.core.rate_limit import generations_user_limit
 from app.domain.silent_ban import pick_shadow_delay_seconds
 from app.domain.brand_dna import (
     apply_brand_dna_to_prompt,
@@ -397,7 +399,9 @@ async def parse_generation_form(
         "that transfers clothing from a private source image onto an AI model."
     ),
 )
+@generations_user_limit
 async def create_model_generation(
+    request: Request,
     payload: ModelModeRequest,
     current_user: Annotated[User, Depends(get_current_user)],
     db_session: Annotated[AsyncSession, Depends(get_db_session)],
@@ -495,7 +499,9 @@ async def create_model_generation(
     response_model=GenerationCreateResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
+@generations_user_limit
 async def create_generation(
+    request: Request,
     file: Annotated[UploadFile, File(description="JPEG, PNG, or WebP product photo")],
     form: Annotated[GenerationForm, Depends(parse_generation_form)],
     current_user: Annotated[User, Depends(get_current_user)],
@@ -621,7 +627,9 @@ async def create_generation(
 
 
 @router.get("/history", response_model=list[GenerationHistoryItemResponse])
+@generations_user_limit
 async def list_generation_history(
+    request: Request,
     current_user: Annotated[User, Depends(get_current_user)],
     db_session: Annotated[AsyncSession, Depends(get_db_session)],
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
@@ -732,7 +740,9 @@ async def list_generation_history(
 
 
 @router.get("/{task_id}", response_model=GenerationStatusResponse)
+@generations_user_limit
 async def get_generation_status(
+    request: Request,
     task_id: UUID,
     current_user: Annotated[User, Depends(get_current_user)],
     db_session: Annotated[AsyncSession, Depends(get_db_session)],

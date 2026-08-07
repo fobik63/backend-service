@@ -114,13 +114,13 @@ class Settings(BaseSettings):
     cors_allow_headers: str = Field(
         default=(
             "Authorization,Content-Type,Accept,Origin,X-Request-Id,"
-            "X-Visitor-Id,Idempotency-Key,X-API-Key,"
+            "X-Visitor-Id,Idempotency-Key,X-Idempotency-Key,X-API-Key,"
             "X-Webhook-Token,X-Webhook-Signature"
         ),
         alias="CORS_ALLOW_HEADERS",
     )
     cors_expose_headers: str = Field(
-        default="X-Request-Id",
+        default="X-Request-Id,Retry-After,X-Idempotency-Replayed",
         alias="CORS_EXPOSE_HEADERS",
     )
 
@@ -185,6 +185,46 @@ class Settings(BaseSettings):
         default=120,
         alias="SECURITY_RATE_LIMIT_PER_MINUTE",
         description="Per-IP Redis rate limit window budget (Great Wall §61).",
+    )
+    # Cascading slowapi + Redis limits (public / auth / generations).
+    slowapi_enabled: bool = Field(
+        default=True,
+        alias="SLOWAPI_ENABLED",
+        description="Enable slowapi cascading rate limits (Redis-backed).",
+    )
+    slowapi_global_per_minute: int = Field(
+        default=100,
+        alias="SLOWAPI_GLOBAL_PER_MINUTE",
+        description="Default per-IP budget for public endpoints (slowapi).",
+    )
+    slowapi_auth_per_minute: int = Field(
+        default=5,
+        alias="SLOWAPI_AUTH_PER_MINUTE",
+        description="Shared per-IP budget for /auth login+register (brute-force).",
+    )
+    slowapi_generations_per_minute: int = Field(
+        default=10,
+        alias="SLOWAPI_GENERATIONS_PER_MINUTE",
+        description="Shared per-user_id budget for /generations/* endpoints.",
+    )
+    # Redis idempotency for coin charges / generation task creation.
+    idempotency_middleware_enabled: bool = Field(
+        default=True,
+        alias="IDEMPOTENCY_MIDDLEWARE_ENABLED",
+        description=(
+            "Enable Redis idempotency for POST/PUT generation and charge routes "
+            "when X-Idempotency-Key is present."
+        ),
+    )
+    idempotency_processing_ttl_seconds: int = Field(
+        default=60,
+        alias="IDEMPOTENCY_PROCESSING_TTL_SECONDS",
+        description="TTL for in-flight PROCESSING markers (concurrent → 409).",
+    )
+    idempotency_response_ttl_seconds: int = Field(
+        default=900,
+        alias="IDEMPOTENCY_RESPONSE_TTL_SECONDS",
+        description="TTL for cached successful responses (15 minutes).",
     )
     security_api_key_rate_limit_per_minute: int = Field(
         default=300,
@@ -1508,6 +1548,11 @@ class Settings(BaseSettings):
         "competitor_audit_max_vision_images",
         "zero_hallucination_max_vision_images",
         "security_rate_limit_per_minute",
+        "slowapi_global_per_minute",
+        "slowapi_auth_per_minute",
+        "slowapi_generations_per_minute",
+        "idempotency_processing_ttl_seconds",
+        "idempotency_response_ttl_seconds",
         "security_auto_block_threat_score",
         "security_ip_block_ttl_seconds",
         "security_max_json_body_bytes",

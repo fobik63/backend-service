@@ -17,6 +17,7 @@ from app.application.auth_service import (
     AuthNotFoundError,
     AuthService,
 )
+from app.core.rate_limit import auth_bruteforce_limit
 from app.domain.auth import LoginCommand, RegisterCommand
 from app.domain.signup_trial import SignupAbuseContext
 from app.infrastructure.auth_factory import build_auth_service
@@ -117,6 +118,7 @@ def _signup_abuse_context(request: Request) -> SignupAbuseContext:
     status_code=status.HTTP_201_CREATED,
     summary="Register a new user account",
 )
+@auth_bruteforce_limit
 async def register(
     payload: RegisterRequest,
     request: Request,
@@ -151,8 +153,10 @@ async def register(
     response_model=AuthSessionResponse,
     summary="Login and obtain JWT access/refresh tokens",
 )
+@auth_bruteforce_limit
 async def login(
     payload: LoginRequest,
+    request: Request,
     auth: AuthService = Depends(get_auth_service),
 ) -> AuthSessionResponse:
     try:
