@@ -370,6 +370,37 @@ class _FakeRepo:
         self.jobs[job_id] = updated
         return updated
 
+    async def save_filter_checkpoint(
+        self,
+        *,
+        job_id: UUID,
+        filter_report: dict,
+        next_status: VisualAuditJobStatus,
+    ) -> VisualAuditJobView:
+        job = self.jobs[job_id]
+        updated = VisualAuditJobView(
+            id=job.id,
+            user_id=job.user_id,
+            status=next_status,
+            celery_task_id=job.celery_task_id,
+            niche_key=job.niche_key,
+            marketplace=job.marketplace,
+            cards_payload=job.cards_payload,
+            filter_config=job.filter_config,
+            filter_report=filter_report,
+            vision_dissections=job.vision_dissections,
+            generator_config=job.generator_config,
+            model_name=job.model_name,
+            error_message=job.error_message,
+            input_tokens=job.input_tokens,
+            output_tokens=job.output_tokens,
+            created_at=job.created_at,
+            updated_at=datetime.now(UTC),
+            completed_at=job.completed_at,
+        )
+        self.jobs[job_id] = updated
+        return updated
+
     async def save_final_result(
         self,
         *,
@@ -405,14 +436,13 @@ class _FakeRepo:
 
 
 @pytest.mark.asyncio
-async def test_service_runs_vision_only_on_rising_stars(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _noop_cache(*_args, **_kwargs):
-        return None
+async def test_service_runs_vision_only_on_rising_stars() -> None:
+    class _NullCache:
+        async def get(self, key: str):
+            return None
 
-    monkeypatch.setattr(
-        "app.application.visual_audit_service.cache_json",
-        _noop_cache,
-    )
+        async def set(self, key: str, payload: dict, ttl_seconds: int) -> None:
+            return None
 
     repo = _FakeRepo()
     vision = _FakeVision()
@@ -423,6 +453,7 @@ async def test_service_runs_vision_only_on_rising_stars(monkeypatch: pytest.Monk
         max_image_bytes=1_000_000,
         redis_stage_ttl_seconds=60,
         vision=vision,
+        stage_cache=_NullCache(),
     )
     request = VisualAuditEnqueueRequest(
         niche_key="gadgets",

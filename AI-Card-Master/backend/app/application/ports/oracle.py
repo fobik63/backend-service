@@ -68,6 +68,15 @@ class OraclePersistencePort(Protocol):
     ) -> OracleJobView:
         """Persist deterministic demand/supply scan."""
 
+    async def save_scan_checkpoint(
+        self,
+        *,
+        job_id: UUID,
+        scan_report: dict[str, Any],
+        next_status: OracleJobStatus,
+    ) -> OracleJobView:
+        """Persist scan report and advance status in one DB round-trip."""
+
     async def save_final_result(
         self,
         *,

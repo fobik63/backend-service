@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.eye_of_god_bridge_service import (
@@ -10,10 +12,7 @@ from app.application.eye_of_god_bridge_service import (
 )
 from app.core.config import get_settings
 from app.domain.eye_of_god import SalesSpikeConfig
-from app.infrastructure.claude.client import (
-    Claude47VisionClient,
-    ClaudeConfigurationError,
-)
+from app.infrastructure.claude_client_loader import load_claude_client
 from app.infrastructure.eye_of_god.sku_image_fetcher import SkuCardImageFetcher
 from app.infrastructure.persistence.eye_of_god_repository import EyeOfGodRepository
 from app.infrastructure.persistence.stock_parser_repository import StockParserRepository
@@ -24,24 +23,17 @@ def build_eye_of_god_bridge_service(
     *,
     require_claude_client: bool = False,
     enqueue_trigger: bool = True,
-    vision: Claude47VisionClient | None = None,
+    vision: Any | None = None,
     images: SkuCardImageFetcher | None = None,
 ) -> EyeOfGodBridgeService:
     """Wire ports for stock-parser workers and Eye-of-God Celery tasks."""
 
     settings = get_settings()
-    client = vision
-    if client is None and require_claude_client:
-        client = Claude47VisionClient(settings)
-    elif client is None:
-        try:
-            if (
-                settings.claude_47_api_key
-                and settings.claude_47_api_key.get_secret_value().strip()
-            ):
-                client = Claude47VisionClient(settings)
-        except ClaudeConfigurationError:
-            client = None
+    client = load_claude_client(
+        settings,
+        require=require_claude_client,
+        existing=vision,
+    )
 
     image_fetcher = images or SkuCardImageFetcher(
         timeout_seconds=settings.eye_of_god_image_timeout_seconds,

@@ -1,5 +1,15 @@
-"""Anthropic Claude 4.7 integration adapters."""
+"""Anthropic Claude 4.7 integration adapters (lazy export)."""
 
-from app.infrastructure.claude.client import Claude47VisionClient
+from __future__ import annotations
+
+from typing import Any
 
 __all__ = ["Claude47VisionClient"]
+
+
+def __getattr__(name: str) -> Any:
+    if name == "Claude47VisionClient":
+        from app.infrastructure.claude.client import Claude47VisionClient
+
+        return Claude47VisionClient
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

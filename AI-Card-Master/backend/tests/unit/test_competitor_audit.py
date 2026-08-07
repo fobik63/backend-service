@@ -418,18 +418,21 @@ class _FakeTrigger:
         return "celery-task-id"
 
 
+class _FakeStageCache:
+    def __init__(self) -> None:
+        self.store: dict[str, tuple[dict[str, Any], int]] = {}
+
+    async def get(self, key: str) -> dict[str, Any] | None:
+        item = self.store.get(key)
+        return None if item is None else item[0]
+
+    async def set(self, key: str, payload: dict[str, Any], ttl_seconds: int) -> None:
+        self.store[key] = (payload, ttl_seconds)
+
+
 @pytest.mark.asyncio
-async def test_service_enqueue_and_scrape(monkeypatch: pytest.MonkeyPatch) -> None:
-    cached: dict[str, Any] = {}
-
-    async def _cache_json(key, payload, ttl):
-        cached[key] = (payload, ttl)
-
-    monkeypatch.setattr(
-        "app.application.competitor_audit_service.cache_json",
-        _cache_json,
-    )
-
+async def test_service_enqueue_and_scrape() -> None:
+    cache = _FakeStageCache()
     repo = _FakeRepo()
     scraper = _FakeScraper()
     trigger = _FakeTrigger()
@@ -438,6 +441,7 @@ async def test_service_enqueue_and_scrape(monkeypatch: pytest.MonkeyPatch) -> No
         scraper=scraper,
         redis_raw_ttl_seconds=3600,
         analysis_trigger=trigger,
+        stage_cache=cache,
     )
     user_id = uuid4()
     request = CompetitorAuditEnqueueRequest(
@@ -459,25 +463,15 @@ async def test_service_enqueue_and_scrape(monkeypatch: pytest.MonkeyPatch) -> No
     assert cards[0]["reviews_low"][0]["rating"] == 2
     assert cards[0]["reviews_high"][0]["rating"] == 5
     assert trigger.calls == [job.id]
-    assert cached
-    key, (payload, ttl) = next(iter(cached.items()))
+    assert cache.store
+    key, (payload, ttl) = next(iter(cache.store.items()))
     assert "analytics:competitor_audit:" in key
     assert ttl == 3600
     assert payload["status"] == "scraped"
 
 
 @pytest.mark.asyncio
-async def test_service_deep_analysis_returns_frontend_json(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def _cache_json(key, payload, ttl):
-        return None
-
-    monkeypatch.setattr(
-        "app.application.competitor_audit_service.cache_json",
-        _cache_json,
-    )
-
+async def test_service_deep_analysis_returns_frontend_json() -> None:
     repo = _FakeRepo()
     trigger = _FakeTrigger()
     service = CompetitorAuditService(
@@ -487,6 +481,7 @@ async def test_service_deep_analysis_returns_frontend_json(
         analyzer=_FakeAnalyzer(),
         images=_FakeImages(),
         analysis_trigger=trigger,
+        stage_cache=_FakeStageCache(),
     )
     user_id = uuid4()
     request = CompetitorAuditEnqueueRequest(
@@ -510,17 +505,7 @@ async def test_service_deep_analysis_returns_frontend_json(
 
 
 @pytest.mark.asyncio
-async def test_deep_analysis_without_claude_sets_insufficient_data(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def _cache_json(key, payload, ttl):
-        return None
-
-    monkeypatch.setattr(
-        "app.application.competitor_audit_service.cache_json",
-        _cache_json,
-    )
-
+async def test_deep_analysis_without_claude_sets_insufficient_data() -> None:
     repo = _FakeRepo()
     service = CompetitorAuditService(
         repo,
@@ -528,6 +513,7 @@ async def test_deep_analysis_without_claude_sets_insufficient_data(
         redis_raw_ttl_seconds=3600,
         analyzer=None,
         analysis_trigger=_FakeTrigger(),
+        stage_cache=_FakeStageCache(),
     )
     user_id = uuid4()
     request = CompetitorAuditEnqueueRequest(
@@ -542,22 +528,13 @@ async def test_deep_analysis_without_claude_sets_insufficient_data(
 
 
 @pytest.mark.asyncio
-async def test_service_raises_transient_on_timeout(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def _cache_json(key, payload, ttl):
-        return None
-
-    monkeypatch.setattr(
-        "app.application.competitor_audit_service.cache_json",
-        _cache_json,
-    )
-
+async def test_service_raises_transient_on_timeout() -> None:
     repo = _FakeRepo()
     service = CompetitorAuditService(
         repo,
         scraper=_FakeScraper(fail_transient=True),
         redis_raw_ttl_seconds=3600,
+        stage_cache=_FakeStageCache(),
     )
     user_id = uuid4()
     request = CompetitorAuditEnqueueRequest(

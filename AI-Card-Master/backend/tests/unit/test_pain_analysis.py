@@ -219,6 +219,28 @@ class _FakeRepo:
         )
         return self.jobs[job_id]
 
+    async def save_filter_checkpoint(self, *, job_id, filter_preview, next_status):
+        job = self.jobs[job_id]
+        self.jobs[job_id] = PainAnalysisJobView(
+            id=job.id,
+            user_id=job.user_id,
+            status=next_status,
+            celery_task_id=job.celery_task_id,
+            product_name=job.product_name,
+            platform=job.platform,
+            request_payload=job.request_payload,
+            filter_preview=filter_preview,
+            analysis_result=job.analysis_result,
+            model_name=job.model_name,
+            error_message=job.error_message,
+            input_tokens=job.input_tokens,
+            output_tokens=job.output_tokens,
+            created_at=job.created_at,
+            updated_at=datetime.now(UTC),
+            completed_at=job.completed_at,
+        )
+        return self.jobs[job_id]
+
     async def save_final_result(
         self, *, job_id, analysis_result, input_tokens_delta=0, output_tokens_delta=0
     ):

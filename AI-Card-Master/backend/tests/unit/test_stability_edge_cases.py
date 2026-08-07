@@ -103,6 +103,26 @@ async def test_transport_retry_recovers_after_timeout() -> None:
     assert calls["n"] == 2
 
 
+@pytest.mark.asyncio
+async def test_gather_bounded_preserves_order_and_isolates_errors() -> None:
+    from app.infrastructure.http_resilience import gather_bounded
+
+    async def worker(n: int) -> int:
+        if n == 2:
+            raise ValueError("boom")
+        return n * 10
+
+    results = await gather_bounded(
+        [1, 2, 3],
+        worker,
+        limit=2,
+        return_exceptions=True,
+    )
+    assert results[0] == 10
+    assert isinstance(results[1], ValueError)
+    assert results[2] == 30
+
+
 # ---------------------------------------------------------------------------
 # Midjourney
 # ---------------------------------------------------------------------------

@@ -11,6 +11,7 @@ from app.application.ports.ai_strategy import (
     StrategyPersistencePort,
     StrategyPlanningPort,
 )
+from app.application.ports.claude_reasoning import ClaudeStageCachePort
 from app.domain.ai_strategy import (
     StrategyCardSnapshot,
     StrategyCompareConfig,
@@ -24,13 +25,16 @@ from app.domain.ai_strategy import (
     dump_plan_result,
     redis_strategy_key,
 )
-from app.infrastructure.redis import (
-    RedisUnavailableError,
-    cache_json,
-    get_cached_json,
-)
 
 logger = logging.getLogger(__name__)
+
+
+class _NullStageCache:
+    async def get(self, key: str) -> dict[str, Any] | None:
+        return None
+
+    async def set(self, key: str, payload: dict[str, Any], ttl_seconds: int) -> None:
+        return None
 
 
 class StrategyError(Exception):
@@ -56,6 +60,7 @@ class StrategyService:
         redis_stage_ttl_seconds: int,
         default_compare_config: StrategyCompareConfig | None = None,
         planning: StrategyPlanningPort | None = None,
+        stage_cache: ClaudeStageCachePort | None = None,
     ) -> None:
         if not model_name.strip():
             raise StrategyValidationError("model_name must not be empty.")
@@ -66,6 +71,7 @@ class StrategyService:
         self._model_name = model_name.strip()
         self._redis_stage_ttl_seconds = redis_stage_ttl_seconds
         self._default_compare_config = default_compare_config or StrategyCompareConfig()
+        self._stage_cache = stage_cache or _NullStageCache()
 
     def preview_compare(self, request: StrategyEnqueueRequest) -> StrategyCompareReport:
         """Synchronous user-vs-leader comparison without Claude spend."""
@@ -234,22 +240,23 @@ class StrategyService:
         self, job_id: UUID, stage: str, payload: dict[str, Any]
     ) -> None:
         try:
-            await cache_json(
+            await self._stage_cache.set(
                 redis_strategy_key(job_id, stage),
                 payload,
                 self._redis_stage_ttl_seconds,
             )
-        except RedisUnavailableError:
+        except Exception:
             logger.warning(
-                "Redis unavailable; skipped AI Strategy cache job_id=%s stage=%s",
+                "Skipped AI Strategy cache job_id=%s stage=%s",
                 job_id,
                 stage,
+                exc_info=True,
             )
 
     async def _read_stage_cache(
         self, job_id: UUID, stage: str
     ) -> dict[str, Any] | None:
         try:
-            return await get_cached_json(redis_strategy_key(job_id, stage))
-        except RedisUnavailableError:
+            return await self._stage_cache.get(redis_strategy_key(job_id, stage))
+        except Exception:
             return None

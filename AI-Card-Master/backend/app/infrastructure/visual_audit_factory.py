@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.visual_audit_service import VisualAuditService
 from app.core.config import get_settings
 from app.domain.visual_audit import VisualAuditFilterConfig
-from app.infrastructure.claude.client import (
-    Claude47VisionClient,
-    ClaudeConfigurationError,
-)
+from app.infrastructure.claude_client_loader import load_claude_client
+from app.infrastructure.claude_stage_cache import RedisClaudeStageCache
 from app.infrastructure.persistence.visual_audit_repository import VisualAuditRepository
 from app.services.s3_storage import get_s3_storage
 
@@ -19,20 +19,16 @@ def build_visual_audit_service(
     db_session: AsyncSession,
     *,
     require_claude_client: bool = False,
-    vision: Claude47VisionClient | None = None,
+    vision: Any | None = None,
 ) -> VisualAuditService:
     """Wire ports for HTTP handlers and Celery workers."""
 
     settings = get_settings()
-    client = vision
-    if client is None and require_claude_client:
-        client = Claude47VisionClient(settings)
-    elif client is None:
-        try:
-            if settings.claude_47_api_key and settings.claude_47_api_key.get_secret_value().strip():
-                client = Claude47VisionClient(settings)
-        except ClaudeConfigurationError:
-            client = None
+    client = load_claude_client(
+        settings,
+        require=require_claude_client,
+        existing=vision,
+    )
 
     filter_config = VisualAuditFilterConfig(
         top_n=settings.visual_audit_top_n,
@@ -53,4 +49,5 @@ def build_visual_audit_service(
         redis_stage_ttl_seconds=settings.claude_47_stage_cache_ttl_seconds,
         default_filter_config=filter_config,
         vision=client,
+        stage_cache=RedisClaudeStageCache(),
     )

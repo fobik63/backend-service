@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.oracle_service import OracleService
 from app.core.config import get_settings
 from app.domain.oracle import OracleGapConfig
-from app.infrastructure.claude.client import (
-    Claude47VisionClient,
-    ClaudeConfigurationError,
-)
+from app.infrastructure.claude_client_loader import load_claude_client
+from app.infrastructure.claude_stage_cache import RedisClaudeStageCache
 from app.infrastructure.persistence.oracle_repository import OracleRepository
 
 
@@ -18,23 +18,16 @@ def build_oracle_service(
     db_session: AsyncSession,
     *,
     require_claude_client: bool = False,
-    enrichment: Claude47VisionClient | None = None,
+    enrichment: Any | None = None,
 ) -> OracleService:
     """Wire ports for HTTP handlers and Celery workers."""
 
     settings = get_settings()
-    client = enrichment
-    if client is None and require_claude_client:
-        client = Claude47VisionClient(settings)
-    elif client is None:
-        try:
-            if (
-                settings.claude_47_api_key
-                and settings.claude_47_api_key.get_secret_value().strip()
-            ):
-                client = Claude47VisionClient(settings)
-        except ClaudeConfigurationError:
-            client = None
+    client = load_claude_client(
+        settings,
+        require=require_claude_client,
+        existing=enrichment,
+    )
 
     gap_config = OracleGapConfig(
         min_query_growth_ratio=settings.oracle_min_query_growth_ratio,
@@ -51,4 +44,5 @@ def build_oracle_service(
         redis_stage_ttl_seconds=settings.claude_47_stage_cache_ttl_seconds,
         default_gap_config=gap_config,
         enrichment=client,
+        stage_cache=RedisClaudeStageCache(),
     )

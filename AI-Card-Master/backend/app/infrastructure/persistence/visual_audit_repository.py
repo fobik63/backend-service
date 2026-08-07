@@ -155,6 +155,25 @@ class VisualAuditRepository:
         await self._session.refresh(row)
         return _job_view(row)
 
+    async def save_filter_checkpoint(
+        self,
+        *,
+        job_id: UUID,
+        filter_report: dict[str, Any],
+        next_status: VisualAuditJobStatus,
+    ) -> VisualAuditJobView:
+        row = await self._session.scalar(
+            select(VisualAuditJob).where(VisualAuditJob.id == job_id)
+        )
+        if row is None:
+            raise ValueError(f"Visual audit job not found: {job_id}")
+        row.filter_report = filter_report
+        row.status = next_status.value
+        row.updated_at = datetime.now(UTC)
+        await self._session.commit()
+        await self._session.refresh(row)
+        return _job_view(row)
+
     async def save_final_result(
         self,
         *,

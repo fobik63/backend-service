@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,10 +12,8 @@ from app.core.config import get_settings
 from app.core.credential_crypto import CredentialCryptoError, decrypt_credentials
 from app.domain.ab_test import AbTestConfig
 from app.domain.export import MarketplacePlatform
-from app.infrastructure.claude.client import (
-    Claude47VisionClient,
-    ClaudeConfigurationError,
-)
+from app.infrastructure.claude_client_loader import load_claude_client
+from app.infrastructure.claude_stage_cache import RedisClaudeStageCache
 from app.infrastructure.marketplaces.ads_clients import build_marketplace_ads_client
 from app.infrastructure.persistence.ab_test_repository import AbTestRepository
 from app.infrastructure.persistence.export_repository import ExportRepository
@@ -60,23 +59,16 @@ def build_ab_test_service(
     db_session: AsyncSession,
     *,
     require_claude_client: bool = False,
-    hypothesis_generator: Claude47VisionClient | None = None,
+    hypothesis_generator: Any | None = None,
 ) -> AbTestService:
     """Wire ports for HTTP handlers and Celery workers."""
 
     settings = get_settings()
-    client = hypothesis_generator
-    if client is None and require_claude_client:
-        client = Claude47VisionClient(settings)
-    elif client is None:
-        try:
-            if (
-                settings.claude_47_api_key
-                and settings.claude_47_api_key.get_secret_value().strip()
-            ):
-                client = Claude47VisionClient(settings)
-        except ClaudeConfigurationError:
-            client = None
+    client = load_claude_client(
+        settings,
+        require=require_claude_client,
+        existing=hypothesis_generator,
+    )
 
     secret = settings.marketplace_credentials_secret.get_secret_value().strip()
     if not secret:
@@ -112,4 +104,5 @@ def build_ab_test_service(
             encryption_secret=secret,
         ),
         allow_ads_fallback=settings.ab_test_allow_ads_fallback,
+        stage_cache=RedisClaudeStageCache(),
     )

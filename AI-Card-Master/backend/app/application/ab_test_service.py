@@ -13,6 +13,7 @@ from app.application.ports.ab_test import (
     AbTestPersistencePort,
     MarketplaceAdsPort,
 )
+from app.application.ports.claude_reasoning import ClaudeStageCachePort
 from app.domain.ab_test import (
     CANONICAL_STRATEGIES,
     AbEnqueueRequest,
@@ -31,13 +32,16 @@ from app.domain.ab_test import (
     normalize_hypotheses,
     redis_ab_stage_key,
 )
-from app.infrastructure.redis import (
-    RedisUnavailableError,
-    cache_json,
-    get_cached_json,
-)
 
 logger = logging.getLogger(__name__)
+
+
+class _NullStageCache:
+    async def get(self, key: str) -> dict[str, Any] | None:
+        return None
+
+    async def set(self, key: str, payload: dict[str, Any], ttl_seconds: int) -> None:
+        return None
 
 
 class AbTestError(Exception):
@@ -70,6 +74,7 @@ class AbTestService:
         ads_client_factory: Any | None = None,
         credentials: AbCredentialsPort | None = None,
         allow_ads_fallback: bool = True,
+        stage_cache: ClaudeStageCachePort | None = None,
     ) -> None:
         if not model_name.strip():
             raise AbTestValidationError("model_name must not be empty.")
@@ -83,6 +88,7 @@ class AbTestService:
         self._redis_stage_ttl_seconds = redis_stage_ttl_seconds
         self._default_config = default_config or AbTestConfig()
         self._allow_ads_fallback = allow_ads_fallback
+        self._stage_cache = stage_cache or _NullStageCache()
 
     def preview_hypotheses(
         self, request: AbEnqueueRequest
@@ -582,13 +588,14 @@ class AbTestService:
         self, experiment_id: UUID, stage: str, payload: Any
     ) -> None:
         try:
-            await cache_json(
-                redis_ab_stage_key(experiment_id, stage),
-                payload,
-                ttl_seconds=self._redis_stage_ttl_seconds,
+            data: dict[str, Any] = (
+                payload if isinstance(payload, dict) else {"items": payload}
             )
-        except RedisUnavailableError:
-            logger.debug("Redis unavailable for A/B stage cache %s", stage)
+            await self._stage_cache.set(
+                redis_ab_stage_key(experiment_id, stage),
+                data,
+                self._redis_stage_ttl_seconds,
+            )
         except Exception:
             logger.debug("Failed to cache A/B stage %s", stage, exc_info=True)
 
@@ -596,6 +603,11 @@ class AbTestService:
         self, experiment_id: UUID, stage: str
     ) -> Any | None:
         try:
-            return await get_cached_json(redis_ab_stage_key(experiment_id, stage))
+            cached = await self._stage_cache.get(redis_ab_stage_key(experiment_id, stage))
+            if cached is None:
+                return None
+            if "items" in cached and len(cached) == 1:
+                return cached["items"]
+            return cached
         except Exception:
             return None

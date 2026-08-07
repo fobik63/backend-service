@@ -778,6 +778,7 @@ class MidjourneyConfig:
             max_poll_attempts=settings.midjourney_max_poll_attempts,
             max_result_bytes=settings.generation_max_result_bytes,
             allowed_result_hosts=tuple(settings.allowed_result_hosts),
+            region=(settings.neural_preferred_region or "").strip().lower(),
         )
 
 
@@ -1744,10 +1745,13 @@ async def get_healthy_async_midjourney_providers(
             continue
         if not await is_provider_circuit_open(provider.name):
             providers.append(provider)
+    from app.infrastructure.geo_failover_signal import resolve_preferred_neural_region
+
+    preferred = await resolve_preferred_neural_region(settings)
     return tuple(
         order_providers_by_region(
             providers,
-            preferred_region=settings.neural_preferred_region,
+            preferred_region=preferred,
             failover_regions=settings.neural_failover_regions_list,
         )
     )

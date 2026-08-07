@@ -97,9 +97,20 @@ def test_build_aggregated_totals_skips_errors_and_disconnected() -> None:
 class _FakeCredentials:
     def __init__(self, mapping: dict[tuple, str]) -> None:
         self._mapping = mapping
+        self.batch_calls = 0
+        self.single_calls = 0
 
     async def get_credentials_ciphertext(self, *, user_id, platform):
+        self.single_calls += 1
         return self._mapping.get((user_id, platform))
+
+    async def get_credentials_ciphertext_batch(self, *, user_id, platforms):
+        self.batch_calls += 1
+        return {
+            platform: cipher
+            for (uid, platform), cipher in self._mapping.items()
+            if uid == user_id and platform in platforms
+        }
 
     async def list_credentials(self, user_id):
         return tuple(
@@ -145,13 +156,14 @@ async def test_dashboard_aggregates_connected_platforms() -> None:
     )
     wb = _FakeAnalytics(BridgePlatform.WILDBERRIES)
     ozon = _FakeAnalytics(BridgePlatform.OZON)
+    credentials = _FakeCredentials(
+        {
+            (user_id, MarketplacePlatform.WILDBERRIES): wb_cipher,
+            (user_id, MarketplacePlatform.OZON): ozon_cipher,
+        }
+    )
     service = MarketplaceBridgeService(
-        _FakeCredentials(
-            {
-                (user_id, MarketplacePlatform.WILDBERRIES): wb_cipher,
-                (user_id, MarketplacePlatform.OZON): ozon_cipher,
-            }
-        ),
+        credentials,
         {
             BridgePlatform.WILDBERRIES: wb,
             BridgePlatform.OZON: ozon,
@@ -172,8 +184,10 @@ async def test_dashboard_aggregates_connected_platforms() -> None:
     assert view.totals.sales.revenue == 3001.0
     assert view.totals.stocks.total_quantity == 84
     assert view.totals.orders.count == 14
-    assert wb.calls == ["sales", "stocks", "orders"]
-    assert ozon.calls == ["sales", "stocks", "orders"]
+    assert credentials.batch_calls == 1
+    assert credentials.single_calls == 0
+    assert set(wb.calls) == {"sales", "stocks", "orders"}
+    assert set(ozon.calls) == {"sales", "stocks", "orders"}
 
 
 @pytest.mark.asyncio

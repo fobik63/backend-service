@@ -11,6 +11,8 @@ from app.application.competitor_audit_service import (
     CompetitorAuditService,
 )
 from app.core.config import get_settings
+from app.infrastructure.claude_client_loader import load_claude_client
+from app.infrastructure.claude_stage_cache import RedisClaudeStageCache
 from app.infrastructure.competitor_audit.deep_scraper import CompetitorDeepScraper
 from app.infrastructure.competitor_audit.image_fetcher import CompetitorCardImageFetcher
 from app.infrastructure.competitor_audit.ozon_deep_client import OzonDeepClient
@@ -85,34 +87,14 @@ def build_competitor_audit_service(
         ),
         model_name=settings.claude_47_model,
         max_vision_images=settings.competitor_audit_max_vision_images,
+        stage_cache=RedisClaudeStageCache(),
     )
 
 
 def _build_claude_analyzer(settings: Any, *, require_claude_client: bool) -> Any | None:
     """Lazy-import Claude client so API enqueue/poll works without anthropic SDK."""
 
-    try:
-        from app.infrastructure.claude.client import (
-            Claude47VisionClient,
-            ClaudeConfigurationError,
-        )
-    except ImportError:
-        if require_claude_client:
-            raise
-        return None
-
-    if require_claude_client:
-        return Claude47VisionClient(settings)
-
-    try:
-        if (
-            settings.claude_47_api_key
-            and settings.claude_47_api_key.get_secret_value().strip()
-        ):
-            return Claude47VisionClient(settings)
-    except ClaudeConfigurationError:
-        return None
-    return None
+    return load_claude_client(settings, require=require_claude_client)
 
 
 class _NoopScraper:

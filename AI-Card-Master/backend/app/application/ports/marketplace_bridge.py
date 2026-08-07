@@ -23,6 +23,14 @@ class BridgeCredentialPort(Protocol):
     ) -> str | None:
         """Return ciphertext or None when the platform is not connected."""
 
+    async def get_credentials_ciphertext_batch(
+        self,
+        *,
+        user_id: UUID,
+        platforms: tuple[MarketplacePlatform, ...],
+    ) -> dict[MarketplacePlatform, str]:
+        """Single DB round-trip: platform → ciphertext for connected accounts."""
+
     async def list_credentials(self, user_id: UUID) -> tuple[MarketplaceCredentialView, ...]:
         """List configured platforms (metadata only)."""
 

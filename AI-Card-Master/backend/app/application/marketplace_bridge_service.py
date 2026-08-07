@@ -22,6 +22,7 @@ from app.domain.marketplace_bridge import (
     empty_stocks,
     resolve_period_window,
 )
+from app.infrastructure.http_resilience import gather_bounded, gather_independent
 
 
 class MarketplaceBridgeError(Exception):
@@ -40,6 +41,11 @@ _BRIDGE_TO_EXPORT: dict[BridgePlatform, MarketplacePlatform] = {
     BridgePlatform.WILDBERRIES: MarketplacePlatform.WILDBERRIES,
     BridgePlatform.OZON: MarketplacePlatform.OZON,
 }
+
+_DASHBOARD_PLATFORMS: tuple[BridgePlatform, ...] = (
+    BridgePlatform.WILDBERRIES,
+    BridgePlatform.OZON,
+)
 
 
 class MarketplaceBridgeService:
@@ -64,18 +70,47 @@ class MarketplaceBridgeService:
         user_id: UUID,
         period: MarketplaceDataPeriod,
     ) -> MarketplaceDashboardView:
-        """Aggregate sales / stocks / orders for the personal cabinet."""
+        """Aggregate sales / stocks / orders for the personal cabinet.
+
+        Prompt-efficiency shape (2 passes):
+        1) one batched credentials read from DB
+        2) one bounded gather over platforms, each fanning sales/stocks/orders
+        """
 
         window = resolve_period_window(period)
+        export_platforms = tuple(_BRIDGE_TO_EXPORT[p] for p in _DASHBOARD_PLATFORMS)
+        cipher_by_export = await self._credentials.get_credentials_ciphertext_batch(
+            user_id=user_id,
+            platforms=export_platforms,
+        )
+
+        results = await gather_bounded(
+            _DASHBOARD_PLATFORMS,
+            lambda platform: self._build_platform_slice_from_cipher(
+                platform=platform,
+                window=window,
+                ciphertext=cipher_by_export.get(_BRIDGE_TO_EXPORT[platform]),
+            ),
+            limit=len(_DASHBOARD_PLATFORMS),
+            return_exceptions=True,
+        )
+
         slices: list[PlatformDataSlice] = []
-        for platform in (BridgePlatform.WILDBERRIES, BridgePlatform.OZON):
-            slices.append(
-                await self._build_platform_slice(
-                    user_id=user_id,
-                    platform=platform,
-                    window=window,
+        for platform, result in zip(_DASHBOARD_PLATFORMS, results, strict=True):
+            if isinstance(result, BaseException):
+                slices.append(
+                    PlatformDataSlice(
+                        platform=platform,
+                        connected=True,
+                        sales=empty_sales(),
+                        stocks=empty_stocks(),
+                        orders=empty_orders(),
+                        error=str(result)[:500],
+                    )
                 )
-            )
+            else:
+                slices.append(result)
+
         platforms = tuple(slices)
         return MarketplaceDashboardView(
             period=window.period,
@@ -118,6 +153,19 @@ class MarketplaceBridgeService:
             user_id=user_id,
             platform=export_platform,
         )
+        return await self._build_platform_slice_from_cipher(
+            platform=platform,
+            window=window,
+            ciphertext=ciphertext,
+        )
+
+    async def _build_platform_slice_from_cipher(
+        self,
+        *,
+        platform: BridgePlatform,
+        window: PeriodWindow,
+        ciphertext: str | None,
+    ) -> PlatformDataSlice:
         if ciphertext is None:
             return PlatformDataSlice(
                 platform=platform,
@@ -151,18 +199,39 @@ class MarketplaceBridgeService:
                 error=f"No analytics adapter registered for {platform.value}.",
             )
 
-        try:
-            sales = await client.fetch_sales(credentials=secrets, window=window)
-            stocks = await client.fetch_stocks(credentials=secrets)
-            orders = await client.fetch_orders(credentials=secrets, window=window)
-        except Exception as exc:  # noqa: BLE001 — upstream seller APIs are unreliable
+        # One gather: sales + stocks + orders stay isolated per metric.
+        sales_r, stocks_r, orders_r = await gather_independent(
+            lambda: client.fetch_sales(credentials=secrets, window=window),
+            lambda: client.fetch_stocks(credentials=secrets),
+            lambda: client.fetch_orders(credentials=secrets, window=window),
+        )
+
+        errors: list[str] = []
+        sales = empty_sales()
+        stocks = empty_stocks()
+        orders = empty_orders()
+        if isinstance(sales_r, BaseException):
+            errors.append(f"sales: {sales_r}")
+        else:
+            sales = sales_r
+        if isinstance(stocks_r, BaseException):
+            errors.append(f"stocks: {stocks_r}")
+        else:
+            stocks = stocks_r
+        if isinstance(orders_r, BaseException):
+            errors.append(f"orders: {orders_r}")
+        else:
+            orders = orders_r
+
+        if errors and len(errors) == 3:
+            # Full upstream outage — same UX as the previous single try/except.
             return PlatformDataSlice(
                 platform=platform,
                 connected=True,
                 sales=empty_sales(),
                 stocks=empty_stocks(),
                 orders=empty_orders(),
-                error=str(exc)[:500],
+                error="; ".join(errors)[:500],
             )
 
         return PlatformDataSlice(
@@ -171,5 +240,5 @@ class MarketplaceBridgeService:
             sales=sales,
             stocks=stocks,
             orders=orders,
-            error=None,
+            error="; ".join(errors)[:500] if errors else None,
         )

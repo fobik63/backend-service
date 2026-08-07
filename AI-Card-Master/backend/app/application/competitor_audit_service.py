@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
+from app.application.ports.claude_reasoning import ClaudeStageCachePort
 from app.application.ports.competitor_audit import (
     CompetitorAuditPersistencePort,
     CompetitorCardImagePort,
@@ -33,7 +34,7 @@ from app.domain.competitor_audit import (
     parse_competitor_product_link,
     redis_competitor_audit_key,
 )
-from app.infrastructure.redis import RedisUnavailableError, cache_json, get_cached_json
+from app.infrastructure.http_resilience import gather_bounded
 from app.infrastructure.stock_parser.exceptions import (
     ParserHttpError,
     ParserSchemaError,
@@ -41,6 +42,18 @@ from app.infrastructure.stock_parser.exceptions import (
 )
 
 logger = logging.getLogger(__name__)
+
+_SCRAPE_CONCURRENCY = 3
+_ANALYSIS_CONCURRENCY = 2
+
+
+
+class _NullStageCache:
+    async def get(self, key: str) -> dict[str, Any] | None:
+        return None
+
+    async def set(self, key: str, payload: dict[str, Any], ttl_seconds: int) -> None:
+        return None
 
 
 class CompetitorAuditError(Exception):
@@ -69,6 +82,7 @@ class CompetitorAuditService:
         analysis_trigger: CompetitorDeepAnalysisTriggerPort | None = None,
         model_name: str = "claude-opus-4-7",
         max_vision_images: int = MAX_VISION_IMAGES_PER_CARD,
+        stage_cache: ClaudeStageCachePort | None = None,
     ) -> None:
         if redis_raw_ttl_seconds <= 0:
             raise CompetitorAuditValidationError(
@@ -84,6 +98,7 @@ class CompetitorAuditService:
         self._analysis_trigger = analysis_trigger
         self._model_name = model_name.strip() or "claude-opus-4-7"
         self._max_vision_images = max_vision_images
+        self._stage_cache = stage_cache or _NullStageCache()
 
     async def enqueue_audit(
         self,
@@ -135,7 +150,13 @@ class CompetitorAuditService:
         return job
 
     async def run_scrape(self, *, job_id: UUID) -> CompetitorAuditJobView:
-        """Deep-scrape all job links; cache raw log; enqueue Claude analysis."""
+        """Deep-scrape all job links; cache raw log; enqueue Claude analysis.
+
+        Prompt-efficiency shape (2 DB passes + 1 bounded scrape gather):
+        1) claim SCRAPING (hydrated job, no re-get)
+        2) save_scrape_result → ANALYZING; enqueue Claude
+        Per-link try/except isolation preserved inside the gather worker.
+        """
 
         job = await self._repository.get_job(job_id=job_id)
         if job is None:
@@ -156,60 +177,60 @@ class CompetitorAuditService:
             )
 
         try:
-            await self._repository.mark_status(
+            job = await self._repository.mark_status(
                 job_id=job_id,
                 status=CompetitorAuditJobStatus.SCRAPING,
             )
 
+            scrape_results = await gather_bounded(
+                tuple(job.links_payload),
+                self._scrape_one_link,
+                limit=_SCRAPE_CONCURRENCY,
+                return_exceptions=True,
+            )
+
             cards: list[CompetitorCardScrapeResult] = []
             parse_log: list[str] = []
+            transient: CompetitorAuditTransientError | None = None
+            permanent: CompetitorAuditPermanentError | None = None
 
-            for raw_url in job.links_payload:
-                try:
-                    link = parse_competitor_product_link(raw_url)
-                except ValueError as exc:
-                    raise CompetitorAuditPermanentError(str(exc)) from exc
-
-                parse_log.append(
-                    f"start marketplace={link.marketplace.value} "
-                    f"article={link.article}"
-                )
-                try:
-                    card = await self._scraper.scrape_card(link)
-                except (ParserTransportError, ParserHttpError) as exc:
-                    if _is_transient_parser_error(exc):
-                        parse_log.append(
-                            f"transient_error article={link.article}: {exc}"
-                        )
-                        await self._write_raw_cache(
-                            job_id,
-                            {
-                                "job_id": str(job_id),
-                                "status": "retrying",
-                                "parse_log": parse_log,
-                                "partial_cards": [
-                                    c.model_dump(mode="json") for c in cards
-                                ],
-                            },
-                        )
-                        raise CompetitorAuditTransientError(str(exc)) from exc
-                    parse_log.append(f"http_error article={link.article}: {exc}")
-                    raise CompetitorAuditPermanentError(str(exc)) from exc
-                except ParserSchemaError as exc:
-                    parse_log.append(f"schema_error article={link.article}: {exc}")
-                    raise CompetitorAuditPermanentError(str(exc)) from exc
-
+            for raw_url, result in zip(
+                job.links_payload, scrape_results, strict=True
+            ):
+                if isinstance(result, CompetitorAuditTransientError):
+                    parse_log.append(f"transient_error url={raw_url}: {result}")
+                    transient = result
+                    continue
+                if isinstance(result, CompetitorAuditPermanentError):
+                    parse_log.append(f"permanent_error url={raw_url}: {result}")
+                    permanent = result
+                    continue
+                if isinstance(result, BaseException):
+                    parse_log.append(f"unexpected_error url={raw_url}: {result}")
+                    permanent = CompetitorAuditPermanentError(str(result))
+                    continue
+                card, link_log = result
                 cards.append(card)
-                parse_log.append(
-                    f"ok article={link.article} photos={len(card.photo_urls)} "
-                    f"specs={len(card.specs)} reviews={card.reviews_total_fetched} "
-                    f"low={len(card.reviews_low)} high={len(card.reviews_high)}"
+                parse_log.extend(link_log)
+
+            if transient is not None:
+                await self._write_raw_cache(
+                    job_id,
+                    {
+                        "job_id": str(job_id),
+                        "status": "retrying",
+                        "parse_log": parse_log,
+                        "partial_cards": [
+                            c.model_dump(mode="json") for c in cards
+                        ],
+                    },
                 )
-                if card.scrape_warnings:
-                    parse_log.extend(
-                        f"warn article={link.article}: {w}"
-                        for w in card.scrape_warnings
-                    )
+                raise transient
+            if permanent is not None and not cards:
+                raise permanent
+            if permanent is not None and cards:
+                # Mixed batch: keep successful cards, surface permanent via log.
+                parse_log.append(f"partial_permanent: {permanent}")
 
             result = CompetitorAuditResult(cards=cards, parse_log=parse_log)
             result_payload = dump_competitor_audit_result(result)
@@ -256,8 +277,44 @@ class CompetitorAuditService:
             )
             raise CompetitorAuditError(str(exc)) from exc
 
+    async def _scrape_one_link(
+        self, raw_url: str
+    ) -> tuple[CompetitorCardScrapeResult, list[str]]:
+        """Scrape a single link; raise typed errors for the gather aggregator."""
+
+        try:
+            link = parse_competitor_product_link(raw_url)
+        except ValueError as exc:
+            raise CompetitorAuditPermanentError(str(exc)) from exc
+
+        parse_log = [
+            f"start marketplace={link.marketplace.value} article={link.article}"
+        ]
+        try:
+            card = await self._scraper.scrape_card(link)
+        except (ParserTransportError, ParserHttpError) as exc:
+            if _is_transient_parser_error(exc):
+                raise CompetitorAuditTransientError(str(exc)) from exc
+            raise CompetitorAuditPermanentError(str(exc)) from exc
+        except ParserSchemaError as exc:
+            raise CompetitorAuditPermanentError(str(exc)) from exc
+
+        parse_log.append(
+            f"ok article={link.article} photos={len(card.photo_urls)} "
+            f"specs={len(card.specs)} reviews={card.reviews_total_fetched} "
+            f"low={len(card.reviews_low)} high={len(card.reviews_high)}"
+        )
+        if card.scrape_warnings:
+            parse_log.extend(
+                f"warn article={link.article}: {w}" for w in card.scrape_warnings
+            )
+        return card, parse_log
+
     async def run_deep_analysis(self, *, job_id: UUID) -> CompetitorAuditJobView:
-        """Claude 4.7 Opus Vision + reviews → frontend JSON (plan §78)."""
+        """Claude 4.7 Opus Vision + reviews → frontend JSON (plan §78).
+
+        Prompt-efficiency: claim ANALYZING once, bounded Claude gather, one save.
+        """
 
         job = await self._repository.get_job(job_id=job_id)
         if job is None:
@@ -274,24 +331,46 @@ class CompetitorAuditService:
             )
 
         try:
-            await self._repository.mark_status(
+            job = await self._repository.mark_status(
                 job_id=job_id,
                 status=CompetitorAuditJobStatus.ANALYZING,
             )
 
             scrape = CompetitorAuditResult.model_validate(job.result_payload)
+            analysis_results = await gather_bounded(
+                tuple(scrape.cards),
+                lambda card: self._analyze_one_card(
+                    card=card,
+                    user_id=job.user_id,
+                    job_id=job_id,
+                ),
+                limit=_ANALYSIS_CONCURRENCY,
+                return_exceptions=True,
+            )
+
             analyses: list[CompetitorCardDeepAnalysis] = []
             notes: list[str] = []
             total_in = 0
             total_out = 0
             model_used = self._model_name
 
-            for card in scrape.cards:
-                card_result, in_tok, out_tok, note = await self._analyze_one_card(
-                    card=card,
-                    user_id=job.user_id,
-                    job_id=job_id,
-                )
+            for card, result in zip(scrape.cards, analysis_results, strict=True):
+                if isinstance(result, BaseException):
+                    logger.warning(
+                        "Deep analysis failed article=%s: %s",
+                        card.article,
+                        result,
+                        exc_info=result,
+                    )
+                    analyses.append(
+                        build_insufficient_card_analysis(
+                            card,
+                            reason=f"Analysis failed: {result}"[:400],
+                        )
+                    )
+                    notes.append(f"analysis_error article={card.article}")
+                    continue
+                card_result, in_tok, out_tok, note = result
                 analyses.append(card_result)
                 total_in += in_tok
                 total_out += out_tok
@@ -433,21 +512,22 @@ class CompetitorAuditService:
 
     async def _write_raw_cache(self, job_id: UUID, payload: dict[str, Any]) -> None:
         try:
-            await cache_json(
+            await self._stage_cache.set(
                 redis_competitor_audit_key(job_id, "raw"),
                 payload,
                 self._redis_raw_ttl_seconds,
             )
-        except RedisUnavailableError:
+        except Exception:
             logger.warning(
-                "Redis unavailable; skipped competitor-audit raw cache job_id=%s",
+                "Skipped competitor-audit raw cache job_id=%s",
                 job_id,
+                exc_info=True,
             )
 
     async def read_raw_cache(self, job_id: UUID) -> dict[str, Any] | None:
         try:
-            return await get_cached_json(redis_competitor_audit_key(job_id, "raw"))
-        except RedisUnavailableError:
+            return await self._stage_cache.get(redis_competitor_audit_key(job_id, "raw"))
+        except Exception:
             return None
 
     async def aclose(self) -> None:

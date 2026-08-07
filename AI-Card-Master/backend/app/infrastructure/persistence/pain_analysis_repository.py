@@ -141,6 +141,25 @@ class PainAnalysisRepository:
         await self._session.refresh(row)
         return _job_view(row)
 
+    async def save_filter_checkpoint(
+        self,
+        *,
+        job_id: UUID,
+        filter_preview: dict[str, Any],
+        next_status: PainAnalysisJobStatus,
+    ) -> PainAnalysisJobView:
+        row = await self._session.scalar(
+            select(PainAnalysisJob).where(PainAnalysisJob.id == job_id)
+        )
+        if row is None:
+            raise ValueError(f"Pain analysis job not found: {job_id}")
+        row.filter_preview = filter_preview
+        row.status = next_status.value
+        row.updated_at = datetime.now(UTC)
+        await self._session.commit()
+        await self._session.refresh(row)
+        return _job_view(row)
+
     async def save_final_result(
         self,
         *,

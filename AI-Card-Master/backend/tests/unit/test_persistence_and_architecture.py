@@ -279,20 +279,29 @@ def test_alembic_has_single_async_pipeline_head() -> None:
 
 def test_application_layer_has_no_framework_or_orm_imports() -> None:
     application_root = Path("app/application")
-    forbidden = (
-        "from fastapi",
-        "import fastapi",
-        "from celery",
-        "import celery",
-        "from redis",
-        "import redis",
-        "from sqlalchemy",
-        "import sqlalchemy",
-    )
+    forbidden_modules = {
+        "fastapi",
+        "celery",
+        "redis",
+        "sqlalchemy",
+    }
     for source_path in application_root.rglob("*.py"):
-        source = source_path.read_text(encoding="utf-8").lower()
-        for marker in forbidden:
-            assert marker not in source, f"{source_path} imports {marker}"
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    root = alias.name.split(".", 1)[0]
+                    assert root not in forbidden_modules, (
+                        f"{source_path} imports {alias.name}"
+                    )
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                root = node.module.split(".", 1)[0]
+                # ``from app.infrastructure.redis import …`` still couples to redis.
+                parts = node.module.split(".")
+                assert "redis" not in parts, f"{source_path} imports {node.module}"
+                assert root not in forbidden_modules, (
+                    f"{source_path} imports {node.module}"
+                )
 
 
 def test_worker_and_use_case_do_not_use_blocking_sleep() -> None:

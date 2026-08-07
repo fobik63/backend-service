@@ -2,6 +2,9 @@
 
 Keeps Midjourney / Claude / YooKassa / marketplace clients from crashing the
 API process when an upstream stalls or flaps.
+
+Also exposes bounded concurrency helpers so highload workflows can fan out
+external I/O in 1–2 gathers without losing per-call isolation.
 """
 
 from __future__ import annotations
@@ -9,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import TypeVar
 
 import httpx
@@ -24,6 +27,7 @@ TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
 )
 
 T = TypeVar("T")
+R = TypeVar("R")
 
 
 def compute_retry_delay(
@@ -106,3 +110,49 @@ async def call_with_transport_retry(
             await asyncio.sleep(delay)
     assert last_error is not None
     raise last_error
+
+
+async def gather_bounded(
+    items: Sequence[T],
+    worker: Callable[[T], Awaitable[R]],
+    *,
+    limit: int,
+    return_exceptions: bool = False,
+) -> list[R | BaseException]:
+    """Run ``worker`` over ``items`` with a concurrency cap.
+
+    Preserves input order. When ``return_exceptions`` is True, failures become
+    result values (caller isolates stability per item). Otherwise the first
+    exception propagates after in-flight tasks settle via ``asyncio.gather``.
+    """
+
+    if not items:
+        return []
+    concurrency = max(1, limit)
+    semaphore = asyncio.Semaphore(concurrency)
+
+    async def _run(item: T) -> R:
+        async with semaphore:
+            return await worker(item)
+
+    return list(
+        await asyncio.gather(
+            *(_run(item) for item in items),
+            return_exceptions=return_exceptions,
+        )
+    )
+
+
+async def gather_independent(
+    *operations: Callable[[], Awaitable[T]],
+) -> list[T | BaseException]:
+    """Fan out independent awaitables; never let one failure cancel siblings."""
+
+    if not operations:
+        return []
+    return list(
+        await asyncio.gather(
+            *(operation() for operation in operations),
+            return_exceptions=True,
+        )
+    )

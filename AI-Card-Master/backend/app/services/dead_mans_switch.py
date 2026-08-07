@@ -100,6 +100,7 @@ class DeadMansSwitchService:
 
     def __init__(self, settings: Settings | None = None) -> None:
         self._settings = settings or get_settings()
+        self._last_known_active = False
 
     @property
     def redis_key(self) -> str:
@@ -110,8 +111,16 @@ class DeadMansSwitchService:
             raw = await get_redis_client().get(self.redis_key)
         except RedisError:
             logger.warning("Dead Man's Switch state read failed", exc_info=True)
+            # Fail closed: if Redis blips after a real trigger we must not open
+            # the public origin. Prefer the last known in-process flag when set.
+            if getattr(self, "_last_known_active", False):
+                return DeadMansSwitchState(
+                    active=True,
+                    reason="redis_read_failed_fail_closed",
+                )
             return DeadMansSwitchState.inactive()
         if not raw:
+            self._last_known_active = False
             return DeadMansSwitchState.inactive()
         try:
             payload = json.loads(raw)
@@ -119,7 +128,7 @@ class DeadMansSwitchService:
             return DeadMansSwitchState.inactive()
         if not isinstance(payload, dict):
             return DeadMansSwitchState.inactive()
-        return DeadMansSwitchState(
+        state = DeadMansSwitchState(
             active=bool(payload.get("active")),
             triggered_at=payload.get("triggered_at"),
             reason=payload.get("reason"),
@@ -128,6 +137,8 @@ class DeadMansSwitchService:
             cloudflare_under_attack=bool(payload.get("cloudflare_under_attack")),
             host_lockdown=bool(payload.get("host_lockdown")),
         )
+        self._last_known_active = state.active
+        return state
 
     async def is_active(self) -> bool:
         state = await self.get_state()

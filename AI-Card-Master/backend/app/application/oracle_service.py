@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
+from app.application.ports.claude_reasoning import ClaudeStageCachePort
 from app.application.ports.oracle import OracleEnrichmentPort, OraclePersistencePort
 from app.domain.oracle import (
     OracleEnqueueRequest,
@@ -22,13 +23,16 @@ from app.domain.oracle import (
     dump_scan_report,
     redis_oracle_key,
 )
-from app.infrastructure.redis import (
-    RedisUnavailableError,
-    cache_json,
-    get_cached_json,
-)
 
 logger = logging.getLogger(__name__)
+
+
+class _NullStageCache:
+    async def get(self, key: str) -> dict[str, Any] | None:
+        return None
+
+    async def set(self, key: str, payload: dict[str, Any], ttl_seconds: int) -> None:
+        return None
 
 
 class OracleError(Exception):
@@ -54,6 +58,7 @@ class OracleService:
         redis_stage_ttl_seconds: int,
         default_gap_config: OracleGapConfig | None = None,
         enrichment: OracleEnrichmentPort | None = None,
+        stage_cache: ClaudeStageCachePort | None = None,
     ) -> None:
         if not model_name.strip():
             raise OracleValidationError("model_name must not be empty.")
@@ -64,6 +69,7 @@ class OracleService:
         self._model_name = model_name.strip()
         self._redis_stage_ttl_seconds = redis_stage_ttl_seconds
         self._default_gap_config = default_gap_config or OracleGapConfig()
+        self._stage_cache = stage_cache or _NullStageCache()
 
     def preview_scan(self, request: OracleEnqueueRequest) -> OracleScanReport:
         """Synchronous demand/supply gap scan without Claude spend."""
@@ -166,7 +172,10 @@ class OracleService:
         return items
 
     async def run_oracle_prediction(self, *, job_id: UUID) -> OracleJobView:
-        """Execute gap scan → optional Claude enrichment → niche alerts."""
+        """Execute gap scan → optional Claude enrichment → niche alerts.
+
+        Prompt-efficiency shape (≤3 DB passes): claim → scan checkpoint → final.
+        """
 
         job = await self._repository.get_job(job_id=job_id)
         if job is None:
@@ -179,14 +188,11 @@ class OracleService:
             )
 
         try:
-            await self._repository.mark_status(
+            # Pass 1: claim SCANNING (payload already on returned view).
+            job = await self._repository.mark_status(
                 job_id=job_id,
                 status=OracleJobStatus.SCANNING,
             )
-
-            job = await self._repository.get_job(job_id=job_id)
-            if job is None:
-                raise OracleNotFoundError("Oracle job not found.")
 
             queries = [
                 SearchQuerySignal.model_validate(item)
@@ -207,19 +213,17 @@ class OracleService:
             )
             report_payload = dump_scan_report(report)
             await self._write_stage_cache(job_id, "scan", report_payload)
-            await self._repository.save_scan_report(
-                job_id=job_id,
-                scan_report=report_payload,
-            )
 
             enrichments = []
             total_in = 0
             total_out = 0
 
+            # Pass 2: scan checkpoint (+ ENRICHING when Claude will run).
             if report.opportunities and self._enrichment is not None:
-                await self._repository.mark_status(
+                await self._repository.save_scan_checkpoint(
                     job_id=job_id,
-                    status=OracleJobStatus.ENRICHING,
+                    scan_report=report_payload,
+                    next_status=OracleJobStatus.ENRICHING,
                 )
                 enrichments, total_in, total_out = (
                     await self._enrichment.enrich_market_gaps(
@@ -228,12 +232,17 @@ class OracleService:
                         job_id=job_id,
                     )
                 )
-            elif report.opportunities and self._enrichment is None:
-                logger.warning(
-                    "Oracle job_id=%s has gaps but Claude enrichment is unavailable; "
-                    "emitting deterministic notifications.",
-                    job_id,
+            else:
+                await self._repository.save_scan_report(
+                    job_id=job_id,
+                    scan_report=report_payload,
                 )
+                if report.opportunities and self._enrichment is None:
+                    logger.warning(
+                        "Oracle job_id=%s has gaps but Claude enrichment is "
+                        "unavailable; emitting deterministic notifications.",
+                        job_id,
+                    )
 
             result = build_prediction_result(
                 scan_report=report,
@@ -243,6 +252,7 @@ class OracleService:
             result_payload = dump_prediction_result(result)
             await self._write_stage_cache(job_id, "prediction", result_payload)
 
+            # Pass 3: final persist.
             return await self._repository.save_final_result(
                 job_id=job_id,
                 prediction_result=result_payload,
@@ -266,22 +276,23 @@ class OracleService:
         self, job_id: UUID, stage: str, payload: dict[str, Any]
     ) -> None:
         try:
-            await cache_json(
+            await self._stage_cache.set(
                 redis_oracle_key(job_id, stage),
                 payload,
                 self._redis_stage_ttl_seconds,
             )
-        except RedisUnavailableError:
+        except Exception:
             logger.warning(
-                "Redis unavailable; skipped Oracle cache job_id=%s stage=%s",
+                "Skipped Oracle cache job_id=%s stage=%s",
                 job_id,
                 stage,
+                exc_info=True,
             )
 
     async def _read_stage_cache(
         self, job_id: UUID, stage: str
     ) -> dict[str, Any] | None:
         try:
-            return await get_cached_json(redis_oracle_key(job_id, stage))
-        except RedisUnavailableError:
+            return await self._stage_cache.get(redis_oracle_key(job_id, stage))
+        except Exception:
             return None

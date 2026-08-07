@@ -55,6 +55,10 @@ class FailoverConfig:
     telegram_bot_token: str
     telegram_chat_id: str
     dry_run: bool
+    redis_url: str = ""
+    neural_region_redis_key: str = "geo:neural_active_region"
+    primary_neural_region: str = ""
+    secondary_neural_region: str = ""
 
 
 @dataclass(slots=True)
@@ -115,6 +119,14 @@ def load_config(dry_run: bool = False) -> FailoverConfig:
         telegram_bot_token=_env("TELEGRAM_ERROR_BOT_TOKEN"),
         telegram_chat_id=_env("TELEGRAM_ERROR_CHAT_ID"),
         dry_run=dry_run or _env_bool("FAILOVER_DRY_RUN", False),
+        redis_url=_env("REDIS_URL", "redis://localhost:6379/0"),
+        neural_region_redis_key=_env(
+            "NEURAL_ACTIVE_REGION_REDIS_KEY", "geo:neural_active_region"
+        ),
+        primary_neural_region=_env(
+            "FAILOVER_PRIMARY_NEURAL_REGION", _env("NEURAL_PREFERRED_REGION")
+        ),
+        secondary_neural_region=_env("FAILOVER_SECONDARY_NEURAL_REGION"),
     )
 
 
@@ -284,6 +296,26 @@ def notify_telegram(cfg: FailoverConfig, text: str) -> None:
         logger.exception("Telegram notify failed")
 
 
+def publish_neural_region(cfg: FailoverConfig, region: str) -> None:
+    """Bridge infra failover → Midjourney provider ranking via Redis."""
+
+    cleaned = region.strip().lower()
+    if not cleaned or not cfg.redis_url:
+        return
+    if cfg.dry_run:
+        logger.warning("DRY-RUN neural region → %s", cleaned)
+        return
+    try:
+        import redis  # type: ignore[import-untyped]
+
+        client = redis.from_url(cfg.redis_url, socket_timeout=2.0)
+        client.set(cfg.neural_region_redis_key, cleaned)
+        client.close()
+        logger.info("Published neural active region=%s", cleaned)
+    except Exception:
+        logger.exception("Failed to publish neural active region=%s", cleaned)
+
+
 def apply_decision(cfg: FailoverConfig, state: WatchState, decision: Decision) -> None:
     if decision == "stay":
         return
@@ -292,6 +324,10 @@ def apply_decision(cfg: FailoverConfig, state: WatchState, decision: Decision) -
         state.active = SiteRole.SECONDARY
         state.consecutive_primary_fails = 0
         state.last_action = "failover_to_secondary"
+        publish_neural_region(
+            cfg,
+            cfg.secondary_neural_region or cfg.primary_neural_region,
+        )
         notify_telegram(
             cfg,
             "🚨 FAILOVER_ACTIVATED primary→secondary\n"
@@ -305,6 +341,7 @@ def apply_decision(cfg: FailoverConfig, state: WatchState, decision: Decision) -
         state.active = SiteRole.PRIMARY
         state.consecutive_primary_oks = 0
         state.last_action = "failback_to_primary"
+        publish_neural_region(cfg, cfg.primary_neural_region)
         notify_telegram(
             cfg,
             "✅ FAILBACK_ACTIVATED secondary→primary\n"

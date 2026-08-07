@@ -177,12 +177,13 @@ def apply_brand_filter_to_style(selected_style: str, brand: BrandStyleFilter) ->
     """Append brand DNA to the selected style descriptor."""
 
     base = selected_style.strip()
-    suffix = (
-        f"{brand.trigger_word}, {brand.brand_style_prompt.strip()}"
-        if brand.brand_style_prompt.strip()
-        else brand.trigger_word
-    )
-    if brand.trigger_word in base and brand.brand_style_prompt[:40] in base:
+    prompt = brand.brand_style_prompt.strip()
+    suffix = f"{brand.trigger_word}, {prompt}" if prompt else brand.trigger_word
+    # Empty prompt must NOT use ``"" in base`` (always True in Python).
+    prompt_token = prompt[:40] if prompt else None
+    if brand.trigger_word in base and (
+        prompt_token is None or prompt_token in base
+    ):
         return base
     merged = f"{base}, {suffix}" if base else suffix
     return merged[:500]
@@ -192,9 +193,15 @@ def apply_brand_filter_to_prompt(prompt: str, brand: BrandStyleFilter) -> str:
     """Inject the personal LoRA / BrandDNA context into the generation prompt."""
 
     base = prompt.strip()
-    injection = (
-        f"[Brand LoRA:{brand.trigger_word}] {brand.brand_style_prompt.strip()}"
-    ).strip()
+    parts = [
+        f"[Brand LoRA:{brand.trigger_word}] {brand.brand_style_prompt.strip()}".strip()
+    ]
+    if brand.lora_weights_url:
+        # Stable Diffusion / Comfy-compatible LoRA reference consumed by ai_engine.
+        parts.append(
+            f"<lora:{brand.lora_weights_url}:{brand.lora_scale:.2f}>"
+        )
+    injection = " ".join(p for p in parts if p).strip()
     if injection and injection in base:
         return base
     merged = f"{base}\n{injection}".strip() if base else injection

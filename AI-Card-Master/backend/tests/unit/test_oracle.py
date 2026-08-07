@@ -248,6 +248,23 @@ class _FakeOracleRepo:
         self.jobs[job_id] = updated
         return updated
 
+    async def save_scan_checkpoint(
+        self,
+        *,
+        job_id: UUID,
+        scan_report: dict,
+        next_status: OracleJobStatus,
+    ):
+        job = self.jobs[job_id]
+        updated = replace(
+            job,
+            scan_report=scan_report,
+            status=next_status,
+            updated_at=datetime.now(UTC),
+        )
+        self.jobs[job_id] = updated
+        return updated
+
     async def save_final_result(
         self,
         *,

@@ -61,6 +61,15 @@ class PainAnalysisPersistencePort(Protocol):
     ) -> PainAnalysisJobView:
         """Persist deterministic junk-filter preview."""
 
+    async def save_filter_checkpoint(
+        self,
+        *,
+        job_id: UUID,
+        filter_preview: dict[str, Any],
+        next_status: PainAnalysisJobStatus,
+    ) -> PainAnalysisJobView:
+        """Persist filter preview and advance status in one DB round-trip."""
+
     async def save_final_result(
         self,
         *,

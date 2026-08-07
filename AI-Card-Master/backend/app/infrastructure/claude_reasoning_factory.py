@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.claude_reasoning_service import ClaudeReasoningService
 from app.core.config import get_settings
-from app.infrastructure.claude.client import (
-    Claude47VisionClient,
-    ClaudeConfigurationError,
-)
+from app.infrastructure.claude_client_loader import load_claude_client
 from app.infrastructure.claude_stage_cache import RedisClaudeStageCache
 from app.infrastructure.persistence.claude_reasoning_repository import (
     ClaudeReasoningRepository,
@@ -21,7 +20,7 @@ def build_claude_reasoning_service(
     db_session: AsyncSession,
     *,
     require_claude_client: bool = False,
-    claude: Claude47VisionClient | None = None,
+    claude: Any | None = None,
 ) -> ClaudeReasoningService:
     """Wire ports for HTTP handlers and Celery workers.
 
@@ -30,18 +29,11 @@ def build_claude_reasoning_service(
     """
 
     settings = get_settings()
-    client = claude
-    if client is None and require_claude_client:
-        client = Claude47VisionClient(settings)
-    elif client is None:
-        try:
-            if (
-                settings.claude_47_api_key
-                and settings.claude_47_api_key.get_secret_value().strip()
-            ):
-                client = Claude47VisionClient(settings)
-        except ClaudeConfigurationError:
-            client = None
+    client = load_claude_client(
+        settings,
+        require=require_claude_client,
+        existing=claude,
+    )
 
     return ClaudeReasoningService(
         ClaudeReasoningRepository(db_session),

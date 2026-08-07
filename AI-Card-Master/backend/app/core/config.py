@@ -419,6 +419,11 @@ class Settings(BaseSettings):
         default="",
         alias="NEURAL_FAILOVER_REGIONS",
     )
+    # Redis key written by failover_watchdog / read by ai_engine provider pool.
+    neural_active_region_redis_key: str = Field(
+        default="geo:neural_active_region",
+        alias="NEURAL_ACTIVE_REGION_REDIS_KEY",
+    )
     face_fix_api_key: SecretStr | None = Field(default=None, alias="FACE_FIX_API_KEY")
     face_fix_base_url: str = Field(default="", alias="FACE_FIX_BASE_URL")
     face_fix_path: str = Field(default="/v1/face-fix", alias="FACE_FIX_PATH")

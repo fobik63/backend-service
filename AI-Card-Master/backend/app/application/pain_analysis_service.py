@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
+from app.application.ports.claude_reasoning import ClaudeStageCachePort
 from app.application.ports.pain_analysis import (
     PainAnalysisClaudePort,
     PainAnalysisPersistencePort,
@@ -22,13 +23,16 @@ from app.domain.pain_analysis import (
     merge_with_deterministic_fallback,
     redis_pain_analysis_key,
 )
-from app.infrastructure.redis import (
-    RedisUnavailableError,
-    cache_json,
-    get_cached_json,
-)
 
 logger = logging.getLogger(__name__)
+
+
+class _NullStageCache:
+    async def get(self, key: str) -> dict[str, Any] | None:
+        return None
+
+    async def set(self, key: str, payload: dict[str, Any], ttl_seconds: int) -> None:
+        return None
 
 
 class PainAnalysisError(Exception):
@@ -53,6 +57,7 @@ class PainAnalysisService:
         model_name: str,
         redis_stage_ttl_seconds: int,
         analyzer: PainAnalysisClaudePort | None = None,
+        stage_cache: ClaudeStageCachePort | None = None,
     ) -> None:
         if not model_name.strip():
             raise PainAnalysisValidationError("model_name must not be empty.")
@@ -64,6 +69,7 @@ class PainAnalysisService:
         self._analyzer = analyzer
         self._model_name = model_name.strip()
         self._redis_stage_ttl_seconds = redis_stage_ttl_seconds
+        self._stage_cache = stage_cache or _NullStageCache()
 
     def preview_filter(self, request: PainAnalysisRequest) -> PainAnalysisResult:
         """Synchronous junk filter + template content without Claude spend."""
@@ -134,32 +140,27 @@ class PainAnalysisService:
             )
 
         try:
-            await self._repository.mark_status(
+            # Pass 1: claim FILTERING (payload on returned view).
+            job = await self._repository.mark_status(
                 job_id=job_id,
                 status=PainAnalysisJobStatus.FILTERING,
             )
-
-            job = await self._repository.get_job(job_id=job_id)
-            if job is None:
-                raise PainAnalysisNotFoundError("Pain analysis job not found.")
 
             request = PainAnalysisRequest.model_validate(job.request_payload)
             preview = filter_and_preview_pains(request)
             preview_payload = build_filter_preview_payload(preview)
             await self._write_stage_cache(job_id, "filter", preview_payload)
-            await self._repository.save_filter_preview(
-                job_id=job_id,
-                filter_preview=preview_payload,
-            )
 
             claude_result: PainAnalysisResult | None = None
             total_in = 0
             total_out = 0
 
+            # Pass 2: filter + ANALYZING (or filter-only) in one write.
             if self._analyzer is not None:
-                await self._repository.mark_status(
+                await self._repository.save_filter_checkpoint(
                     job_id=job_id,
-                    status=PainAnalysisJobStatus.ANALYZING,
+                    filter_preview=preview_payload,
+                    next_status=PainAnalysisJobStatus.ANALYZING,
                 )
                 claude_result, total_in, total_out = (
                     await self._analyzer.analyze_competitor_pains(
@@ -169,6 +170,10 @@ class PainAnalysisService:
                     )
                 )
             else:
+                await self._repository.save_filter_preview(
+                    job_id=job_id,
+                    filter_preview=preview_payload,
+                )
                 logger.warning(
                     "Pain analysis job_id=%s: Claude unavailable; "
                     "using deterministic filter/content.",
@@ -182,6 +187,7 @@ class PainAnalysisService:
             result_payload = dump_pain_analysis_result(result)
             await self._write_stage_cache(job_id, "result", result_payload)
 
+            # Pass 3: final persist.
             return await self._repository.save_final_result(
                 job_id=job_id,
                 analysis_result=result_payload,
@@ -204,22 +210,23 @@ class PainAnalysisService:
         self, job_id: UUID, stage: str, payload: dict[str, Any]
     ) -> None:
         try:
-            await cache_json(
+            await self._stage_cache.set(
                 redis_pain_analysis_key(job_id, stage),
                 payload,
                 self._redis_stage_ttl_seconds,
             )
-        except RedisUnavailableError:
+        except Exception:
             logger.warning(
-                "Redis unavailable; skipped pain-analysis cache job_id=%s stage=%s",
+                "Skipped pain-analysis cache job_id=%s stage=%s",
                 job_id,
                 stage,
+                exc_info=True,
             )
 
     async def _read_stage_cache(
         self, job_id: UUID, stage: str
     ) -> dict[str, Any] | None:
         try:
-            return await get_cached_json(redis_pain_analysis_key(job_id, stage))
-        except RedisUnavailableError:
+            return await self._stage_cache.get(redis_pain_analysis_key(job_id, stage))
+        except Exception:
             return None

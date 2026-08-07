@@ -78,6 +78,29 @@ class ExportRepository:
         )
         return None if row is None else row.ciphertext
 
+    async def get_credentials_ciphertext_batch(
+        self,
+        *,
+        user_id: UUID,
+        platforms: tuple[MarketplacePlatform, ...],
+    ) -> dict[MarketplacePlatform, str]:
+        if not platforms:
+            return {}
+        platform_values = tuple(platform.value for platform in platforms)
+        rows = await self._session.scalars(
+            select(MarketplaceCredential).where(
+                MarketplaceCredential.user_id == user_id,
+                MarketplaceCredential.platform.in_(platform_values),
+            )
+        )
+        allowed = {platform.value: platform for platform in platforms}
+        result: dict[MarketplacePlatform, str] = {}
+        for row in rows.all():
+            mapped = allowed.get(row.platform)
+            if mapped is not None:
+                result[mapped] = row.ciphertext
+        return result
+
     async def list_credentials(self, user_id: UUID) -> tuple[MarketplaceCredentialView, ...]:
         rows = await self._session.scalars(
             select(MarketplaceCredential)

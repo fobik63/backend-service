@@ -61,6 +61,15 @@ class VisualAuditPersistencePort(Protocol):
     ) -> VisualAuditJobView:
         """Persist deterministic pre-Vision filter report."""
 
+    async def save_filter_checkpoint(
+        self,
+        *,
+        job_id: UUID,
+        filter_report: dict[str, Any],
+        next_status: VisualAuditJobStatus,
+    ) -> VisualAuditJobView:
+        """Persist filter report and advance status in one DB round-trip."""
+
     async def save_final_result(
         self,
         *,

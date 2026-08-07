@@ -182,6 +182,25 @@ class OracleRepository:
         await self._session.refresh(row)
         return _job_view(row)
 
+    async def save_scan_checkpoint(
+        self,
+        *,
+        job_id: UUID,
+        scan_report: dict[str, Any],
+        next_status: OracleJobStatus,
+    ) -> OracleJobView:
+        row = await self._session.scalar(
+            select(OraclePredictionJob).where(OraclePredictionJob.id == job_id)
+        )
+        if row is None:
+            raise ValueError(f"Oracle job not found: {job_id}")
+        row.scan_report = scan_report
+        row.status = next_status.value
+        row.updated_at = datetime.now(UTC)
+        await self._session.commit()
+        await self._session.refresh(row)
+        return _job_view(row)
+
     async def save_final_result(
         self,
         *,
