@@ -1,4 +1,8 @@
-"""Cloudflare API helpers for origin protection and automated IP bans."""
+"""Cloudflare API helpers for origin protection and automated IP bans.
+
+Great Wall (plan §61) pushes temporary Firewall Access Rules when Redis
+rate limits or threat scoring trigger an auto-ban.
+"""
 
 from __future__ import annotations
 
@@ -19,10 +23,10 @@ class CloudflareError(RuntimeError):
 class CloudflareClient:
     """Minimal Cloudflare Firewall Access Rules client.
 
-    Used to push temporary IP bans discovered by SuspiciousActivityMiddleware.
-    DNS orange-cloud + origin firewall (allow Cloudflare IPs only) must still be
-    configured in the Cloudflare dashboard / host firewall — this client only
-    automates WAF/firewall rule updates.
+    Used to push temporary IP bans discovered by SuspiciousActivityMiddleware
+    (Great Wall). DNS orange-cloud + origin firewall (allow Cloudflare IPs only)
+    must still be configured in the Cloudflare dashboard / host firewall — this
+    client only automates WAF/firewall rule updates.
     """
 
     def __init__(self, settings: Settings | None = None) -> None:
@@ -65,7 +69,7 @@ class CloudflareClient:
         payload: dict[str, Any] = {
             "mode": mode,
             "configuration": {"target": "ip", "value": ip},
-            "notes": f"AI-Card-Master auto-ban: {reason[:200]}",
+            "notes": f"AI-Card-Master Great Wall auto-ban: {reason[:180]}",
         }
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
@@ -75,6 +79,10 @@ class CloudflareClient:
                     if body.get("success") is True:
                         logger.info("Cloudflare banned IP %s (%s)", ip, reason)
                         return True
+                # Idempotent: rule already exists is still a successful edge block.
+                if response.status_code == 400 and "already exists" in response.text.lower():
+                    logger.info("Cloudflare ban already present for %s", ip)
+                    return True
                 logger.warning(
                     "Cloudflare ban_ip failed for %s: status=%s body=%s",
                     ip,
@@ -84,6 +92,45 @@ class CloudflareClient:
                 return False
         except Exception:
             logger.warning("Cloudflare ban_ip request error for %s", ip, exc_info=True)
+            return False
+
+    async def unban_ip(self, ip: str) -> bool:
+        """Remove firewall access rules that target ``ip``. Best-effort."""
+
+        if not self._settings.cloudflare_enabled or not self.is_configured:
+            return False
+
+        target_id = self._zone_id or self._account_id
+        scope = "zones" if self._zone_id else "accounts"
+        list_url = (
+            f"{self._base_url}/client/v4/{scope}/{target_id}"
+            f"/firewall/access_rules/rules"
+        )
+        headers = {
+            "Authorization": f"Bearer {self._api_token}",
+            "Content-Type": "application/json",
+        }
+        params = {"configuration.target": "ip", "configuration.value": ip}
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                listed = await client.get(list_url, headers=headers, params=params)
+                if listed.status_code != 200:
+                    return False
+                body = listed.json()
+                if body.get("success") is not True:
+                    return False
+                removed = False
+                for rule in body.get("result") or []:
+                    rule_id = rule.get("id")
+                    if not rule_id:
+                        continue
+                    delete_url = f"{list_url}/{rule_id}"
+                    deleted = await client.delete(delete_url, headers=headers)
+                    if deleted.status_code in {200, 204}:
+                        removed = True
+                return removed
+        except Exception:
+            logger.warning("Cloudflare unban_ip error for %s", ip, exc_info=True)
             return False
 
     async def verify_zone_access(self) -> bool:

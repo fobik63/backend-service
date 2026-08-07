@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Encrypted PostgreSQL backup → isolated S3 vault (plan §36).
-# Schedule: every 6 hours (see deploy/docker-compose.backup.yml).
+# Encrypted PostgreSQL backup → isolated S3 vault (plan §36 / §63).
+# Schedule: daily by default (BACKUP_INTERVAL_SECONDS=86400 in compose);
+# set 21600 for every-6h RPO. See deploy/docker-compose.backup.yml.
 #
 # Required env:
 #   DATABASE_URL or PGHOST/PGUSER/PGPASSWORD/PGDATABASE

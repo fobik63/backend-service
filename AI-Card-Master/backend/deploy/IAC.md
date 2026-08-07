@@ -11,7 +11,8 @@
 | `deploy/inventory.json` | Декларативный инвентарь runtime-стека |
 | `docker-compose.yml` | Postgres 16 + Redis 7 + API + Celery worker/beat |
 | `deploy/docker-compose.scale.yml` | Nginx edge, resource limits, без публичных :5432/:6379 |
-| `deploy/docker-compose.backup.yml` | PG dump каждые 6h → isolated S3 |
+| `deploy/docker-compose.backup.yml` | PG dump daily (86400s) → isolated S3; set 21600 for 6h RPO |
+| `deploy/incident_recovery.py` | §63: critical load → Redis cache flush + container restart + Telegram |
 | `deploy/docker-compose.tunnel.yml` | Cloudflare Tunnel (origin без публичного HTTP) |
 | `deploy/terraform/` | Hetzner Cloud: primary + secondary VM, firewall, cloud-init |
 | `deploy/one_click_deploy.py` | Оркестратор (validate → build → up → migrate → health) |

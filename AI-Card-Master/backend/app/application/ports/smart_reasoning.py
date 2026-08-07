@@ -8,10 +8,10 @@ from app.domain.smart_reasoning import ReasoningTaskKind, ReasoningTier
 
 
 class ReasoningModelRouterPort(Protocol):
-    """Resolve Claude model id for a named analytics workload."""
+    """Resolve model id for a named analytics workload (Haiku / Opus / Ollama)."""
 
     def model_for(self, kind: ReasoningTaskKind) -> str:
-        """Return Haiku (simple) or Opus (deep / Eye of God)."""
+        """Return Haiku (simple), Opus (deep), or Ollama (local)."""
 
     def tier_for(self, kind: ReasoningTaskKind) -> ReasoningTier:
         """Return the cost tier for the workload."""

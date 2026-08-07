@@ -362,8 +362,9 @@ class _FakeAnalyzer:
     model_name = "claude-opus-4-7"
 
     async def analyze_competitor_card(
-        self, *, card, images, user_id=None, job_id=None
+        self, *, card, images, user_id=None, job_id=None, context_delta=None
     ):
+        _ = context_delta
         result = CompetitorCardDeepAnalysis(
             article=card.article,
             marketplace=card.marketplace.value,

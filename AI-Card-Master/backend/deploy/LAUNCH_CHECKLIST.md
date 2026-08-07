@@ -37,9 +37,10 @@ IaC inventory (`deploy/inventory.json`) must list postgres, redis, api, worker, 
 
 ## 2) Database & migrations
 
-- [ ] PostgreSQL reachable; backups every 6h to **isolated** vault (`deploy/docker-compose.backup.yml`, plan §36)
+- [ ] PostgreSQL reachable; **daily** encrypted backups to isolated vault (`deploy/docker-compose.backup.yml`, plan §63; optional `BACKUP_INTERVAL_SECONDS=21600` for 6h RPO)
 - [ ] Restore drill documented: `bash deploy/postgres_restore.sh s3://…`
 - [ ] Geo failover watchdog configured (`deploy/failover_watchdog.py`, ≤30s SLO)
+- [ ] Incident recovery loop on primary (`python deploy/incident_recovery.py`) + Telegram hardware alerts
 - [ ] `alembic upgrade head` on release (done by `deploy/release.sh`)
 - [ ] History indexes present (`ix_generation_jobs_user_id_created_at`, …)
 - [ ] Smoke: create user → trial/payment path → one generation job

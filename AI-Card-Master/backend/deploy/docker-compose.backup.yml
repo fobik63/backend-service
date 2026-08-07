@@ -1,5 +1,6 @@
-# Isolated PostgreSQL backup sidecar (plan §36).
-# Every 6 hours: pg_dump → AES-256 → separate S3 vault (BACKUP_S3_* ≠ app S3_*).
+# Isolated PostgreSQL backup sidecar (plan §36 / §63).
+# Encrypted daily cloud vault: pg_dump → AES-256 → separate S3 (BACKUP_S3_* ≠ app S3_*).
+# Default interval 86400s (daily, §63). For tighter RPO use 21600 (every 6h, §36).
 #
 # Usage (from backend/):
 #   docker compose -f docker-compose.yml -f deploy/docker-compose.backup.yml up -d pg-backup
@@ -24,7 +25,7 @@ services:
       PGUSER: ai_card
       PGPASSWORD: ${POSTGRES_PASSWORD:-changeme_in_production}
       PGDATABASE: ai_card_master
-      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-21600}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
       BACKUP_PREFIX: ${BACKUP_PREFIX:-pg/ai_card_master}
       BACKUP_S3_REGION: ${BACKUP_S3_REGION:-ru-1}
@@ -38,8 +39,8 @@ services:
       - |
         set -e
         chmod +x /scripts/postgres_backup.sh
-        echo "[pg-backup] sidecar started; interval=$${BACKUP_INTERVAL_SECONDS}s"
-        # First backup shortly after boot (ransomware window), then every 6h.
+        echo "[pg-backup] sidecar started; interval=$${BACKUP_INTERVAL_SECONDS}s (daily=86400)"
+        # First backup shortly after boot (ransomware window), then on schedule.
         sleep 120
         while true; do
           if /scripts/postgres_backup.sh; then
@@ -50,7 +51,7 @@ services:
               curl -fsS -X POST \
                 "https://api.telegram.org/bot$${TELEGRAM_ERROR_BOT_TOKEN}/sendMessage" \
                 -d "chat_id=$${TELEGRAM_ERROR_CHAT_ID}" \
-                --data-urlencode "text=🚨 PG backup FAILED" >/dev/null || true
+                --data-urlencode "text=🚨 PG encrypted backup FAILED (plan §63)" >/dev/null || true
             fi
           fi
           sleep "$${BACKUP_INTERVAL_SECONDS}"

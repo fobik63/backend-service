@@ -66,16 +66,16 @@ python deploy/failover_watchdog.py --once --dry-run
 3. Ротация всех секретов (JWT, S3 app keys, DB password, YooKassa, MJ/Claude).
 4. Cloudflare → новый clean origin; старый сегмент — quarantine.
 
-## 4. Бэкапы PostgreSQL (каждые 6 часов)
+## 4. Бэкапы PostgreSQL (ежедневно, plan §63; RPO 6h опционально)
 
 | Свойство | Требование |
 |----------|------------|
-| Расписание | `0 */6 * * *` UTC (compose sidecar / cron) |
+| Расписание | **ежедневно** (`BACKUP_INTERVAL_SECONDS=86400`) или `21600` для RPO 6h (§36) |
 | Формат | `pg_dump -Fc` (custom) + AES-256-CBC |
 | Хранилище | Отдельный бакет `BACKUP_S3_*` ≠ app `S3_*` |
 | Retention | ≥ 14 дней (`BACKUP_RETENTION_DAYS`) |
 | Изоляция | Отдельный Access Key; bucket versioning / Object Lock если доступен |
-| Алерт | Telegram при fail / missing backup > 7h |
+| Алерт | Telegram при fail / missing backup |
 
 ```bash
 bash deploy/postgres_backup.sh
@@ -90,14 +90,34 @@ docker compose -f docker-compose.yml -f deploy/docker-compose.backup.yml up -d p
 
 Целевой RTO restore (теплая ВМ + последний dump): **5–15 минут** при отработанном drill.
 
+## 4b. Automated Incident Response (plan §63)
+
+На primary origin:
+
+```bash
+python deploy/incident_recovery.py
+python deploy/incident_recovery.py --once --dry-run
+```
+
+| Триггер | Действие |
+|---------|----------|
+| CPU/RAM/load ≥ critical N циклов подряд | flush Redis cache prefixes + `docker compose restart api worker nginx` + Telegram |
+| Disk ≥ warn | Telegram only (cooldown) |
+| `/health/ready` fail | то же, что critical load |
+| Сбой бэкапа / cycle error watchdog | Telegram |
+
+Postgres **не** перезапускается скриптом (целостность данных). Celery queue keys не трогаются — только expendable cache (`claude:`, `analytics:`, …).
+
 ## 5. Чек-лист внедрения
 
 - [ ] Secondary инстанс в другой DC, тот же `IMAGE_TAG`, секреты из vault
 - [ ] `FAILOVER_*` + Cloudflare Zone/Token с правом DNS edit
 - [ ] Watchdog на jump host / secondary (systemd / screen)
-- [ ] `BACKUP_S3_*` + `BACKUP_ENCRYPTION_KEY` (≥ 32 chars), drill restore раз в месяц
+- [ ] `BACKUP_S3_*` + `BACKUP_ENCRYPTION_KEY` (≥ 32 chars), daily sidecar, drill restore раз в месяц
+- [ ] `incident_recovery.py` на primary + `TELEGRAM_ERROR_*` для hardware alerts
 - [ ] `MIDJOURNEY_PROVIDERS` с ≥2 `region`
 - [ ] Drill: убить primary API → измерить время до 200 на secondary ≤ 30s
+- [ ] Drill: `--dry-run` critical load → убедиться в restart/flush плане без мутаций
 - [ ] Drill: restore dump на пустой Postgres → `alembic upgrade head` не нужен если dump полный
 
 ## 6. Связанные артефакты

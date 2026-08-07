@@ -2,6 +2,7 @@
 
 from app.api.account import router as account_router
 from app.api.admin import router as admin_router
+from app.api.admin import security_status_ws_router as admin_security_ws_router
 from app.api.ab_tests import router as ab_tests_router
 from app.api.ai_strategy import router as ai_strategy_router
 from app.api.analytics import router as analytics_router
@@ -30,6 +31,7 @@ from app.api.workspaces import router as workspaces_router
 __all__ = [
     "account_router",
     "admin_router",
+    "admin_security_ws_router",
     "ab_tests_router",
     "ai_strategy_router",
     "analytics_router",

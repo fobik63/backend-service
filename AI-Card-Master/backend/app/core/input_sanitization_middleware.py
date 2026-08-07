@@ -1,4 +1,4 @@
-"""Middleware that sanitizes JSON request bodies for injection probes."""
+"""Middleware that sanitizes JSON request bodies for SQL / XSS / prompt probes."""
 
 from __future__ import annotations
 
@@ -31,10 +31,10 @@ _SKIP_PREFIXES = (
 
 
 class InputSanitizationMiddleware(BaseHTTPMiddleware):
-    """Validate JSON bodies for SQL / prompt-injection payloads.
+    """Validate JSON bodies for SQL / XSS / prompt-injection payloads.
 
     Multipart uploads and provider webhooks are skipped (binary / signed).
-    Path/query scanning is handled by SuspiciousActivityMiddleware.
+    Path/query scanning is handled by SuspiciousActivityMiddleware (Great Wall).
     """
 
     async def dispatch(
@@ -79,6 +79,7 @@ class InputSanitizationMiddleware(BaseHTTPMiddleware):
             sanitize_payload(
                 payload,
                 check_sql=True,
+                check_xss=settings.security_xss_protection_enabled,
                 check_prompt=settings.security_reject_prompt_injection,
             )
         except InputSanitizationError as exc:

@@ -194,6 +194,30 @@ async def send_operator_telegram(message: str) -> None:
     await _send_telegram_async(token=token, chat_id=chat_id, message=message)
 
 
+async def notify_security_ban(
+    *,
+    ip: str,
+    reason: str,
+    path: str,
+    ttl_seconds: int,
+    cloudflare_banned: bool = False,
+    api_key_fingerprint: str | None = None,
+) -> None:
+    """Notify admin about an automatic Great Wall IP / API-key ban."""
+
+    lines = [
+        "AI-Card-Master SECURITY BAN (Great Wall)",
+        f"ip: {ip}",
+        f"reason: {reason}",
+        f"path: {path}",
+        f"ttl_seconds: {ttl_seconds}",
+        f"cloudflare_banned: {cloudflare_banned}",
+    ]
+    if api_key_fingerprint:
+        lines.append(f"api_key_fp: {api_key_fingerprint[:12]}…")
+    await send_operator_telegram("\n".join(lines))
+
+
 async def _send_telegram_async(*, token: str, chat_id: str, message: str) -> None:
     settings = get_settings()
     url = f"https://api.telegram.org/bot{token}/sendMessage"

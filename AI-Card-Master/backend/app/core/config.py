@@ -145,7 +145,7 @@ class Settings(BaseSettings):
     # Hidden admin API gate. Empty value disables /api/v1/admin for everyone.
     admin_allowed_user_id: str = Field(default="", alias="ADMIN_ALLOWED_USER_ID")
 
-    # --- Security layer (plan §14): suspicious activity / sanitization / CF ---
+    # --- Security layer (plan §14 + Great Wall §61) ---
     security_suspicious_middleware_enabled: bool = Field(
         default=True,
         alias="SECURITY_SUSPICIOUS_MIDDLEWARE_ENABLED",
@@ -158,9 +158,33 @@ class Settings(BaseSettings):
         default=True,
         alias="SECURITY_REJECT_PROMPT_INJECTION",
     )
+    security_xss_protection_enabled: bool = Field(
+        default=True,
+        alias="SECURITY_XSS_PROTECTION_ENABLED",
+        description="Reject XSS probes in path/query/JSON (Great Wall §61).",
+    )
     security_rate_limit_per_minute: int = Field(
         default=120,
         alias="SECURITY_RATE_LIMIT_PER_MINUTE",
+        description="Per-IP Redis rate limit window budget (Great Wall §61).",
+    )
+    security_api_key_rate_limit_per_minute: int = Field(
+        default=300,
+        alias="SECURITY_API_KEY_RATE_LIMIT_PER_MINUTE",
+        description=(
+            "Per API-key / Bearer fingerprint Redis budget. "
+            "0 disables the API-key bucket."
+        ),
+    )
+    security_rate_limit_auto_ban_enabled: bool = Field(
+        default=True,
+        alias="SECURITY_RATE_LIMIT_AUTO_BAN_ENABLED",
+        description="Auto-ban IP (and API key) when Redis rate limit is exceeded.",
+    )
+    security_telegram_ban_alerts_enabled: bool = Field(
+        default=True,
+        alias="SECURITY_TELEGRAM_BAN_ALERTS_ENABLED",
+        description="Notify operator Telegram chat on auto-ban events.",
     )
     security_auto_block_threat_score: int = Field(
         default=5,
@@ -173,6 +197,36 @@ class Settings(BaseSettings):
     security_max_json_body_bytes: int = Field(
         default=1_048_576,
         alias="SECURITY_MAX_JSON_BODY_BYTES",
+    )
+    # Security & Status admin dashboard (plan §62).
+    security_status_rps_window_seconds: int = Field(
+        default=5,
+        alias="SECURITY_STATUS_RPS_WINDOW_SECONDS",
+        description="Rolling window (seconds) for live RPS estimate.",
+    )
+    security_status_ws_interval_seconds: float = Field(
+        default=2.0,
+        alias="SECURITY_STATUS_WS_INTERVAL_SECONDS",
+        description="WebSocket push interval for Security & Status snapshots.",
+    )
+    security_status_api_balance_cache_seconds: float = Field(
+        default=60.0,
+        alias="SECURITY_STATUS_API_BALANCE_CACHE_SECONDS",
+        description="Cache TTL for Midjourney/Claude balance probes.",
+    )
+    security_status_api_probe_timeout_seconds: float = Field(
+        default=5.0,
+        alias="SECURITY_STATUS_API_PROBE_TIMEOUT_SECONDS",
+    )
+    midjourney_balance_path: str = Field(
+        default="",
+        alias="MIDJOURNEY_BALANCE_PATH",
+        description="Optional provider-relative path for balance JSON (e.g. /account).",
+    )
+    midjourney_balance_low_threshold: float = Field(
+        default=5.0,
+        alias="MIDJOURNEY_BALANCE_LOW_THRESHOLD",
+        description="Balance at/below this value is reported as status=low.",
     )
     # Behavioral generation rate limit by visitorId (plan §35) → CAPTCHA_REQUIRED.
     security_behavioral_rate_enabled: bool = Field(
@@ -931,6 +985,46 @@ class Settings(BaseSettings):
         alias="CLAUDE_47_OUTPUT_1K_TOKENS_COST_USD",
     )
 
+    # Plan §69 — AI Token & Resource Governor (Economy 2.0)
+    token_governor_enabled: bool = Field(
+        default=True,
+        alias="TOKEN_GOVERNOR_ENABLED",
+    )
+    token_governor_soft_input_tokens: int = Field(
+        default=6_000,
+        alias="TOKEN_GOVERNOR_SOFT_INPUT_TOKENS",
+    )
+    token_governor_hard_input_tokens: int = Field(
+        default=24_000,
+        alias="TOKEN_GOVERNOR_HARD_INPUT_TOKENS",
+    )
+    token_governor_always_semantic_filter: bool = Field(
+        default=True,
+        alias="TOKEN_GOVERNOR_ALWAYS_SEMANTIC_FILTER",
+    )
+    token_governor_prefer_local: bool = Field(
+        default=True,
+        alias="TOKEN_GOVERNOR_PREFER_LOCAL",
+    )
+    token_governor_snapshot_ttl_seconds: int = Field(
+        default=604_800,
+        alias="TOKEN_GOVERNOR_SNAPSHOT_TTL_SECONDS",
+    )
+    # Local LLM (Ollama / Llama 3) for routine classification & text prep.
+    ollama_enabled: bool = Field(default=False, alias="OLLAMA_ENABLED")
+    ollama_base_url: str = Field(
+        default="http://127.0.0.1:11434",
+        alias="OLLAMA_BASE_URL",
+    )
+    ollama_model: str = Field(
+        default="llama3",
+        alias="OLLAMA_MODEL",
+    )
+    ollama_timeout_seconds: float = Field(
+        default=60.0,
+        alias="OLLAMA_TIMEOUT_SECONDS",
+    )
+
     # Intelligent visual audit (Brand Dominant filter → Rising Stars)
     visual_audit_top_n: int = Field(default=50, alias="VISUAL_AUDIT_TOP_N")
     visual_audit_brand_dominant_soft_reviews: int = Field(
@@ -1194,6 +1288,9 @@ class Settings(BaseSettings):
         "claude_47_processing_timeout_seconds",
         "claude_47_outbox_batch_size",
         "claude_47_recovery_batch_size",
+        "token_governor_soft_input_tokens",
+        "token_governor_hard_input_tokens",
+        "token_governor_snapshot_ttl_seconds",
         "visual_audit_top_n",
         "visual_audit_brand_dominant_soft_reviews",
         "visual_audit_brand_dominant_hard_reviews",
@@ -1223,6 +1320,7 @@ class Settings(BaseSettings):
         "security_generation_requests_per_minute",
         "security_generation_rate_window_seconds",
         "security_captcha_block_ttl_seconds",
+        "security_status_rps_window_seconds",
         "admin_panel_port",
         "dead_mans_switch_fail_threshold",
         "dead_mans_switch_window_seconds",
@@ -1231,6 +1329,15 @@ class Settings(BaseSettings):
     def validate_generation_positive_ints(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("Generation and queue numeric settings must be positive.")
+        return value
+
+    @field_validator("security_api_key_rate_limit_per_minute")
+    @classmethod
+    def validate_api_key_rate_limit_non_negative(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError(
+                "SECURITY_API_KEY_RATE_LIMIT_PER_MINUTE must be >= 0 (0 disables)."
+            )
         return value
 
     @field_validator("stock_parser_beat_hour_utc")
@@ -1272,16 +1379,29 @@ class Settings(BaseSettings):
         "replicate_timeout_seconds",
         "claude_47_timeout_seconds",
         "claude_47_base_retry_delay_seconds",
+        "ollama_timeout_seconds",
         "yookassa_timeout_seconds",
         "yookassa_base_retry_delay_seconds",
         "eye_of_god_image_timeout_seconds",
         "cloudflare_timeout_seconds",
         "captcha_verify_timeout_seconds",
+        "security_status_ws_interval_seconds",
+        "security_status_api_probe_timeout_seconds",
     )
     @classmethod
     def validate_positive_floats(cls, value: float) -> float:
         if value <= 0:
             raise ValueError("Timeout/retry settings must be positive.")
+        return value
+
+    @field_validator(
+        "security_status_api_balance_cache_seconds",
+        "midjourney_balance_low_threshold",
+    )
+    @classmethod
+    def validate_non_negative_security_status_floats(cls, value: float) -> float:
+        if value < 0:
+            raise ValueError("Security status numeric settings must be >= 0.")
         return value
 
     @field_validator("captcha_provider")

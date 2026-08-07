@@ -18,6 +18,10 @@ from app.infrastructure.smart_reasoning_factory import (
     build_analytics_cache,
     resolve_claude_model,
 )
+from app.infrastructure.token_governor_factory import (
+    build_token_governor,
+    load_ollama_client,
+)
 
 
 def build_pain_analysis_service(
@@ -41,6 +45,7 @@ def build_pain_analysis_service(
         analytics_cache_ttl_seconds=settings.claude_analytics_cache_ttl_seconds,
         analytics_task_kind=task.value,
     )
+    local_llm = load_ollama_client(settings)
 
     return PainAnalysisService(
         PainAnalysisRepository(db_session),
@@ -48,4 +53,6 @@ def build_pain_analysis_service(
         redis_stage_ttl_seconds=settings.claude_47_stage_cache_ttl_seconds,
         analyzer=client,
         stage_cache=RedisClaudeStageCache(),
+        token_governor=build_token_governor(settings),
+        local_llm=local_llm,
     )

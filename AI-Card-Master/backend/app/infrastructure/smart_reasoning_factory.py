@@ -12,12 +12,13 @@ from app.infrastructure.claude_stage_cache import RedisClaudeStageCache
 
 @lru_cache(maxsize=1)
 def get_smart_reasoning_router() -> SmartReasoningRouter:
-    """Process-local router (Haiku vs Opus) from settings."""
+    """Process-local router (Haiku / Opus / Ollama) from settings."""
 
     settings = get_settings()
     return SmartReasoningRouter(
         simple_model=settings.claude_35_haiku_model,
         deep_model=settings.claude_47_model,
+        local_model=settings.ollama_model if settings.ollama_enabled else None,
     )
 
 
@@ -25,13 +26,26 @@ def resolve_claude_model(
     kind: ReasoningTaskKind,
     settings: Settings | None = None,
 ) -> str:
-    """Resolve Claude model id for a factory / worker composition root."""
+    """Resolve Claude/local model id for a factory / worker composition root.
+
+    LOCAL-tier kinds require ``ollama_model``; callers that only want Anthropic
+    should pass SIMPLE/DEEP kinds (existing factories unchanged).
+    """
 
     cfg = settings or get_settings()
-    return SmartReasoningRouter(
+    local = cfg.ollama_model if cfg.ollama_enabled else None
+    router = SmartReasoningRouter(
         simple_model=cfg.claude_35_haiku_model,
         deep_model=cfg.claude_47_model,
-    ).model_for(kind)
+        local_model=local,
+    )
+    if router.tier_for(kind).value == "local" and not local:
+        # Fall back to Haiku when Ollama is off so factories stay safe.
+        return cfg.claude_35_haiku_model
+    try:
+        return router.model_for(kind)
+    except ValueError:
+        return cfg.claude_35_haiku_model
 
 
 def build_analytics_cache() -> RedisClaudeStageCache:

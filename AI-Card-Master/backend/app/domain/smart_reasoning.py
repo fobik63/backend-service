@@ -14,10 +14,11 @@ from typing import Any, Mapping
 
 
 class ReasoningTier(StrEnum):
-    """Cost tier for Claude calls."""
+    """Cost tier for model calls (plan §55 + §69 LOCAL)."""
 
     SIMPLE = "simple"
     DEEP = "deep"
+    LOCAL = "local"
 
 
 class ReasoningTaskKind(StrEnum):
@@ -33,15 +34,21 @@ class ReasoningTaskKind(StrEnum):
     CLAUDE_REASONING = "claude_reasoning"
     ZERO_HALLUCINATION = "zero_hallucination"
     EXPORT_FAIL_SAFE_FIX = "export_fail_safe_fix"
+    # Plan §69 — routine text workloads for local LLM (Ollama) routing.
+    TEXT_CLASSIFICATION = "text_classification"
+    SEMANTIC_COMPRESSION = "semantic_compression"
 
 
 # Simple text/enrichment workloads → Haiku; deep Vision / Eye-of-God → Opus.
+# LOCAL tasks → Ollama (Llama 3) when Token Governor enables local routing.
 # Plan §59 explicitly requires Claude 4.7 for Fail-Safe export auto-fix.
 _TASK_TIERS: Mapping[ReasoningTaskKind, ReasoningTier] = {
     ReasoningTaskKind.PAIN_ANALYSIS: ReasoningTier.SIMPLE,
     ReasoningTaskKind.ORACLE_ENRICHMENT: ReasoningTier.SIMPLE,
     ReasoningTaskKind.AB_HYPOTHESES: ReasoningTier.SIMPLE,
     ReasoningTaskKind.AI_STRATEGY: ReasoningTier.SIMPLE,
+    ReasoningTaskKind.TEXT_CLASSIFICATION: ReasoningTier.LOCAL,
+    ReasoningTaskKind.SEMANTIC_COMPRESSION: ReasoningTier.LOCAL,
     ReasoningTaskKind.EYE_OF_GOD: ReasoningTier.DEEP,
     ReasoningTaskKind.VISUAL_AUDIT: ReasoningTier.DEEP,
     ReasoningTaskKind.COMPETITOR_AUDIT: ReasoningTier.DEEP,
@@ -62,8 +69,9 @@ def model_for_task(
     *,
     simple_model: str,
     deep_model: str,
+    local_model: str | None = None,
 ) -> str:
-    """Select Claude model id for the workload (Haiku vs Opus)."""
+    """Select model id for the workload (Haiku / Opus / Ollama)."""
 
     simple = simple_model.strip()
     deep = deep_model.strip()
@@ -71,8 +79,14 @@ def model_for_task(
         raise ValueError("simple_model must not be empty.")
     if not deep:
         raise ValueError("deep_model must not be empty.")
-    if tier_for_task(kind) is ReasoningTier.DEEP:
+    tier = tier_for_task(kind)
+    if tier is ReasoningTier.DEEP:
         return deep
+    if tier is ReasoningTier.LOCAL:
+        local = (local_model or "").strip()
+        if not local:
+            raise ValueError("local_model must not be empty for LOCAL tier tasks.")
+        return local
     return simple
 
 

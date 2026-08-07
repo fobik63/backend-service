@@ -27,6 +27,7 @@ from app.api import (
     ab_tests_router,
     account_router,
     admin_router,
+    admin_security_ws_router,
     ai_strategy_router,
     analytics_router,
     brand_dna_router,
@@ -152,7 +153,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 # Security stack (Starlette: last added = outermost).
-# Order: DeadMans → Cloudflare → Suspicious → Sanitization → AdminOnly → CORS → route.
+# Order: DeadMans → Cloudflare → Great Wall (Suspicious) → Sanitization → AdminOnly → CORS → route.
 app.add_middleware(AdminOnlyMiddleware)
 app.add_middleware(InputSanitizationMiddleware)
 app.add_middleware(SuspiciousActivityMiddleware)
@@ -162,6 +163,7 @@ app.add_middleware(DeadMansSwitchMiddleware)
 
 # Register API routers.
 app.include_router(admin_router)
+app.include_router(admin_security_ws_router)
 app.include_router(analytics_router)
 app.include_router(images_router)
 app.include_router(legal_router)

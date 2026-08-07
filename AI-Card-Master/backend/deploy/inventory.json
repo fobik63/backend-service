@@ -69,7 +69,18 @@
       "name": "pg-backup",
       "role": "backup_sidecar",
       "overlay": "backup",
-      "schedule": "every 6h → isolated S3 vault"
+      "schedule": "daily (86400s default) encrypted → isolated S3 vault; set 21600 for 6h RPO"
+    },
+    {
+      "name": "incident-recovery",
+      "role": "host_watchdog",
+      "entrypoint": "deploy/incident_recovery.py",
+      "plan_section": 63,
+      "actions": [
+        "hardware CPU/RAM/disk/load Telegram alerts",
+        "critical load → Redis cache flush + docker compose restart api/worker/nginx"
+      ],
+      "optional": false
     },
     {
       "name": "cloudflared",

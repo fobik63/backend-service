@@ -496,8 +496,25 @@ def build_competitor_deep_analysis_prompt(
     *,
     card: CompetitorCardScrapeResult,
     image_count: int,
+    context_delta: Any | None = None,
 ) -> str:
-    """User prompt: text context for reviews/specs + Vision images already attached."""
+    """User prompt: text context for reviews/specs + Vision images already attached.
+
+    When ``context_delta`` (CompetitorContextDelta) is provided, render the
+    compressed Semantic Filtering payload instead of the full card dump (plan §69).
+    """
+
+    if context_delta is not None:
+        from app.domain.semantic_filter import (
+            CompetitorContextDelta,
+            build_competitor_delta_analysis_prompt,
+        )
+
+        if isinstance(context_delta, CompetitorContextDelta):
+            return build_competitor_delta_analysis_prompt(
+                delta=context_delta,
+                image_count=image_count,
+            )
 
     low_texts = _review_texts_for_prompt(card.reviews_low)
     high_texts = _review_texts_for_prompt(card.reviews_high)

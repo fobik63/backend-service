@@ -416,8 +416,13 @@ class Claude47VisionClient:
         images: tuple[tuple[bytes, str], ...],
         user_id: UUID | None = None,
         job_id: UUID | None = None,
+        context_delta: Any | None = None,
     ) -> tuple[CompetitorCardDeepAnalysis, int, int]:
-        """Three-vector competitor audit: Vision + reviews → frontend JSON (§78)."""
+        """Three-vector competitor audit: Vision + reviews → frontend JSON (§78).
+
+        ``context_delta`` — optional Semantic Filtering payload (plan §69) so
+        Claude receives compressed Delta instead of the full card dump.
+        """
 
         max_images = min(
             self._settings.claude_47_max_images_per_request,
@@ -446,6 +451,7 @@ class Claude47VisionClient:
                 "text": build_competitor_deep_analysis_prompt(
                     card=card,
                     image_count=len(selected),
+                    context_delta=context_delta,
                 ),
             }
         )

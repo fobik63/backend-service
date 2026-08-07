@@ -1,8 +1,9 @@
-"""Request/input sanitization against SQL injection and prompt-injection probes.
+"""Request/input sanitization against SQL injection, XSS, and prompt-injection.
 
 ORM bind parameters remain the primary SQL defense. This layer rejects
 obvious attack payloads early and normalizes untrusted strings before they
-reach LLM prompts or loosely typed handlers.
+reach LLM prompts or loosely typed handlers. Great Wall (plan §61) adds XSS
+pattern detection used by middleware and JSON body sanitization.
 """
 
 from __future__ import annotations
@@ -33,6 +34,30 @@ _SQL_INJECTION_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
         r"BENCHMARK\s*\(",
         r"LOAD_FILE\s*\(",
         r"INTO\s+(?:OUT|DUMP)FILE\b",
+    )
+)
+
+# Reflected / stored XSS probes (HTML tags, event handlers, dangerous URIs).
+_XSS_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(pattern, re.IGNORECASE | re.DOTALL)
+    for pattern in (
+        r"<\s*script\b",
+        r"</\s*script\s*>",
+        r"javascript\s*:",
+        r"vbscript\s*:",
+        r"data\s*:\s*text/html",
+        r"<\s*iframe\b",
+        r"<\s*object\b",
+        r"<\s*embed\b",
+        r"<\s*svg\b[^>]*\bon\w+\s*=",
+        r"<\s*img\b[^>]+on(?:error|load)\s*=",
+        r"\bon(?:error|load|click|mouseover|focus|blur|submit|mouseenter|"
+        r"mouseleave|keydown|keyup|change)\s*=",
+        r"expression\s*\(",
+        r"<\s*link\b[^>]+href\s*=",
+        r"<\s*meta\b[^>]+http-equiv\s*=",
+        r"&#x0*6[89]a?;",  # hex-encoded <script> starters
+        r"&lt;\s*script",
     )
 )
 
@@ -97,6 +122,15 @@ def detect_sql_injection(value: str) -> str | None:
     return None
 
 
+def detect_xss(value: str) -> str | None:
+    """Return a short category label when an XSS probe is detected."""
+
+    for pattern in _XSS_PATTERNS:
+        if pattern.search(value):
+            return "xss"
+    return None
+
+
 def detect_prompt_injection(value: str) -> str | None:
     """Return a short category label when a prompt-injection probe is detected."""
 
@@ -110,6 +144,7 @@ def sanitize_text(
     value: str,
     *,
     check_sql: bool = True,
+    check_xss: bool = True,
     check_prompt: bool = True,
     max_length: int = _MAX_STRING_LEN,
 ) -> str:
@@ -121,6 +156,13 @@ def sanitize_text(
         if hit is not None:
             raise InputSanitizationError(
                 "Suspicious SQL-like payload rejected.",
+                category=hit,
+            )
+    if check_xss:
+        hit = detect_xss(cleaned)
+        if hit is not None:
+            raise InputSanitizationError(
+                "Suspicious XSS payload rejected.",
                 category=hit,
             )
     if check_prompt:
@@ -137,6 +179,7 @@ def sanitize_payload(
     payload: Any,
     *,
     check_sql: bool = True,
+    check_xss: bool = True,
     check_prompt: bool = True,
     depth: int = 0,
 ) -> Any:
@@ -151,6 +194,7 @@ def sanitize_payload(
         return sanitize_text(
             payload,
             check_sql=check_sql,
+            check_xss=check_xss,
             check_prompt=check_prompt,
         )
     if isinstance(payload, list):
@@ -158,6 +202,7 @@ def sanitize_payload(
             sanitize_payload(
                 item,
                 check_sql=check_sql,
+                check_xss=check_xss,
                 check_prompt=check_prompt,
                 depth=depth + 1,
             )
@@ -174,12 +219,14 @@ def sanitize_payload(
             safe_key = sanitize_text(
                 key,
                 check_sql=check_sql,
+                check_xss=check_xss,
                 check_prompt=check_prompt,
                 max_length=256,
             )
             cleaned[safe_key] = sanitize_payload(
                 value,
                 check_sql=check_sql,
+                check_xss=check_xss,
                 check_prompt=check_prompt,
                 depth=depth + 1,
             )
@@ -187,11 +234,22 @@ def sanitize_payload(
     return payload
 
 
-def scan_text_for_threats(value: str) -> str | None:
+def scan_text_for_threats(
+    value: str,
+    *,
+    check_xss: bool = True,
+) -> str | None:
     """Non-raising scanner used by middleware / scoring."""
 
     try:
         cleaned = normalize_untrusted_text(value)
     except InputSanitizationError as exc:
         return exc.category
-    return detect_sql_injection(cleaned) or detect_prompt_injection(cleaned)
+    hit = detect_sql_injection(cleaned)
+    if hit is not None:
+        return hit
+    if check_xss:
+        hit = detect_xss(cleaned)
+        if hit is not None:
+            return hit
+    return detect_prompt_injection(cleaned)

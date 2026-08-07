@@ -105,6 +105,7 @@ class CompetitorDeepAnalysisPort(Protocol):
         images: tuple[tuple[bytes, str], ...],
         user_id: UUID | None = None,
         job_id: UUID | None = None,
+        context_delta: Any | None = None,
     ) -> tuple[CompetitorCardDeepAnalysis, int, int]:
         """Run three-vector audit; return (result, input_tokens, output_tokens)."""
 

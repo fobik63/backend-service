@@ -24,6 +24,9 @@ ALLOWLIST_PATHS = frozenset(
         "admin_microservice/mint_token.py",
         "deploy/preflight_audit.py",
         "deploy/autoscale.py",
+        "deploy/incident_recovery.py",
+        "deploy/failover_watchdog.py",
+        "deploy/dead_mans_watchdog.py",
     }
 )
 

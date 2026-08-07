@@ -8,6 +8,7 @@ existing monolith ``/api/v1/admin`` JWT routes are left intact.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from dataclasses import asdict
@@ -23,6 +24,8 @@ from fastapi import (
     HTTPException,
     Query,
     Request,
+    WebSocket,
+    WebSocketDisconnect,
     status,
 )
 from fastapi.middleware.cors import CORSMiddleware
@@ -30,11 +33,20 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.security_status_schemas import (
+    BlockedThreatEventResponse,
+    BlockedThreatsLogResponse,
+    SecurityStatusResponse,
+    snapshot_to_dict,
+    snapshot_to_response,
+)
+from app.application.security_status_service import SecurityStatusService
 from app.core.admin_token import AdminTokenClaims, AdminTokenError, verify_admin_panel_token
 from app.core.cloudflare_middleware import CloudflareProtectionMiddleware
 from app.core.config import get_settings
 from app.core.dead_mans_switch_middleware import DeadMansSwitchMiddleware
 from app.core.suspicious_activity_middleware import SuspiciousActivityMiddleware
+from app.infrastructure.security_status_factory import get_security_status_service
 from app.models.database import engine, get_db_session
 from app.models.enums import SubscriptionStatus
 from app.services.admin_service import (
@@ -372,6 +384,101 @@ async def clear_dead_mans_switch(
     operator = claims.operator_label or "admin"
     state = await get_dead_mans_switch().clear(operator=str(operator))
     return _dms_response(state)
+
+
+def _security_status_service() -> SecurityStatusService:
+    return get_security_status_service()
+
+
+@app.get(
+    "/security/status",
+    response_model=SecurityStatusResponse,
+    tags=["security"],
+)
+async def get_security_status(
+    _: AdminTokenClaims = Depends(require_admin_panel_token),
+    threats_limit: int = Query(default=50, ge=1, le=50),
+    service: SecurityStatusService = Depends(_security_status_service),
+) -> SecurityStatusResponse:
+    """Live CPU/RAM/RPS + Midjourney/Claude balance + blocked threats."""
+
+    snapshot = await service.get_snapshot(threats_limit=threats_limit)
+    return snapshot_to_response(snapshot)
+
+
+@app.get(
+    "/security/threats",
+    response_model=BlockedThreatsLogResponse,
+    tags=["security"],
+)
+async def get_blocked_threats(
+    _: AdminTokenClaims = Depends(require_admin_panel_token),
+    limit: int = Query(default=50, ge=1, le=50),
+    service: SecurityStatusService = Depends(_security_status_service),
+) -> BlockedThreatsLogResponse:
+    """JSON log of the last blocked threats (max 50)."""
+
+    snapshot = await service.get_snapshot(threats_limit=limit)
+    threats = [
+        BlockedThreatEventResponse(
+            id=item.id,
+            timestamp=item.timestamp,
+            ip=item.ip,
+            category=item.category,
+            path=item.path,
+            action=item.action,
+            http_status=item.http_status,
+            score=item.score,
+            api_key_fingerprint=item.api_key_fingerprint,
+        )
+        for item in snapshot.blocked_threats
+    ]
+    return BlockedThreatsLogResponse(threats=threats, count=len(threats))
+
+
+@app.websocket("/security/status/ws")
+async def security_status_websocket(websocket: WebSocket) -> None:
+    """Real-time Security & Status stream (admin panel token required)."""
+
+    await websocket.accept()
+    raw = (
+        (websocket.query_params.get("admin_token") or "").strip()
+        or (websocket.query_params.get("token") or "").strip()
+    )
+    if not raw:
+        auth_header = websocket.headers.get("authorization") or ""
+        scheme, _, value = auth_header.partition(" ")
+        if scheme.lower() == "bearer":
+            raw = value.strip()
+        elif auth_header.strip().startswith("adm.v1."):
+            raw = auth_header.strip()
+    if not raw:
+        await websocket.close(code=4401)
+        return
+    try:
+        verify_admin_panel_token(
+            raw,
+            secret=get_settings().effective_admin_panel_token_secret,
+        )
+    except AdminTokenError:
+        await websocket.close(code=4401)
+        return
+
+    service = get_security_status_service()
+    interval = get_settings().security_status_ws_interval_seconds
+    try:
+        while True:
+            snapshot = await service.get_snapshot(threats_limit=50)
+            await websocket.send_json(snapshot_to_dict(snapshot))
+            await asyncio.sleep(interval)
+    except WebSocketDisconnect:
+        logger.debug("Admin microservice security status WS disconnected")
+    except Exception:
+        logger.exception("Admin microservice security status WS failed")
+        try:
+            await websocket.close(code=1011)
+        except Exception:
+            return
 
 
 @app.get("/stats", response_model=AdminStatisticsResponse)

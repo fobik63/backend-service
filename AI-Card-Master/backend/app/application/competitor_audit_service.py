@@ -15,6 +15,10 @@ from app.application.ports.competitor_audit import (
     CompetitorDeepAnalysisTriggerPort,
     CompetitorDeepScraperPort,
 )
+from app.application.ports.token_governor import (
+    CompetitorSnapshotStorePort,
+    TokenGovernorPort,
+)
 from app.application.zero_hallucination_service import ZeroHallucinationService
 from app.domain.competitor_audit import (
     MAX_VISION_IMAGES_PER_CARD,
@@ -36,6 +40,13 @@ from app.domain.competitor_audit import (
     parse_competitor_product_link,
     redis_competitor_audit_key,
 )
+from app.domain.semantic_filter import (
+    build_card_snapshot,
+    compute_competitor_context_delta,
+    estimate_card_prompt_tokens,
+)
+from app.domain.smart_reasoning import ReasoningTaskKind
+from app.domain.token_governor import GovernorAction, GovernorRequest
 from app.infrastructure.http_resilience import gather_bounded
 from app.infrastructure.stock_parser.exceptions import (
     ParserHttpError,
@@ -86,6 +97,9 @@ class CompetitorAuditService:
         max_vision_images: int = MAX_VISION_IMAGES_PER_CARD,
         stage_cache: ClaudeStageCachePort | None = None,
         cross_check: ZeroHallucinationService | None = None,
+        token_governor: TokenGovernorPort | None = None,
+        snapshot_store: CompetitorSnapshotStorePort | None = None,
+        snapshot_ttl_seconds: int = 604_800,
     ) -> None:
         if redis_raw_ttl_seconds <= 0:
             raise CompetitorAuditValidationError(
@@ -103,7 +117,9 @@ class CompetitorAuditService:
         self._max_vision_images = max_vision_images
         self._stage_cache = stage_cache or _NullStageCache()
         self._cross_check = cross_check
-
+        self._token_governor = token_governor
+        self._snapshot_store = snapshot_store
+        self._snapshot_ttl_seconds = max(0, snapshot_ttl_seconds)
     async def enqueue_audit(
         self,
         *,
@@ -491,12 +507,96 @@ class CompetitorAuditService:
                     f"no_vision_inputs article={card.article}",
                 )
 
+        # Plan §69 — Semantic Filtering (Delta) + Token Governor.
+        previous = None
+        if self._snapshot_store is not None:
+            previous = await self._snapshot_store.get_snapshot(
+                marketplace=card.marketplace.value,
+                article=card.article,
+            )
+        context_delta = compute_competitor_context_delta(card, previous)
+        estimated_tokens = estimate_card_prompt_tokens(card)
+        has_vision = bool(images)
+
+        if self._token_governor is not None:
+            decision = self._token_governor.authorize(
+                GovernorRequest(
+                    task_kind=ReasoningTaskKind.COMPETITOR_AUDIT,
+                    estimated_input_tokens=estimated_tokens,
+                    has_vision=has_vision,
+                    semantic_filter_applied=False,
+                )
+            )
+            if decision.action is GovernorAction.REJECT:
+                # Retry authorize after declaring filter applied (compressed size).
+                compressed_tokens = context_delta.estimated_tokens_after
+                decision = self._token_governor.authorize(
+                    GovernorRequest(
+                        task_kind=ReasoningTaskKind.COMPETITOR_AUDIT,
+                        estimated_input_tokens=compressed_tokens,
+                        has_vision=has_vision,
+                        semantic_filter_applied=True,
+                    )
+                )
+                if decision.action is GovernorAction.REJECT:
+                    logger.warning(
+                        "Token governor rejected competitor audit "
+                        "job_id=%s article=%s reason=%s",
+                        job_id,
+                        card.article,
+                        decision.reason,
+                    )
+                    return (
+                        build_insufficient_card_analysis(
+                            card,
+                            reason=(
+                                "Token governor rejected oversized competitor "
+                                f"context: {decision.reason}"
+                            ),
+                        ),
+                        0,
+                        0,
+                        f"governor_reject article={card.article}",
+                    )
+            apply_delta = decision.apply_semantic_filter or (
+                decision.action is GovernorAction.COMPRESS_THEN_CLAUDE
+            )
+        else:
+            apply_delta = True
+
+        delta_for_prompt = context_delta if apply_delta else None
+        if apply_delta:
+            logger.info(
+                "Semantic filter job_id=%s article=%s ratio=%.3f "
+                "tokens %s→%s first_seen=%s",
+                job_id,
+                card.article,
+                context_delta.compression_ratio,
+                context_delta.estimated_tokens_before,
+                context_delta.estimated_tokens_after,
+                context_delta.is_first_seen,
+            )
+
         result, in_tok, out_tok = await self._analyzer.analyze_competitor_card(
             card=card,
             images=images,
             user_id=user_id,
             job_id=job_id,
+            context_delta=delta_for_prompt,
         )
+
+        if self._snapshot_store is not None and self._snapshot_ttl_seconds > 0:
+            try:
+                await self._snapshot_store.put_snapshot(
+                    build_card_snapshot(card),
+                    ttl_seconds=self._snapshot_ttl_seconds,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to persist competitor snapshot article=%s",
+                    card.article,
+                    exc_info=True,
+                )
 
         cross_in = 0
         cross_out = 0

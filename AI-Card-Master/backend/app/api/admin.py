@@ -2,20 +2,40 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from dataclasses import asdict
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Security, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
+    Security,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.security_status_schemas import (
+    BlockedThreatEventResponse,
+    BlockedThreatsLogResponse,
+    SecurityStatusResponse,
+    snapshot_to_dict,
+    snapshot_to_response,
+)
+from app.application.security_status_service import SecurityStatusService
 from app.core.security import InvalidTokenError, decode_and_validate_token
 from app.core.config import get_settings
+from app.infrastructure.security_status_factory import get_security_status_service
 from app.models.database import get_db_session
 from app.models.enums import SubscriptionStatus
 from app.models.user import User
@@ -32,6 +52,7 @@ from app.services.admin_service import (
 )
 
 
+logger = logging.getLogger(__name__)
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
@@ -479,3 +500,143 @@ async def create_generation_error_log(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to save generation error log.",
         ) from exc
+
+
+def get_security_status_svc() -> SecurityStatusService:
+    return get_security_status_service()
+
+
+@router.get(
+    "/security/status",
+    response_model=SecurityStatusResponse,
+    summary="Security & Status live snapshot",
+)
+async def get_security_status(
+    threats_limit: int = Query(default=50, ge=1, le=50),
+    service: SecurityStatusService = Depends(get_security_status_svc),
+) -> SecurityStatusResponse:
+    """CPU, RAM, RPS, Midjourney/Claude balance, last blocked threats."""
+
+    try:
+        snapshot = await service.get_snapshot(threats_limit=threats_limit)
+        return snapshot_to_response(snapshot)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to collect security status snapshot.",
+        ) from exc
+
+
+@router.get(
+    "/security/threats",
+    response_model=BlockedThreatsLogResponse,
+    summary="Last blocked threats (JSON)",
+)
+async def get_blocked_threats_log(
+    limit: int = Query(default=50, ge=1, le=50),
+    service: SecurityStatusService = Depends(get_security_status_svc),
+) -> BlockedThreatsLogResponse:
+    """Return the last N blocked threats as a JSON array wrapper."""
+
+    try:
+        snapshot = await service.get_snapshot(threats_limit=limit)
+        threats = [
+            BlockedThreatEventResponse(
+                id=item.id,
+                timestamp=item.timestamp,
+                ip=item.ip,
+                category=item.category,
+                path=item.path,
+                action=item.action,
+                http_status=item.http_status,
+                score=item.score,
+                api_key_fingerprint=item.api_key_fingerprint,
+            )
+            for item in snapshot.blocked_threats
+        ]
+        return BlockedThreatsLogResponse(threats=threats, count=len(threats))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch blocked threats log.",
+        ) from exc
+
+
+# WebSocket lives on a sibling router without HTTP Bearer router-deps.
+security_status_ws_router = APIRouter(
+    prefix="/api/v1/admin",
+    tags=["admin"],
+    include_in_schema=False,
+)
+
+
+async def _authenticate_admin_websocket(
+    websocket: WebSocket,
+    db_session: AsyncSession,
+) -> User | None:
+    """Validate JWT from ``?access_token=`` or ``Authorization`` header."""
+
+    token = (websocket.query_params.get("access_token") or "").strip()
+    if not token:
+        auth_header = websocket.headers.get("authorization") or ""
+        scheme, _, value = auth_header.partition(" ")
+        if scheme.lower() == "bearer":
+            token = value.strip()
+    if not token:
+        await websocket.close(code=4401)
+        return None
+
+    try:
+        payload = decode_and_validate_token(token, expected_type="access")
+    except InvalidTokenError:
+        await websocket.close(code=4401)
+        return None
+
+    subject = payload.get("sub")
+    if not isinstance(subject, str) or not subject.strip():
+        await websocket.close(code=4401)
+        return None
+    try:
+        user_id = UUID(subject)
+    except ValueError:
+        await websocket.close(code=4401)
+        return None
+
+    user = await db_session.scalar(select(User).where(User.id == user_id).limit(1))
+    if user is None or not user.is_admin:
+        await websocket.close(code=4403)
+        return None
+    allowed_user_id = get_settings().admin_allowed_user_id.strip()
+    if str(user.id) != allowed_user_id:
+        await websocket.close(code=4403)
+        return None
+    return user
+
+
+@security_status_ws_router.websocket("/security/status/ws")
+async def security_status_websocket(
+    websocket: WebSocket,
+    db_session: AsyncSession = Depends(get_db_session),
+    service: SecurityStatusService = Depends(get_security_status_svc),
+) -> None:
+    """Push Security & Status snapshots in real time (default every 2s)."""
+
+    await websocket.accept()
+    user = await _authenticate_admin_websocket(websocket, db_session)
+    if user is None:
+        return
+
+    interval = get_settings().security_status_ws_interval_seconds
+    try:
+        while True:
+            snapshot = await service.get_snapshot(threats_limit=50)
+            await websocket.send_json(snapshot_to_dict(snapshot))
+            await asyncio.sleep(interval)
+    except WebSocketDisconnect:
+        logger.debug("Admin security status WebSocket disconnected")
+    except Exception:
+        logger.exception("Admin security status WebSocket failed")
+        try:
+            await websocket.close(code=1011)
+        except Exception:
+            return

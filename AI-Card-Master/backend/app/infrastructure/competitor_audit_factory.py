@@ -90,6 +90,11 @@ def build_competitor_audit_service(
         max_vision_images=settings.zero_hallucination_max_vision_images,
     )
 
+    from app.infrastructure.token_governor_factory import (
+        build_competitor_snapshot_store,
+        build_token_governor,
+    )
+
     return CompetitorAuditService(
         CompetitorAuditRepository(db_session),
         scraper=scraper,
@@ -103,6 +108,9 @@ def build_competitor_audit_service(
         max_vision_images=settings.competitor_audit_max_vision_images,
         stage_cache=RedisClaudeStageCache(),
         cross_check=cross_check,
+        token_governor=build_token_governor(settings),
+        snapshot_store=build_competitor_snapshot_store(),
+        snapshot_ttl_seconds=settings.token_governor_snapshot_ttl_seconds,
     )
 
 

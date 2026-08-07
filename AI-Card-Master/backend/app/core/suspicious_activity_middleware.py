@@ -1,4 +1,11 @@
-"""Middleware that scores each request for suspicious / abusive activity."""
+"""Great Wall middleware: rate-limit, XSS/SQL scan, auto-ban, Cloudflare + Telegram.
+
+Extends the plan §14 suspicious-activity gate with plan §61 capabilities:
+- Redis rate limits by client IP and by API-key / bearer fingerprint
+- Auto IP (and API-key) ban when the request budget is exceeded
+- Cloudflare Firewall Access Rule push for edge blocks
+- One Telegram alert per ban window to the operator chat
+"""
 
 from __future__ import annotations
 
@@ -15,17 +22,27 @@ from app.core.config import get_settings
 from app.core.input_sanitization import scan_text_for_threats
 from app.infrastructure.cloudflare import get_cloudflare_client
 from app.infrastructure.security.rate_limiter import (
+    RateLimitDecision,
+    block_api_key,
     block_ip,
+    claim_ban_alert_slot,
+    check_api_key_rate_limit,
     check_rate_limit,
+    extract_api_key_credential,
+    fingerprint_api_key,
+    is_api_key_blocked,
     is_ip_blocked,
+    record_request_for_rps,
     record_threat_event,
+    append_blocked_threat,
 )
+from app.services.telegram_alerts import notify_security_ban
 
 logger = logging.getLogger(__name__)
 
 
 class SuspiciousActivityMiddleware(BaseHTTPMiddleware):
-    """Rate-limit, score, and optionally auto-ban abusive clients."""
+    """Rate-limit, score, and optionally auto-ban abusive clients (Great Wall)."""
 
     async def dispatch(
         self,
@@ -49,26 +66,60 @@ class SuspiciousActivityMiddleware(BaseHTTPMiddleware):
         )
         request.state.client_ip = client_ip
 
+        raw_api_key = extract_api_key_credential(request)
+        api_key_fp = fingerprint_api_key(raw_api_key) if raw_api_key else None
+        if api_key_fp is not None:
+            request.state.api_key_fingerprint = api_key_fp
+
         if await is_ip_blocked(client_ip):
             return _deny(
                 status.HTTP_403_FORBIDDEN,
                 "Access temporarily blocked due to suspicious activity.",
             )
+        if api_key_fp is not None and await is_api_key_blocked(api_key_fp):
+            return _deny(
+                status.HTTP_403_FORBIDDEN,
+                "API key temporarily blocked due to suspicious activity.",
+            )
 
-        rate = await check_rate_limit(
+        await record_request_for_rps()
+
+        ip_rate = await check_rate_limit(
             ip=client_ip,
             limit=settings.security_rate_limit_per_minute,
             window_seconds=60,
         )
-        if not rate.allowed:
-            await record_threat_event(client_ip, category="rate_limit", path=path)
-            return _deny(
-                status.HTTP_429_TOO_MANY_REQUESTS,
-                "Too many requests.",
-                headers={"Retry-After": str(rate.retry_after_seconds)},
+        if not ip_rate.allowed:
+            return await _handle_rate_limit_breach(
+                request=request,
+                client_ip=client_ip,
+                api_key_fp=api_key_fp,
+                path=path,
+                rate=ip_rate,
+                subject="ip",
             )
 
-        threat = _scan_request_surface(request)
+        key_rate: RateLimitDecision | None = None
+        if api_key_fp is not None and settings.security_api_key_rate_limit_per_minute > 0:
+            key_rate = await check_api_key_rate_limit(
+                api_key_fingerprint=api_key_fp,
+                limit=settings.security_api_key_rate_limit_per_minute,
+                window_seconds=60,
+            )
+            if not key_rate.allowed:
+                return await _handle_rate_limit_breach(
+                    request=request,
+                    client_ip=client_ip,
+                    api_key_fp=api_key_fp,
+                    path=path,
+                    rate=key_rate,
+                    subject="api_key",
+                )
+
+        threat = _scan_request_surface(
+            request,
+            check_xss=settings.security_xss_protection_enabled,
+        )
         if threat is not None:
             score = await record_threat_event(
                 client_ip,
@@ -83,33 +134,143 @@ class SuspiciousActivityMiddleware(BaseHTTPMiddleware):
                 score,
             )
             if score >= settings.security_auto_block_threat_score:
-                await block_ip(
-                    client_ip,
-                    ttl_seconds=settings.security_ip_block_ttl_seconds,
+                await _auto_ban(
+                    client_ip=client_ip,
+                    api_key_fp=api_key_fp,
+                    path=path,
                     reason=threat,
+                    ban_api_key=False,
                 )
-                if settings.cloudflare_auto_ban_enabled:
-                    await get_cloudflare_client().ban_ip(
-                        client_ip,
-                        reason=f"{threat} on {path}",
-                    )
+                await append_blocked_threat(
+                    ip=client_ip,
+                    category=threat,
+                    path=path,
+                    action="banned",
+                    http_status=status.HTTP_403_FORBIDDEN,
+                    score=score,
+                    api_key_fingerprint=api_key_fp,
+                )
                 return _deny(
                     status.HTTP_403_FORBIDDEN,
                     "Access temporarily blocked due to suspicious activity.",
                 )
+            await append_blocked_threat(
+                ip=client_ip,
+                category=threat,
+                path=path,
+                action="denied",
+                http_status=status.HTTP_400_BAD_REQUEST,
+                score=score,
+                api_key_fingerprint=api_key_fp,
+            )
             return _deny(
                 status.HTTP_400_BAD_REQUEST,
                 "Request rejected by security policy.",
             )
 
         response = await call_next(request)
-        if rate.remaining >= 0:
-            response.headers["X-RateLimit-Remaining"] = str(rate.remaining)
+        remaining = ip_rate.remaining
+        if key_rate is not None and key_rate.remaining >= 0:
+            remaining = min(remaining, key_rate.remaining)
+        if remaining >= 0:
+            response.headers["X-RateLimit-Remaining"] = str(remaining)
         return response
 
 
-def _scan_request_surface(request: Request) -> str | None:
-    """Scan path + query string for SQL / prompt-injection probes."""
+async def _handle_rate_limit_breach(
+    *,
+    request: Request,
+    client_ip: str,
+    api_key_fp: str | None,
+    path: str,
+    rate: RateLimitDecision,
+    subject: str,
+) -> JSONResponse:
+    """Record the excess, optionally auto-ban, and return HTTP 429."""
+
+    settings = get_settings()
+    category = f"rate_limit_{subject}"
+    await record_threat_event(client_ip, category=category, path=path)
+
+    banned = False
+    if settings.security_rate_limit_auto_ban_enabled:
+        await _auto_ban(
+            client_ip=client_ip,
+            api_key_fp=api_key_fp,
+            path=path,
+            reason=category,
+            ban_api_key=subject == "api_key",
+        )
+        banned = True
+
+    await append_blocked_threat(
+        ip=client_ip,
+        category=category,
+        path=path,
+        action="banned" if banned else "rate_limited",
+        http_status=status.HTTP_429_TOO_MANY_REQUESTS,
+        api_key_fingerprint=api_key_fp,
+    )
+
+    headers = {"Retry-After": str(rate.retry_after_seconds)}
+    detail = (
+        "API key rate limit exceeded."
+        if subject == "api_key"
+        else "Too many requests."
+    )
+    return _deny(
+        status.HTTP_429_TOO_MANY_REQUESTS,
+        detail,
+        headers=headers,
+    )
+
+
+async def _auto_ban(
+    *,
+    client_ip: str,
+    api_key_fp: str | None,
+    path: str,
+    reason: str,
+    ban_api_key: bool,
+) -> None:
+    """Redis ban + optional Cloudflare edge ban + Telegram operator alert."""
+
+    settings = get_settings()
+    ttl = settings.security_ip_block_ttl_seconds
+    await block_ip(client_ip, ttl_seconds=ttl, reason=reason)
+    if ban_api_key and api_key_fp is not None:
+        await block_api_key(api_key_fp, ttl_seconds=ttl, reason=reason)
+
+    cloudflare_banned = False
+    if settings.cloudflare_auto_ban_enabled:
+        cloudflare_banned = await get_cloudflare_client().ban_ip(
+            client_ip,
+            reason=f"{reason} on {path}",
+        )
+
+    if not settings.security_telegram_ban_alerts_enabled:
+        return
+
+    alert_subject = f"ip:{client_ip}"
+    if not await claim_ban_alert_slot(alert_subject, ttl_seconds=ttl):
+        return
+
+    await notify_security_ban(
+        ip=client_ip,
+        reason=reason,
+        path=path,
+        ttl_seconds=ttl,
+        cloudflare_banned=cloudflare_banned,
+        api_key_fingerprint=api_key_fp,
+    )
+
+
+def _scan_request_surface(
+    request: Request,
+    *,
+    check_xss: bool,
+) -> str | None:
+    """Scan path + query string for SQL / XSS / prompt-injection probes."""
 
     candidates = [
         request.url.path,
@@ -125,7 +286,7 @@ def _scan_request_surface(request: Request) -> str | None:
     for item in candidates:
         if not item:
             continue
-        hit = scan_text_for_threats(item)
+        hit = scan_text_for_threats(item, check_xss=check_xss)
         if hit is not None:
             return hit
     return None

@@ -1,4 +1,4 @@
-"""Application helpers for Smart Reasoning Routing (plan §55)."""
+"""Application helpers for Smart Reasoning Routing (plan §55 + §69 LOCAL)."""
 
 from __future__ import annotations
 
@@ -11,9 +11,15 @@ from app.domain.smart_reasoning import (
 
 
 class SmartReasoningRouter:
-    """Pure routing policy: simple → Haiku, Eye-of-God / deep → Opus."""
+    """Routing policy: simple → Haiku, deep → Opus, local → Ollama."""
 
-    def __init__(self, *, simple_model: str, deep_model: str) -> None:
+    def __init__(
+        self,
+        *,
+        simple_model: str,
+        deep_model: str,
+        local_model: str | None = None,
+    ) -> None:
         simple = simple_model.strip()
         deep = deep_model.strip()
         if not simple:
@@ -22,6 +28,7 @@ class SmartReasoningRouter:
             raise ValueError("deep_model must not be empty.")
         self._simple_model = simple
         self._deep_model = deep
+        self._local_model = (local_model or "").strip() or None
 
     @property
     def simple_model(self) -> str:
@@ -31,6 +38,10 @@ class SmartReasoningRouter:
     def deep_model(self) -> str:
         return self._deep_model
 
+    @property
+    def local_model(self) -> str | None:
+        return self._local_model
+
     def tier_for(self, kind: ReasoningTaskKind) -> ReasoningTier:
         return tier_for_task(kind)
 
@@ -39,4 +50,5 @@ class SmartReasoningRouter:
             kind,
             simple_model=self._simple_model,
             deep_model=self._deep_model,
+            local_model=self._local_model,
         )
