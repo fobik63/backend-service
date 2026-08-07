@@ -120,6 +120,15 @@ class User(Base):
         nullable=True,
         default=None,
     )
+    # Silent ban: account looks normal to the client; abuse controls apply in-band.
+    is_flagged: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+        index=True,
+    )
+    flag_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,

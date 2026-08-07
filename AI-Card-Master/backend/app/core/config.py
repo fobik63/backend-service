@@ -605,6 +605,77 @@ class Settings(BaseSettings):
     referral_bonus_coins: int = Field(default=10, alias="REFERRAL_BONUS_COINS")
     workspace_max_managers: int = Field(default=3, alias="WORKSPACE_MAX_MANAGERS")
 
+    # Signup trial (5 free coins) + multi-layer anti-abuse on /auth/register
+    signup_trial_enabled: bool = Field(default=True, alias="SIGNUP_TRIAL_ENABLED")
+    signup_trial_coins: int = Field(default=5, alias="SIGNUP_TRIAL_COINS")
+    signup_trial_subnet_max_accounts: int = Field(
+        default=3,
+        alias="SIGNUP_TRIAL_SUBNET_MAX_ACCOUNTS",
+        description="Max auto-trial grants per IPv4 /24 (or IPv6 /64) within the TTL window.",
+    )
+    signup_trial_subnet_ttl_seconds: int = Field(
+        default=86_400,
+        alias="SIGNUP_TRIAL_SUBNET_TTL_SECONDS",
+    )
+    signup_trial_fingerprint_ttl_seconds: int = Field(
+        default=90 * 24 * 3600,
+        alias="SIGNUP_TRIAL_FINGERPRINT_TTL_SECONDS",
+        description="Redis TTL for exhausted device fingerprint hashes (Postgres is durable).",
+    )
+    signup_trial_proxy_check_enabled: bool = Field(
+        default=True,
+        alias="SIGNUP_TRIAL_PROXY_CHECK_ENABLED",
+    )
+    signup_trial_ip_api_enabled: bool = Field(
+        default=True,
+        alias="SIGNUP_TRIAL_IP_API_ENABLED",
+        description="Optional open ip-api.com proxy/hosting probe (non-commercial).",
+    )
+    signup_trial_proxy_timeout_seconds: float = Field(
+        default=2.5,
+        alias="SIGNUP_TRIAL_PROXY_TIMEOUT_SECONDS",
+    )
+
+    # Silent ban (shadow restrictions for fingerprint / subnet abusers)
+    silent_ban_enabled: bool = Field(
+        default=True,
+        alias="SILENT_BAN_ENABLED",
+        description="Route flagged users to shadow generation + tight IP rate limits.",
+    )
+    silent_ban_flagged_ip_ttl_seconds: int = Field(
+        default=90 * 24 * 3600,
+        alias="SILENT_BAN_FLAGGED_IP_TTL_SECONDS",
+        description="Redis TTL for flagged client IPs (1 req / 5 min bucket).",
+    )
+    silent_ban_flagged_ip_rate_limit: int = Field(
+        default=1,
+        alias="SILENT_BAN_FLAGGED_IP_RATE_LIMIT",
+        description="Max requests per window for silently flagged IPs.",
+    )
+    silent_ban_flagged_ip_window_seconds: int = Field(
+        default=300,
+        alias="SILENT_BAN_FLAGGED_IP_WINDOW_SECONDS",
+        description="Rate-limit window for silently flagged IPs (default 5 minutes).",
+    )
+    silent_ban_shadow_delay_min_seconds: int = Field(
+        default=45,
+        alias="SILENT_BAN_SHADOW_DELAY_MIN_SECONDS",
+        description="Min fake load delay before shadow generation fails.",
+    )
+    silent_ban_shadow_delay_max_seconds: int = Field(
+        default=180,
+        alias="SILENT_BAN_SHADOW_DELAY_MAX_SECONDS",
+        description="Max fake load delay before shadow generation fails.",
+    )
+    silent_ban_emulate_http_timeout: bool = Field(
+        default=False,
+        alias="SILENT_BAN_EMULATE_HTTP_TIMEOUT",
+        description=(
+            "When true, flagged generation requests sleep a random inflated "
+            "timeout and return HTTP 504 instead of enqueueing work."
+        ),
+    )
+
     # Churn Prevention / Win-back
     winback_inactivity_days: int = Field(default=10, alias="WINBACK_INACTIVITY_DAYS")
     winback_free_generations: int = Field(default=5, alias="WINBACK_FREE_GENERATIONS")

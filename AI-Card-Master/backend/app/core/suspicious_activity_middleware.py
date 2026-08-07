@@ -93,23 +93,52 @@ class SuspiciousActivityMiddleware(BaseHTTPMiddleware):
 
         await record_request_for_rps()
 
-        ip_rate = await check_rate_limit(
-            ip=client_ip,
-            limit=settings.security_rate_limit_per_minute,
-            window_seconds=60,
-            path=path,
-        )
-        if not ip_rate.allowed:
-            if ip_rate.redis_unavailable:
-                return _security_unavailable_from_decision(ip_rate)
-            return await _handle_rate_limit_breach(
-                request=request,
-                client_ip=client_ip,
-                api_key_fp=api_key_fp,
+        silent_ban_enabled = bool(getattr(settings, "silent_ban_enabled", True))
+        flagged_ip = False
+        if silent_ban_enabled:
+            from app.infrastructure.security.silent_ban_store import RedisSilentBanStore
+
+            flagged_ip = await RedisSilentBanStore().is_flagged_ip(ip=client_ip)
+
+        if flagged_ip:
+            ip_rate = await check_rate_limit(
+                ip=client_ip,
+                limit=int(getattr(settings, "silent_ban_flagged_ip_rate_limit", 1)),
+                window_seconds=int(
+                    getattr(settings, "silent_ban_flagged_ip_window_seconds", 300)
+                ),
                 path=path,
-                rate=ip_rate,
-                subject="ip",
             )
+            if not ip_rate.allowed:
+                if ip_rate.redis_unavailable:
+                    return _security_unavailable_from_decision(ip_rate)
+                return await _handle_rate_limit_breach(
+                    request=request,
+                    client_ip=client_ip,
+                    api_key_fp=api_key_fp,
+                    path=path,
+                    rate=ip_rate,
+                    subject="ip",
+                    auto_ban=False,
+                )
+        else:
+            ip_rate = await check_rate_limit(
+                ip=client_ip,
+                limit=settings.security_rate_limit_per_minute,
+                window_seconds=60,
+                path=path,
+            )
+            if not ip_rate.allowed:
+                if ip_rate.redis_unavailable:
+                    return _security_unavailable_from_decision(ip_rate)
+                return await _handle_rate_limit_breach(
+                    request=request,
+                    client_ip=client_ip,
+                    api_key_fp=api_key_fp,
+                    path=path,
+                    rate=ip_rate,
+                    subject="ip",
+                )
 
         key_rate: RateLimitDecision | None = None
         if api_key_fp is not None and settings.security_api_key_rate_limit_per_minute > 0:
@@ -214,6 +243,7 @@ async def _handle_rate_limit_breach(
     path: str,
     rate: RateLimitDecision,
     subject: str,
+    auto_ban: bool = True,
 ) -> JSONResponse:
     """Record the excess, optionally auto-ban, and return HTTP 429."""
 
@@ -222,7 +252,7 @@ async def _handle_rate_limit_breach(
     await record_threat_event(client_ip, category=category, path=path)
 
     banned = False
-    if settings.security_rate_limit_auto_ban_enabled:
+    if auto_ban and settings.security_rate_limit_auto_ban_enabled:
         await _auto_ban(
             client_ip=client_ip,
             api_key_fp=api_key_fp,

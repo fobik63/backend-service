@@ -233,6 +233,18 @@ def _patch_great_wall_deps(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]
         "app.core.suspicious_activity_middleware.get_cloudflare_client",
         lambda: _FakeCF(),
     )
+
+    class _FakeSilentBanStore:
+        async def is_flagged_ip(self, *, ip: str) -> bool:
+            return False
+
+        async def mark_flagged_ip(self, *, ip: str, ttl_seconds: int) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "app.infrastructure.security.silent_ban_store.RedisSilentBanStore",
+        lambda: _FakeSilentBanStore(),
+    )
     return state
 
 

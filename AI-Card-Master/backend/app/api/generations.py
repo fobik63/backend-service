@@ -30,6 +30,7 @@ from app.api.captcha import enforce_generation_behavioral_limit
 from app.api.payments import get_current_user
 from app.application.generation_cabinet_service import GenerationCabinetService
 from app.core.config import get_settings
+from app.domain.silent_ban import pick_shadow_delay_seconds
 from app.domain.brand_dna import (
     apply_brand_dna_to_prompt,
     apply_brand_dna_to_style,
@@ -73,6 +74,34 @@ from app.services.series_generator import SeriesTask, build_series_tasks_cached
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/generations", tags=["generations"])
+
+
+async def _maybe_emulate_flagged_http_timeout(user: User) -> None:
+    """Optional silent-ban path: inflate latency then look like a gateway timeout.
+
+    Default path uses the isolated Celery ``generation.shadow`` queue instead.
+    Enable via ``SILENT_BAN_EMULATE_HTTP_TIMEOUT=true``.
+    """
+
+    settings = get_settings()
+    if not settings.silent_ban_enabled or not settings.silent_ban_emulate_http_timeout:
+        return
+    if not bool(getattr(user, "is_flagged", False)):
+        return
+    delay = pick_shadow_delay_seconds(
+        min_seconds=settings.silent_ban_shadow_delay_min_seconds,
+        max_seconds=settings.silent_ban_shadow_delay_max_seconds,
+    )
+    logger.info(
+        "Silent-ban HTTP timeout emulation delay=%ss user_id=%s",
+        delay,
+        user.id,
+    )
+    await asyncio.sleep(delay)
+    raise HTTPException(
+        status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+        detail="Upstream provider timed out while loading. Please try again.",
+    )
 
 
 def get_generation_cabinet_service(
@@ -385,6 +414,7 @@ async def create_model_generation(
 ) -> GenerationCreateResponse:
     """Queue the JSON-only Model mode without blocking on external VTO APIs."""
 
+    await _maybe_emulate_flagged_http_timeout(current_user)
     _validate_owned_source_object_key(payload.source_image_object_key, current_user.id)
     engine_mode = _effective_engine_mode(payload.engine_mode, payload.post_processing_mode)
     _ensure_generation_options_allowed(engine_mode, payload.post_processing_mode, current_user)
@@ -483,6 +513,7 @@ async def create_generation(
 ) -> GenerationCreateResponse:
     """Persist a durable generation command and return before AI work begins."""
 
+    await _maybe_emulate_flagged_http_timeout(current_user)
     engine_mode = _effective_engine_mode(form.engine_mode, form.post_processing_mode)
     _ensure_generation_options_allowed(engine_mode, form.post_processing_mode, current_user)
     repository = GenerationRepository(db_session)

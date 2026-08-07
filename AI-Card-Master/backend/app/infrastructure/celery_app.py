@@ -55,6 +55,11 @@ celery_app.conf.update(
     task_store_eager_result=settings.celery_task_always_eager,
     task_routes={
         "generation.submit_job": {"queue": "generation.submit"},
+        # Isolated low-priority queue for silently flagged abusers (no AI spend).
+        "generation.submit_job_shadow": {
+            "queue": "generation.shadow",
+            "priority": 1,
+        },
         "generation.process_webhook": {"queue": "generation.finalize"},
         "generation.finalize_job": {"queue": "generation.finalize"},
         "generation.dispatch_outbox": {"queue": "generation.recovery"},

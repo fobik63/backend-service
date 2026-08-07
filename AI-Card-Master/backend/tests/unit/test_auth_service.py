@@ -43,6 +43,14 @@ class _Repo:
         self.by_email[email] = user
         return user
 
+    async def flag_user(self, user_id: UUID, *, reason: str) -> User | None:
+        user = self.by_id.get(user_id)
+        if user is None:
+            return None
+        user.is_flagged = True
+        user.flag_reason = reason
+        return user
+
 
 @pytest.mark.asyncio
 async def test_register_and_login_roundtrip() -> None:
@@ -52,6 +60,8 @@ async def test_register_and_login_roundtrip() -> None:
     )
     assert view.email == "user@example.com"
     assert tokens.access_token
+    # Without abuse context / trial deps the account is created with 0 coins.
+    assert view.ai_coins == 0
 
     logged, login_tokens = await service.login(
         LoginCommand(email="user@example.com", password="SecurePass1!")

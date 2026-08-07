@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,10 +13,12 @@ from app.api.payments import get_current_user
 from app.application.auth_service import (
     AuthConflictError,
     AuthCredentialsError,
+    AuthDisposableEmailError,
     AuthNotFoundError,
     AuthService,
 )
 from app.domain.auth import LoginCommand, RegisterCommand
+from app.domain.signup_trial import SignupAbuseContext
 from app.infrastructure.auth_factory import build_auth_service
 from app.models.database import get_db_session
 from app.models.user import User
@@ -86,6 +88,29 @@ def _session_response(view, tokens) -> AuthSessionResponse:
     )
 
 
+def _signup_abuse_context(request: Request) -> SignupAbuseContext:
+    """Collect IP / UA / Accept-Language / X-Device-Fingerprint for trial gates."""
+
+    client_ip = getattr(request.state, "client_ip", None) or (
+        request.client.host if request.client is not None else "unknown"
+    )
+    user_agent = getattr(request.state, "user_agent", None) or (
+        (request.headers.get("user-agent") or "")[:512]
+    )
+    accept_language = (request.headers.get("accept-language") or "")[:128]
+    device_fingerprint = (
+        request.headers.get("X-Device-Fingerprint")
+        or request.headers.get("x-device-fingerprint")
+        or ""
+    ).strip()[:512]
+    return SignupAbuseContext(
+        client_ip=str(client_ip),
+        user_agent=user_agent or "",
+        accept_language=accept_language,
+        device_fingerprint=device_fingerprint,
+    )
+
+
 @router.post(
     "/register",
     response_model=AuthSessionResponse,
@@ -94,14 +119,23 @@ def _session_response(view, tokens) -> AuthSessionResponse:
 )
 async def register(
     payload: RegisterRequest,
+    request: Request,
     auth: AuthService = Depends(get_auth_service),
 ) -> AuthSessionResponse:
     try:
         command = RegisterCommand(email=payload.email, password=payload.password)
-        view, tokens = await auth.register(command)
+        view, tokens = await auth.register(
+            command,
+            abuse_context=_signup_abuse_context(request),
+        )
     except (ValueError, ValidationError) as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    except AuthDisposableEmailError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         ) from exc
     except AuthConflictError as exc:

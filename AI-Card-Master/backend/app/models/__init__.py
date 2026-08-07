@@ -33,6 +33,7 @@ from app.models.marketplace_export import MarketplaceCredential, MarketplaceExpo
 from app.models.smart_variant import SmartVariantItem, SmartVariantSync
 from app.models.style_preset_selection import StylePresetSelection
 from app.models.user import User
+from app.models.signup_trial import SignupTrialClaim
 from app.models.winback import WinbackOffer, WinbackStyleNotification
 from app.models.workspace import Workspace, WorkspaceMember, WorkspaceSharedGeneration
 
@@ -74,6 +75,7 @@ __all__ = [
     "StylePresetSelection",
     "User",
     "UserPushNotification",
+    "SignupTrialClaim",
     "WinbackOffer",
     "WinbackStyleNotification",
     "Workspace",

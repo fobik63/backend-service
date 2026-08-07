@@ -50,11 +50,20 @@ class InMemoryAuthRepository:
             referral_code=generate_referral_code(),
             is_admin=False,
             is_banned=False,
+            is_flagged=False,
             daily_bonus_streak=0,
             created_at=datetime.now(UTC),
         )
         self.by_id[user.id] = user
         self.by_email[user.email] = user
+        return user
+
+    async def flag_user(self, user_id: UUID, *, reason: str) -> User | None:
+        user = self.by_id.get(user_id)
+        if user is None:
+            return None
+        user.is_flagged = True
+        user.flag_reason = reason
         return user
 
 

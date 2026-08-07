@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 from uuid import UUID
 
 from celery import Task
+from sqlalchemy import select
 
 from app.application.generation_service import GenerationApplicationService
 from app.core.config import get_settings
+from app.domain.generation import GenerationErrorCode, GenerationErrorInfo, GenerationJobStatus
+from app.domain.silent_ban import SHADOW_LOAD_ERROR_MESSAGE, pick_shadow_delay_seconds
 from app.infrastructure.ai_engine_facade import (
     build_default_ai_engine,
     build_default_image_pipeline,
@@ -18,6 +22,8 @@ from app.infrastructure.ai_engine_facade import (
 from app.infrastructure.celery_app import celery_app
 from app.infrastructure.persistence.generation_repository import GenerationRepository
 from app.models.database import SessionLocal
+from app.models.generation_job import GenerationJob
+from app.models.user import User
 from app.services.ai_engine import (
     get_healthy_async_midjourney_providers,
     get_stable_diffusion_adapter,
@@ -41,6 +47,15 @@ class DurableGenerationTask(Task):
     retry_backoff_max = 300
     retry_jitter = True
     max_retries = 8
+    acks_late = True
+    reject_on_worker_lost = True
+
+
+class ShadowGenerationTask(Task):
+    """No retries — shadow failures must look like a one-shot provider timeout."""
+
+    autoretry_for = ()
+    max_retries = 0
     acks_late = True
     reject_on_worker_lost = True
 
@@ -99,6 +114,51 @@ def submit_job_task(self: Task, job_id: str) -> None:
             repository = GenerationRepository(session)
             service = await _build_service(repository)
             await service.submit_job(UUID(job_id))
+
+    _run_async(_task)
+
+
+@celery_app.task(
+    bind=True,
+    base=ShadowGenerationTask,
+    name="generation.submit_job_shadow",
+)
+def submit_job_shadow_task(self: Task, job_id: str) -> None:
+    """Silent-ban path: never call AI; sleep then fail with a fake load timeout."""
+
+    async def _task() -> None:
+        settings = get_settings()
+        delay = pick_shadow_delay_seconds(
+            min_seconds=settings.silent_ban_shadow_delay_min_seconds,
+            max_seconds=settings.silent_ban_shadow_delay_max_seconds,
+        )
+        logger.info(
+            "Shadow generation delay=%ss job_id=%s (silent ban; no AI)",
+            delay,
+            job_id,
+        )
+        await asyncio.sleep(delay)
+        async with SessionLocal() as session:
+            repository = GenerationRepository(session)
+            work = await repository.get_work_item(UUID(job_id))
+            if work is None or work.status in {
+                GenerationJobStatus.COMPLETED,
+                GenerationJobStatus.FAILED,
+            }:
+                return
+            await repository.set_job_status(
+                UUID(job_id),
+                GenerationJobStatus.SUBMITTING,
+                progress=8,
+            )
+            await repository.fail_job(
+                UUID(job_id),
+                GenerationErrorInfo(
+                    code=GenerationErrorCode.TRANSIENT,
+                    message=SHADOW_LOAD_ERROR_MESSAGE,
+                    retryable=True,
+                ),
+            )
 
     _run_async(_task)
 
@@ -172,8 +232,11 @@ def dispatch_outbox_task(self: Task) -> int:
             )
             for message in messages:
                 try:
-                    task_name, kwargs = _outbox_task(
-                        message.event_type.value, message.payload
+                    task_name, kwargs = await _outbox_task(
+                        session,
+                        message.event_type.value,
+                        message.payload,
+                        silent_ban_enabled=settings.silent_ban_enabled,
                     )
                     await asyncio.to_thread(
                         celery_app.send_task,
@@ -190,12 +253,19 @@ def dispatch_outbox_task(self: Task) -> int:
     return _run_async(_task)
 
 
-def _outbox_task(
+async def _outbox_task(
+    session: Any,
     event_type: str,
     payload: dict[str, Any],
+    *,
+    silent_ban_enabled: bool,
 ) -> tuple[str, dict[str, Any]]:
     if event_type == "submit_job":
-        return "generation.submit_job", {"job_id": str(payload["job_id"])}
+        job_id = str(payload["job_id"])
+        task_name = "generation.submit_job"
+        if silent_ban_enabled and await _job_owner_is_flagged(session, job_id):
+            task_name = "generation.submit_job_shadow"
+        return task_name, {"job_id": job_id}
     if event_type == "process_webhook":
         return "generation.process_webhook", {
             "webhook_event_id": str(payload["webhook_event_id"])
@@ -205,3 +275,19 @@ def _outbox_task(
     if event_type == "recover_job":
         return "generation.recover_stalled", {}
     raise ValueError(f"Unsupported outbox event type '{event_type}'.")
+
+
+async def _job_owner_is_flagged(session: Any, job_id: str) -> bool:
+    """True when the generation job belongs to a silently flagged user."""
+
+    try:
+        job_uuid = UUID(job_id)
+    except ValueError:
+        return False
+    result = await session.execute(
+        select(User.is_flagged)
+        .join(GenerationJob, GenerationJob.user_id == User.id)
+        .where(GenerationJob.id == job_uuid)
+    )
+    flagged = result.scalar_one_or_none()
+    return bool(flagged)

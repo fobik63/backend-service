@@ -37,3 +37,13 @@ class AuthRepository:
         await self._session.commit()
         await self._session.refresh(user)
         return user
+
+    async def flag_user(self, user_id: UUID, *, reason: str) -> User | None:
+        user = await self._session.get(User, user_id)
+        if user is None:
+            return None
+        user.is_flagged = True
+        user.flag_reason = (reason or "")[:64] or None
+        await self._session.commit()
+        await self._session.refresh(user)
+        return user
