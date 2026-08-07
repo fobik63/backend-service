@@ -61,7 +61,9 @@ from app.core.dead_mans_switch_middleware import DeadMansSwitchMiddleware
 from app.core.http_errors import shape_http_exception_body
 from app.core.input_sanitization_middleware import InputSanitizationMiddleware
 from app.core.logging_config import configure_logging
+from app.core.payload_size_limiter_middleware import PayloadSizeLimiterMiddleware
 from app.core.request_context_middleware import RequestContextMiddleware
+from app.core.security_headers_middleware import SecurityHeadersMiddleware
 from app.core.suspicious_activity_middleware import SuspiciousActivityMiddleware
 from app.infrastructure.redis import close_redis_client, close_security_redis_client, redis_healthcheck
 from app.models.database import SessionLocal, engine
@@ -147,21 +149,27 @@ app = FastAPI(
 )
 
 
-# CORS: allow Next.js (and other configured) frontends to call the API.
+# CORS: allow only explicitly configured frontend origins (ALLOWED_ORIGINS).
+# Wildcard origins/methods/headers are rejected in production via Settings.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
     allow_credentials=settings.cors_allow_credentials,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=settings.cors_allow_methods_list,
+    allow_headers=settings.cors_allow_headers_list,
+    expose_headers=settings.cors_expose_headers_list,
+    max_age=600,
 )
 # Security stack (Starlette: last added = outermost).
-# Order: DeadMans → Cloudflare → RequestContext → Great Wall → Sanitization → AdminOnly → CORS → route.
+# Order: DeadMans → SecurityHeaders → Cloudflare → PayloadSize → RequestContext
+#        → Great Wall → Sanitization → AdminOnly → CORS → route.
 app.add_middleware(AdminOnlyMiddleware)
 app.add_middleware(InputSanitizationMiddleware)
 app.add_middleware(SuspiciousActivityMiddleware)
 app.add_middleware(RequestContextMiddleware)
+app.add_middleware(PayloadSizeLimiterMiddleware)
 app.add_middleware(CloudflareProtectionMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(DeadMansSwitchMiddleware)
 
 

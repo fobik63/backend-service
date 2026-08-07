@@ -29,6 +29,7 @@ IaC inventory (`deploy/inventory.json`) must list postgres, redis, api, worker, 
 - [ ] Telegram error bot token + chat id (500s must reach you)
 - [ ] Legal block filled: operator name, address, support/privacy emails, public site URL
 - [ ] `CORS_ORIGINS` = production frontend origin(s) only
+
 - [ ] `ADMIN_ALLOWED_USER_ID` = your user UUID
 - [ ] Cloudflare: orange-cloud DNS **or** Tunnel (`deploy/docker-compose.tunnel.yml`), `CLOUDFLARE_ENABLED=true`, `CLOUDFLARE_ENFORCE_EDGE=true`
 - [ ] Origin harden: `sudo bash deploy/harden_host.sh` (SSH keys + IP allowlist, unused ports closed) — see `deploy/PRIVATE_TUNNEL.md`

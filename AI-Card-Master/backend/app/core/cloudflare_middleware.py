@@ -11,6 +11,7 @@ from starlette.responses import Response
 
 from app.core.client_ip import is_cloudflare_edge_ip, resolve_client_ip
 from app.core.config import get_settings
+from app.core.security_headers import apply_security_headers
 from app.services.dead_mans_switch import get_dead_mans_switch
 
 
@@ -64,22 +65,9 @@ class CloudflareProtectionMiddleware(BaseHTTPMiddleware):
             )
 
         response = await call_next(request)
-        _apply_security_headers(response, settings.app_env)
+        # Keep headers here as defense-in-depth; SecurityHeadersMiddleware is
+        # the primary stamp. setdefault avoids overriding an earlier value.
+        apply_security_headers(response, path=path)
         if settings.cloudflare_enabled:
             response.headers.setdefault("CF-Edge-Aware", "1")
         return response
-
-
-def _apply_security_headers(response: Response, app_env: str) -> None:
-    response.headers.setdefault("X-Content-Type-Options", "nosniff")
-    response.headers.setdefault("X-Frame-Options", "DENY")
-    response.headers.setdefault("Referrer-Policy", "no-referrer")
-    response.headers.setdefault(
-        "Permissions-Policy",
-        "geolocation=(), microphone=(), camera=()",
-    )
-    if app_env == "production":
-        response.headers.setdefault(
-            "Strict-Transport-Security",
-            "max-age=31536000; includeSubDomains",
-        )

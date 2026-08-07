@@ -101,9 +101,27 @@ class Settings(BaseSettings):
     argon2_parallelism: int = Field(default=4, alias="ARGON2_PARALLELISM")
 
     # Comma-separated origins for Next.js / local frontends (CORS).
+    # ALLOWED_ORIGINS is preferred; CORS_ORIGINS kept for backward compatibility.
     cors_origins: str = Field(
         default="http://localhost:3000,http://127.0.0.1:3000",
-        alias="CORS_ORIGINS",
+        validation_alias=AliasChoices("ALLOWED_ORIGINS", "CORS_ORIGINS"),
+    )
+    # Explicit allowlists — never use wildcard methods/headers in production.
+    cors_allow_methods: str = Field(
+        default="GET,POST,PUT,PATCH,DELETE,OPTIONS",
+        alias="CORS_ALLOW_METHODS",
+    )
+    cors_allow_headers: str = Field(
+        default=(
+            "Authorization,Content-Type,Accept,Origin,X-Request-Id,"
+            "X-Visitor-Id,Idempotency-Key,X-API-Key,"
+            "X-Webhook-Token,X-Webhook-Signature"
+        ),
+        alias="CORS_ALLOW_HEADERS",
+    )
+    cors_expose_headers: str = Field(
+        default="X-Request-Id",
+        alias="CORS_EXPOSE_HEADERS",
     )
 
     # Public legal / GDPR operator identity (shown in Terms & Privacy pages).
@@ -197,6 +215,21 @@ class Settings(BaseSettings):
     security_max_json_body_bytes: int = Field(
         default=1_048_576,
         alias="SECURITY_MAX_JSON_BODY_BYTES",
+    )
+    # Network-level payload gate (Content-Length + streamed body).
+    security_payload_size_limiter_enabled: bool = Field(
+        default=True,
+        alias="SECURITY_PAYLOAD_SIZE_LIMITER_ENABLED",
+    )
+    security_max_payload_bytes: int = Field(
+        default=5 * 1024 * 1024,
+        alias="SECURITY_MAX_PAYLOAD_BYTES",
+        description="Default max request body size (5 MiB).",
+    )
+    security_max_upload_payload_bytes: int = Field(
+        default=10 * 1024 * 1024,
+        alias="SECURITY_MAX_UPLOAD_PAYLOAD_BYTES",
+        description="Max body size for image upload routes (10 MiB).",
     )
     # Security & Status admin dashboard (plan §62).
     security_status_rps_window_seconds: int = Field(
@@ -1478,6 +1511,8 @@ class Settings(BaseSettings):
         "security_auto_block_threat_score",
         "security_ip_block_ttl_seconds",
         "security_max_json_body_bytes",
+        "security_max_payload_bytes",
+        "security_max_upload_payload_bytes",
         "security_generation_requests_per_minute",
         "security_generation_rate_window_seconds",
         "security_captcha_block_ttl_seconds",
@@ -1734,6 +1769,25 @@ class Settings(BaseSettings):
                 "PASSWORD_PEPPER must contain at least 32 characters in production."
             )
 
+        origins = self.cors_origins_list
+        if not origins:
+            raise ValueError(
+                "ALLOWED_ORIGINS (or CORS_ORIGINS) must list explicit frontend "
+                "origins in production."
+            )
+        if any(origin == "*" for origin in origins):
+            raise ValueError(
+                "Wildcard CORS origin (*) is forbidden in production."
+            )
+        if any(method.strip() == "*" for method in self.cors_allow_methods.split(",")):
+            raise ValueError(
+                "CORS_ALLOW_METHODS must not contain '*' in production."
+            )
+        if any(header.strip() == "*" for header in self.cors_allow_headers.split(",")):
+            raise ValueError(
+                "CORS_ALLOW_HEADERS must not contain '*' in production."
+            )
+
         return self
 
     @property
@@ -1749,6 +1803,36 @@ class Settings(BaseSettings):
         """Parse CORS origins into a clean list for CORSMiddleware."""
 
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def cors_allow_methods_list(self) -> list[str]:
+        """Parse allowed CORS HTTP methods (no wildcards in production)."""
+
+        return [
+            method.strip().upper()
+            for method in self.cors_allow_methods.split(",")
+            if method.strip()
+        ]
+
+    @property
+    def cors_allow_headers_list(self) -> list[str]:
+        """Parse allowed CORS request headers."""
+
+        return [
+            header.strip()
+            for header in self.cors_allow_headers.split(",")
+            if header.strip()
+        ]
+
+    @property
+    def cors_expose_headers_list(self) -> list[str]:
+        """Parse CORS response headers exposed to the browser."""
+
+        return [
+            header.strip()
+            for header in self.cors_expose_headers.split(",")
+            if header.strip()
+        ]
 
     @property
     def effective_celery_broker_url(self) -> str:
