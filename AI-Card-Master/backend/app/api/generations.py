@@ -31,6 +31,7 @@ from app.api.captcha import enforce_generation_behavioral_limit
 from app.api.payments import get_current_user
 from app.application.generation_cabinet_service import GenerationCabinetService
 from app.core.config import get_settings
+from app.core.pricing import generation_cost_for_mode
 from app.core.rate_limit import generations_user_limit
 from app.domain.silent_ban import pick_shadow_delay_seconds
 from app.domain.brand_dna import (
@@ -906,10 +907,9 @@ def _effective_engine_mode(
 
 
 def _generation_cost_for_mode(post_processing_mode: GenerationPostProcessingMode) -> int:
-    settings = get_settings()
-    if post_processing_mode == GenerationPostProcessingMode.HD_FACE_FIX:
-        return settings.generation_hd_face_fix_cost_coins
-    return settings.generation_fast_cost_coins
+    """Delegate to the shared pricing matrix (FAST=1 / HD Face Fix=3 defaults)."""
+
+    return generation_cost_for_mode(post_processing_mode)
 
 
 def _parse_engine_mode(value: object) -> GenerationEngineMode:

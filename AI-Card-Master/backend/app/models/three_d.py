@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
@@ -30,6 +31,13 @@ class ThreeDTask(Base):
         Index("ix_three_d_tasks_user_status", "user_id", "status"),
         Index("ix_three_d_tasks_user_created", "user_id", "created_at"),
         Index("ix_three_d_tasks_provider_job_id", "provider_job_id"),
+        Index(
+            "uq_three_d_tasks_user_idempotency",
+            "user_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -65,8 +73,46 @@ class ThreeDTask(Base):
         default=0,
         server_default=text("0"),
     )
+    progress_percent: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    stage: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    celery_task_id: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        index=True,
+    )
+    coins_held: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+    )
+    coins_captured: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+    )
+    coins_refunded: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+    )
+    coin_hold_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("coin_holds.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     polycount_target: Mapped[int | None] = mapped_column(Integer, nullable=True)
     texture_resolution: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_format: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     execution_time_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

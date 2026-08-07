@@ -50,6 +50,7 @@ _PROTECTED_PATH_PREFIXES: tuple[str, ...] = (
     "/api/v1/ab-tests",
     "/api/v1/analytics",
     "/api/v1/payments/create",
+    "/api/v1/3d",
 )
 
 _EXACT_PROTECTED_PATHS: frozenset[str] = frozenset(

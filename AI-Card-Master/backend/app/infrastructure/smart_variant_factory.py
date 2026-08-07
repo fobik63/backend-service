@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.smart_variant_service import SmartVariantService
 from app.core.config import get_settings
+from app.core.pricing import generation_cost_for_mode
 from app.domain.bulk_generation import PushNotificationPayload
 from app.domain.smart_variant import VariantPushPayload
 from app.infrastructure.fabric_recolor import StableDiffusionFabricRecolor
@@ -57,7 +58,7 @@ def build_smart_variant_service(
         max_image_bytes=settings.generation_max_upload_bytes,
         coins_per_color=coins_per_color
         if coins_per_color is not None
-        else settings.generation_fast_cost_coins,
+        else generation_cost_for_mode("fast"),
         charge_coins=settings.generation_charge_coins,
         telegram=TelegramUserNotifier(),
         push=_VariantPushBridge(db_session),

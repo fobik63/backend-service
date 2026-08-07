@@ -21,3 +21,4 @@ os.environ.setdefault(
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/15")
 os.environ.setdefault("GENERATION_CHARGE_COINS", "false")
 os.environ.setdefault("TELEGRAM_ERROR_LOGGING_ENABLED", "false")
+os.environ.setdefault("ENABLE_THREE_D", "true")

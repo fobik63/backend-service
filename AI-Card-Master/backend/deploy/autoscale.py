@@ -33,9 +33,8 @@ except ImportError:  # pragma: no cover - runtime dependency on host
 logger = logging.getLogger("autoscale")
 
 DEFAULT_QUEUES = (
-    "generation.submit",
-    "generation.finalize",
-    "generation.recovery",
+    "default",
+    "generation.shadow",
     "winback",
     "bulk",
     "smart_variant",

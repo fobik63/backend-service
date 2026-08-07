@@ -129,6 +129,12 @@ class User(Base):
         index=True,
     )
     flag_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Device fingerprint (SHA-256 hex) for anti-abuse correlation; nullable = legacy rows.
+    fingerprint_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        index=True,
+    )
     last_seen_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,

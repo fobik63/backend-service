@@ -225,6 +225,8 @@ async def test_haiku_payload_omits_adaptive_thinking() -> None:
         *,
         create_kwargs: dict[str, Any],
         extra_headers: dict[str, str] | None = None,
+        sdk: Any = None,
+        track_primary: bool = True,
     ):
         captured["payload"] = create_kwargs
         captured["extra_headers"] = extra_headers
@@ -277,6 +279,8 @@ async def test_opus_payload_keeps_adaptive_thinking() -> None:
         *,
         create_kwargs: dict[str, Any],
         extra_headers: dict[str, str] | None = None,
+        sdk: Any = None,
+        track_primary: bool = True,
     ):
         captured["payload"] = create_kwargs
         captured["extra_headers"] = extra_headers

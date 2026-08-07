@@ -207,6 +207,11 @@ class Settings(BaseSettings):
         alias="SLOWAPI_GENERATIONS_PER_MINUTE",
         description="Shared per-user_id budget for /generations/* endpoints.",
     )
+    slowapi_three_d_per_minute: int = Field(
+        default=2,
+        alias="SLOWAPI_THREE_D_PER_MINUTE",
+        description="Per-user_id budget for POST /api/v1/3d/generate.",
+    )
     # Redis idempotency for coin charges / generation task creation.
     idempotency_middleware_enabled: bool = Field(
         default=True,
@@ -658,6 +663,12 @@ class Settings(BaseSettings):
 
     # 3D generation engine (Adapter Pattern — app/services/three_d).
     # Default "mock" keeps local/dev and CI free of Meshy/Tripo/RunPod deps.
+    # Feature toggle: when False, /api/v1/3d routers and 3D Celery beat are off.
+    enable_three_d: bool = Field(
+        default=True,
+        alias="ENABLE_THREE_D",
+        description="Register /api/v1/3d HTTP+WS routers and 3D Celery workers/beat.",
+    )
     three_d_provider: Literal["mock", "meshy", "tripo", "runpod"] = Field(
         default="mock",
         alias="THREE_D_PROVIDER",
@@ -677,6 +688,81 @@ class Settings(BaseSettings):
         ge=1,
         alias="THREE_D_MOCK_TICKS_PER_STAGE",
         description="Progress ticks per mock stage (drafting_mesh / textures / baking).",
+    )
+    three_d_cost_coins: int = Field(
+        default=5,
+        ge=0,
+        alias="THREE_D_COST_COINS",
+        description=(
+            "Legacy flat AI-coin hold when create_task is called without mode. "
+            "API generate uses Pricing Matrix (draft=10 / standard=30 / hd=60)."
+        ),
+    )
+    three_d_delivery_mode: Literal["poll", "webhook"] = Field(
+        default="poll",
+        alias="THREE_D_DELIVERY_MODE",
+        description=(
+            "poll: Celery worker polls the provider until terminal. "
+            "webhook: worker submits then waits for provider callbacks / beat poll."
+        ),
+    )
+    three_d_poll_interval_seconds: float = Field(
+        default=2.0,
+        gt=0,
+        alias="THREE_D_POLL_INTERVAL_SECONDS",
+    )
+    three_d_poll_batch_size: int = Field(
+        default=50,
+        ge=1,
+        alias="THREE_D_POLL_BATCH_SIZE",
+    )
+    three_d_poll_seconds: float = Field(
+        default=5.0,
+        gt=0,
+        alias="THREE_D_POLL_SECONDS",
+        description="Celery beat interval for three_d.poll_active_tasks.",
+    )
+    three_d_task_timeout_seconds: int = Field(
+        default=1800,
+        ge=30,
+        alias="THREE_D_TASK_TIMEOUT_SECONDS",
+    )
+    three_d_max_download_bytes: int = Field(
+        default=200 * 1024 * 1024,
+        ge=1024,
+        alias="THREE_D_MAX_DOWNLOAD_BYTES",
+    )
+    three_d_webhook_secret: SecretStr = Field(
+        default=SecretStr(""),
+        alias="THREE_D_WEBHOOK_SECRET",
+        description="HMAC-SHA256 secret for /api/v1/3d/webhook/{provider_name}.",
+    )
+    three_d_progress_ttl_seconds: int = Field(
+        default=3600,
+        ge=60,
+        alias="THREE_D_PROGRESS_TTL_SECONDS",
+    )
+    three_d_ws_poll_interval_seconds: float = Field(
+        default=1.0,
+        gt=0,
+        alias="THREE_D_WS_POLL_INTERVAL_SECONDS",
+        description="Fallback WebSocket poll interval when Redis pub/sub is quiet.",
+    )
+    three_d_gpu_rental_provider: str = Field(
+        default="stub",
+        alias="THREE_D_GPU_RENTAL_PROVIDER",
+        description="Provider label stored on gpu_rental_sessions (stub until wired).",
+    )
+    three_d_gpu_rental_instance_type: str = Field(
+        default="gpu.stub.1x",
+        alias="THREE_D_GPU_RENTAL_INSTANCE_TYPE",
+        description="Default GPU instance type for rental start stub.",
+    )
+    three_d_gpu_rental_coins_per_minute: int = Field(
+        default=1,
+        ge=0,
+        alias="THREE_D_GPU_RENTAL_COINS_PER_MINUTE",
+        description="AI-coins charged per minute when a GPU rental session is stopped.",
     )
 
     # Redis, Celery, and durable generation workflow.
@@ -1618,6 +1704,7 @@ class Settings(BaseSettings):
         "slowapi_global_per_minute",
         "slowapi_auth_per_minute",
         "slowapi_generations_per_minute",
+        "slowapi_three_d_per_minute",
         "idempotency_processing_ttl_seconds",
         "idempotency_response_ttl_seconds",
         "security_auto_block_threat_score",
@@ -1729,6 +1816,13 @@ class Settings(BaseSettings):
         if normalized not in {"auto", "turnstile", "recaptcha"}:
             raise ValueError("CAPTCHA_PROVIDER must be auto, turnstile, or recaptcha.")
         return normalized
+
+    @field_validator("three_d_delivery_mode", mode="before")
+    @classmethod
+    def normalize_three_d_delivery_mode(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
 
     @field_validator("three_d_provider", mode="before")
     @classmethod

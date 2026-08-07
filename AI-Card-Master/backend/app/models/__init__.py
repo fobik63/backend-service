@@ -35,6 +35,7 @@ from app.models.style_preset_selection import StylePresetSelection
 from app.models.user import User
 from app.models.signup_trial import SignupTrialClaim
 from app.models.winback import WinbackOffer, WinbackStyleNotification
+from app.models.coin_hold import CoinHold
 from app.models.three_d import GpuRentalSession, ThreeDAsset, ThreeDTask
 from app.models.workspace import Workspace, WorkspaceMember, WorkspaceSharedGeneration
 
@@ -71,6 +72,7 @@ __all__ = [
     "MarketplaceCredential",
     "MarketplaceExport",
     "Payment",
+    "CoinHold",
     "SmartVariantItem",
     "SmartVariantSync",
     "StylePresetSelection",

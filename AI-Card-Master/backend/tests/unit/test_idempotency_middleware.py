@@ -92,6 +92,7 @@ def test_protected_path_matching() -> None:
     assert _is_protected_path("/api/v1/generations/model")
     assert _is_protected_path("/api/v1/bulk-generations")
     assert _is_protected_path("/api/v1/payments/create")
+    assert _is_protected_path("/api/v1/3d/generate")
     assert not _is_protected_path("/api/v1/payments/balance")
     assert not _is_protected_path("/api/v1/auth/login")
     assert not _is_protected_path("/health")

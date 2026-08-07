@@ -10,30 +10,39 @@ from app.core.config import get_settings
 
 settings = get_settings()
 
+_celery_includes = [
+    "app.workers.generation_tasks",
+    "app.workers.winback_tasks",
+    "app.workers.bulk_generation_tasks",
+    "app.workers.smart_variant_tasks",
+    "app.workers.brand_lora_tasks",
+    "app.workers.brand_dna_tasks",
+    "app.workers.claude_reasoning_tasks",
+    "app.workers.visual_audit_tasks",
+    "app.workers.oracle_tasks",
+    "app.workers.ai_strategy_tasks",
+    "app.workers.pain_analysis_tasks",
+    "app.workers.ab_test_tasks",
+    "app.workers.stock_parser_tasks",
+    "app.workers.eye_of_god_tasks",
+    "app.workers.competitor_audit_tasks",
+    "app.workers.source_retention_tasks",
+    "app.workers.audit_log_tasks",
+]
+if settings.enable_three_d:
+    _celery_includes.append("app.workers.three_d_tasks")
+
 celery_app = Celery(
     "ai_card_master",
     broker=settings.effective_celery_broker_url,
     backend=settings.effective_celery_result_backend,
-    include=[
-        "app.workers.generation_tasks",
-        "app.workers.winback_tasks",
-        "app.workers.bulk_generation_tasks",
-        "app.workers.smart_variant_tasks",
-        "app.workers.brand_lora_tasks",
-        "app.workers.brand_dna_tasks",
-        "app.workers.claude_reasoning_tasks",
-        "app.workers.visual_audit_tasks",
-        "app.workers.oracle_tasks",
-        "app.workers.ai_strategy_tasks",
-        "app.workers.pain_analysis_tasks",
-        "app.workers.ab_test_tasks",
-        "app.workers.stock_parser_tasks",
-        "app.workers.eye_of_god_tasks",
-        "app.workers.competitor_audit_tasks",
-        "app.workers.source_retention_tasks",
-        "app.workers.audit_log_tasks",
-    ],
+    include=_celery_includes,
 )
+
+# Fast lane (cards/text/outbox) vs heavy 3D/GPU — never share a worker -Q list
+# with three_d_heavy so long mesh jobs cannot starve interactive generation.
+CELERY_DEFAULT_QUEUE = "default"
+CELERY_THREE_D_HEAVY_QUEUE = "three_d_heavy"
 
 celery_app.conf.update(
     task_serializer="json",
@@ -47,6 +56,7 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     worker_cancel_long_running_tasks_on_connection_loss=True,
     broker_connection_retry_on_startup=True,
+    task_default_queue=CELERY_DEFAULT_QUEUE,
     task_default_retry_delay=5,
     task_soft_time_limit=840,
     task_time_limit=900,
@@ -54,16 +64,17 @@ celery_app.conf.update(
     task_always_eager=settings.celery_task_always_eager,
     task_store_eager_result=settings.celery_task_always_eager,
     task_routes={
-        "generation.submit_job": {"queue": "generation.submit"},
+        # Card / text generation — fast default lane (isolated from three_d_heavy).
+        "generation.submit_job": {"queue": CELERY_DEFAULT_QUEUE},
         # Isolated low-priority queue for silently flagged abusers (no AI spend).
         "generation.submit_job_shadow": {
             "queue": "generation.shadow",
             "priority": 1,
         },
-        "generation.process_webhook": {"queue": "generation.finalize"},
-        "generation.finalize_job": {"queue": "generation.finalize"},
-        "generation.dispatch_outbox": {"queue": "generation.recovery"},
-        "generation.recover_stalled": {"queue": "generation.recovery"},
+        "generation.process_webhook": {"queue": CELERY_DEFAULT_QUEUE},
+        "generation.finalize_job": {"queue": CELERY_DEFAULT_QUEUE},
+        "generation.dispatch_outbox": {"queue": CELERY_DEFAULT_QUEUE},
+        "generation.recover_stalled": {"queue": CELERY_DEFAULT_QUEUE},
         "winback.scan_inactivity": {"queue": "winback"},
         "winback.notify_luxury_loft_updates": {"queue": "winback"},
         "bulk.unpack_and_enqueue": {"queue": "bulk"},
@@ -91,6 +102,9 @@ celery_app.conf.update(
         "claude.run_competitor_deep_analysis": {"queue": "claude.reasoning"},
         "privacy.purge_expired_sources": {"queue": "privacy.retention"},
         "audit.archive_old_events": {"queue": "privacy.retention"},
+        # Long-running 3D mesh / texture / video-render style jobs.
+        "three_d.process_generation_task": {"queue": CELERY_THREE_D_HEAVY_QUEUE},
+        "three_d.poll_active_tasks": {"queue": CELERY_THREE_D_HEAVY_QUEUE},
     },
     beat_schedule={
         "dispatch-generation-outbox": {
@@ -151,6 +165,17 @@ celery_app.conf.update(
             "task": "audit.archive_old_events",
             "schedule": settings.audit_log_archive_scan_seconds,
         },
+        **(
+            {
+                "three-d-poll-active-tasks": {
+                    "task": "three_d.poll_active_tasks",
+                    "schedule": settings.three_d_poll_seconds,
+                    "options": {"queue": CELERY_THREE_D_HEAVY_QUEUE},
+                },
+            }
+            if settings.enable_three_d
+            else {}
+        ),
     },
 )
 
@@ -209,7 +234,11 @@ def _notify_celery_task_failure(
         pass
 
 
-__all__ = ["celery_app"]
+__all__ = [
+    "CELERY_DEFAULT_QUEUE",
+    "CELERY_THREE_D_HEAVY_QUEUE",
+    "celery_app",
+]
 
 
 def _install_beat_leadership_hook() -> None:

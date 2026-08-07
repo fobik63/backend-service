@@ -27,6 +27,8 @@ from app.api.smart_variants import router as smart_variants_router
 from app.api.text_generation import router as text_generation_router
 from app.api.visual_audit import router as visual_audit_router
 from app.api.webhooks import midjourney_webhook_router
+from app.api.three_d import router as three_d_router
+from app.api.three_d_ws import router as three_d_ws_router
 from app.api.winback import router as winback_router
 from app.api.workspaces import router as workspaces_router
 
@@ -57,6 +59,8 @@ __all__ = [
     "referrals_router",
     "smart_variants_router",
     "text_generation_router",
+    "three_d_router",
+    "three_d_ws_router",
     "visual_audit_router",
     "winback_router",
     "workspaces_router",

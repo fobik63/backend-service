@@ -47,6 +47,7 @@ DEFAULT_REDIS_CACHE_PREFIXES: tuple[str, ...] = (
     "brand_lora:",
     "catalog:",
     "highload:",
+    "three_d:",
 )
 
 DEFAULT_RESTART_SERVICES: tuple[str, ...] = ("api", "worker", "nginx")

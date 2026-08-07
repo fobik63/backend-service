@@ -30,6 +30,7 @@ from app.application.bulk_generation_service import (
     BulkGenerationValidationError,
 )
 from app.core.config import get_settings
+from app.core.pricing import generation_cost_for_mode
 from app.domain.bulk_generation import (
     BulkBatchStatus,
     BulkItemStatus,
@@ -133,10 +134,9 @@ def _parse_post_processing_mode(value: object) -> GenerationPostProcessingMode:
 
 
 def _generation_cost_for_mode(post_processing_mode: GenerationPostProcessingMode) -> int:
-    settings = get_settings()
-    if post_processing_mode == GenerationPostProcessingMode.HD_FACE_FIX:
-        return settings.generation_hd_face_fix_cost_coins
-    return settings.generation_fast_cost_coins
+    """Delegate to the shared pricing matrix (FAST=1 / HD Face Fix=3 defaults)."""
+
+    return generation_cost_for_mode(post_processing_mode)
 
 
 def _ensure_options_allowed(

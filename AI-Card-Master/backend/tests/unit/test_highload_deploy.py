@@ -6,10 +6,29 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from starlette.requests import Request
 
 from app.models.generation import Generation
 from app.models.generation_job import GenerationJob
 from app.services import telegram_alerts
+
+
+def _fake_request(path: str = "/api/v1/generations/history") -> Request:
+    return Request(
+        {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": path,
+            "raw_path": path.encode("ascii"),
+            "query_string": b"",
+            "headers": [],
+            "client": ("127.0.0.1", 12345),
+            "server": ("test", 80),
+        }
+    )
 
 
 def test_generation_job_has_composite_history_indexes() -> None:
@@ -166,6 +185,7 @@ async def test_list_generation_history_uses_redis_cache(
     monkeypatch.setattr(generations_api, "GenerationRepository", ShouldNotHitRepository)
 
     response = await generations_api.list_generation_history(
+        request=_fake_request(),
         current_user=user,
         db_session=object(),  # type: ignore[arg-type]
         limit=50,

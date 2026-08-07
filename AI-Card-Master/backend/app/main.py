@@ -252,6 +252,14 @@ app.include_router(generations_router)
 app.include_router(text_generation_router)
 app.include_router(midjourney_webhook_router)
 
+# 3D Generation — feature-toggled (ENABLE_THREE_D) so disabled envs stay lean.
+if settings.enable_three_d:
+    from app.api.three_d import router as three_d_router
+    from app.api.three_d_ws import router as three_d_ws_router
+
+    app.include_router(three_d_router)
+    app.include_router(three_d_ws_router)
+
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(_: Request, exc: HTTPException) -> JSONResponse:

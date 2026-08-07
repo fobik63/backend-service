@@ -4,6 +4,7 @@ Tiers (all windows are per-minute rolling buckets):
 1. Global: ``SLOWAPI_GLOBAL_PER_MINUTE`` requests per client IP (default limits).
 2. Auth brute-force: shared ``SLOWAPI_AUTH_PER_MINUTE`` per IP on login/register.
 3. Generations: shared ``SLOWAPI_GENERATIONS_PER_MINUTE`` per authenticated user_id.
+4. 3D generate: shared ``SLOWAPI_THREE_D_PER_MINUTE`` (default 2) per user_id.
 
 Exceeded limits return HTTP 429 with a stable JSON body and ``Retry-After``.
 """
@@ -108,6 +109,14 @@ auth_bruteforce_limit = limiter.shared_limit(
 generations_user_limit = limiter.shared_limit(
     lambda: f"{get_settings().slowapi_generations_per_minute}/minute",
     scope="generations_user",
+    key_func=get_user_id_key,
+    override_defaults=False,
+    error_message="Rate limit exceeded",
+)
+
+three_d_generate_limit = limiter.shared_limit(
+    lambda: f"{get_settings().slowapi_three_d_per_minute}/minute",
+    scope="three_d_generate",
     key_func=get_user_id_key,
     override_defaults=False,
     error_message="Rate limit exceeded",

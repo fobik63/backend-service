@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 from uuid import UUID
 
 
@@ -16,6 +17,63 @@ class ThreeDTaskStatus(StrEnum):
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     CANCELED = "CANCELED"
+
+
+TERMINAL_THREE_D_STATUSES: frozenset[ThreeDTaskStatus] = frozenset(
+    {
+        ThreeDTaskStatus.COMPLETED,
+        ThreeDTaskStatus.FAILED,
+        ThreeDTaskStatus.CANCELED,
+    }
+)
+
+REDIS_THREE_D_PROGRESS_TTL_SECONDS = 3600
+REDIS_THREE_D_PROGRESS_PREFIX = "three_d:progress"
+REDIS_THREE_D_PROGRESS_CHANNEL_PREFIX = "three_d:progress:channel"
+
+_PROVIDER_STATUS_MAP: dict[str, ThreeDTaskStatus] = {
+    "QUEUED": ThreeDTaskStatus.PENDING,
+    "PROCESSING": ThreeDTaskStatus.PROCESSING,
+    "COMPLETED": ThreeDTaskStatus.COMPLETED,
+    "FAILED": ThreeDTaskStatus.FAILED,
+}
+
+_STAGE_LABELS: dict[str, str] = {
+    "drafting_mesh": "генерация сетки",
+    "generating_textures": "текстурирование",
+    "baking_maps": "запекание карт",
+}
+
+
+def redis_three_d_progress_key(task_id: UUID) -> str:
+    """Redis JSON key holding the latest progress snapshot for ``task_id``."""
+
+    return f"{REDIS_THREE_D_PROGRESS_PREFIX}:{task_id}"
+
+
+def redis_three_d_progress_channel(task_id: UUID) -> str:
+    """Pub/sub channel that WebSocket clients subscribe to for live updates."""
+
+    return f"{REDIS_THREE_D_PROGRESS_CHANNEL_PREFIX}:{task_id}"
+
+
+def map_provider_status_to_domain(status: str) -> ThreeDTaskStatus:
+    """Map provider DTO lifecycle onto persisted domain status."""
+
+    normalised = str(status).strip().upper()
+    mapped = _PROVIDER_STATUS_MAP.get(normalised)
+    if mapped is None:
+        raise ValueError(f"Unknown provider 3D status: {status!r}")
+    return mapped
+
+
+def stage_label(stage: str | None) -> str | None:
+    """Human-readable Russian stage label for WebSocket / Redis payloads."""
+
+    if stage is None or not str(stage).strip():
+        return None
+    value = str(stage).strip()
+    return _STAGE_LABELS.get(value, value)
 
 
 class ThreeDInputType(StrEnum):
@@ -34,6 +92,13 @@ class GpuRentalSessionStatus(StrEnum):
     TERMINATED = "TERMINATED"
 
 
+class ThreeDOutputFormat(StrEnum):
+    """Preferred downloadable mesh format requested at generate time."""
+
+    GLB = "GLB"
+    USDZ = "USDZ"
+
+
 class ThreeDAssetFormat(StrEnum):
     """Supported binary formats stored for a 3D asset."""
 
@@ -42,6 +107,26 @@ class ThreeDAssetFormat(StrEnum):
     OBJ = "obj"
     PREVIEW_PNG = "preview_png"
     THUMBNAIL = "thumbnail"
+
+
+def parse_output_format(raw: str | None) -> ThreeDOutputFormat:
+    """Normalise API ``format`` (GLB/USDZ) onto the domain enum."""
+
+    if raw is None or not str(raw).strip():
+        return ThreeDOutputFormat.GLB
+    normalised = str(raw).strip().upper()
+    try:
+        return ThreeDOutputFormat(normalised)
+    except ValueError as exc:
+        raise ValueError(f"Unsupported 3D output format: {raw!r}") from exc
+
+
+def output_format_to_asset(fmt: ThreeDOutputFormat) -> ThreeDAssetFormat:
+    """Map preferred output format onto the storage asset enum."""
+
+    if fmt is ThreeDOutputFormat.USDZ:
+        return ThreeDAssetFormat.USDZ
+    return ThreeDAssetFormat.GLB
 
 
 THREE_D_CONTENT_TYPES: dict[ThreeDAssetFormat, str] = {
@@ -74,12 +159,77 @@ class ThreeDTaskView:
     provider_name: str | None
     provider_job_id: str | None
     cost_coins: int
+    progress_percent: int
+    stage: str | None
+    celery_task_id: str | None
+    coins_held: bool
+    coins_captured: bool
+    coins_refunded: bool
     polycount_target: int | None
     texture_resolution: int | None
+    output_format: ThreeDOutputFormat | None
+    idempotency_key: str | None
     error_message: str | None
     execution_time_seconds: float | None
     created_at: datetime
     updated_at: datetime
+    coin_hold_id: UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ThreeDProgressSnapshot:
+    """Live progress payload mirrored in Redis and pushed over WebSocket."""
+
+    task_id: UUID
+    status: ThreeDTaskStatus
+    progress_percent: int
+    stage: str | None
+    stage_label: str | None
+    error_message: str | None = None
+    provider_job_id: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "task_id": str(self.task_id),
+            "status": self.status.value,
+            "progress_percent": self.progress_percent,
+            "stage": self.stage,
+            "stage_label": self.stage_label,
+            "error_message": self.error_message,
+            "provider_job_id": self.provider_job_id,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> ThreeDProgressSnapshot:
+        return cls(
+            task_id=UUID(str(payload["task_id"])),
+            status=ThreeDTaskStatus(str(payload["status"])),
+            progress_percent=int(payload.get("progress_percent") or 0),
+            stage=(str(payload["stage"]) if payload.get("stage") else None),
+            stage_label=(
+                str(payload["stage_label"]) if payload.get("stage_label") else None
+            ),
+            error_message=(
+                str(payload["error_message"]) if payload.get("error_message") else None
+            ),
+            provider_job_id=(
+                str(payload["provider_job_id"])
+                if payload.get("provider_job_id")
+                else None
+            ),
+        )
+
+    @classmethod
+    def from_task_view(cls, task: ThreeDTaskView) -> ThreeDProgressSnapshot:
+        return cls(
+            task_id=task.id,
+            status=task.status,
+            progress_percent=task.progress_percent,
+            stage=task.stage,
+            stage_label=stage_label(task.stage),
+            error_message=task.error_message,
+            provider_job_id=task.provider_job_id,
+        )
 
 
 @dataclass(frozen=True, slots=True)

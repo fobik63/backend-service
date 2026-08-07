@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.bulk_generation_service import BulkGenerationService
 from app.core.config import get_settings
+from app.core.pricing import generation_cost_for_mode
 from app.infrastructure.bulk_job_factory import GenerationRepositoryJobFactory
 from app.infrastructure.persistence.bulk_generation_repository import (
     BulkGenerationRepository,
@@ -32,7 +33,7 @@ def build_bulk_generation_service(
         max_image_bytes=settings.generation_max_upload_bytes,
         coins_per_product=coins_per_product
         if coins_per_product is not None
-        else settings.generation_fast_cost_coins,
+        else generation_cost_for_mode("fast"),
         charge_coins=settings.generation_charge_coins,
         telegram=TelegramUserNotifier(),
         push=InAppPushNotifier(db_session),

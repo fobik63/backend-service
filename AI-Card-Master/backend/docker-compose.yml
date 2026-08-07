@@ -160,9 +160,47 @@ services:
         "worker",
         "--loglevel=INFO",
         "-Q",
-        "generation.submit,generation.finalize,generation.recovery,winback,bulk,smart_variant,claude.reasoning,claude.recovery,ab_test,stock_parser,analytics.scrape",
+        "default,generation.shadow,winback,bulk,smart_variant,claude.reasoning,claude.recovery,ab_test,stock_parser,analytics.scrape",
         "--concurrency",
         "${CELERY_CONCURRENCY:-4}",
+      ]
+
+  # Isolated heavy lane: 3D mesh/texture jobs never share concurrency with cards/text.
+  worker-three-d:
+    image: ai-card-master-backend:${IMAGE_TAG:-current}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      ENABLE_THREE_D: ${ENABLE_THREE_D:-true}
+      DATABASE_URL: postgresql://ai_card:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/ai_card_master
+      REDIS_URL: redis://redis:6379/0
+      REDIS_SECURITY_URL: redis://redis-security:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      redis-security:
+        condition: service_healthy
+    command:
+      [
+        "celery",
+        "-A",
+        "app.infrastructure.celery_app.celery_app",
+        "worker",
+        "--loglevel=INFO",
+        "-Q",
+        "three_d_heavy",
+        "--concurrency",
+        "${CELERY_THREE_D_CONCURRENCY:-1}",
       ]
 
   beat:

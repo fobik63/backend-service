@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from fastapi import HTTPException
+from starlette.requests import Request
 import pytest
 
 import app.api.generations as generations_api
@@ -13,6 +14,26 @@ from app.main import app
 from app.models.enums import SubscriptionStatus
 from app.models.user import User
 from app.services.model_vto import ModelTypage, build_model_vto_task
+
+
+def _fake_request(path: str = "/api/v1/generations") -> Request:
+    """Minimal ASGI request for direct handler calls under SlowAPI wrappers."""
+
+    return Request(
+        {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": path,
+            "raw_path": path.encode("ascii"),
+            "query_string": b"",
+            "headers": [],
+            "client": ("127.0.0.1", 12345),
+            "server": ("test", 80),
+        }
+    )
 
 
 def test_generation_and_webhook_contracts_are_exposed() -> None:
@@ -307,6 +328,7 @@ async def test_status_polling_falls_back_to_db_when_redis_is_lost(
     )
 
     response = await generations_api.get_generation_status(
+        request=_fake_request(f"/api/v1/generations/{task_id}"),
         task_id=task_id,
         current_user=user,
         db_session=object(),  # type: ignore[arg-type]
@@ -401,6 +423,7 @@ async def test_generation_history_returns_thumbnail_and_expires_old_archive(
     monkeypatch.setattr(generations_api, "set_cached_generation_history", cache_noop)
 
     response = await generations_api.list_generation_history(
+        request=_fake_request("/api/v1/generations/history"),
         current_user=user,
         db_session=object(),  # type: ignore[arg-type]
     )

@@ -16,6 +16,7 @@ from sqlalchemy.orm import selectinload
 
 from app.config.style_presets import resolve_niche_key
 from app.core.config import get_settings
+from app.core.pricing import generation_cost_for_mode
 from app.domain.generation import (
     AttemptWorkItem,
     GenerationEngineMode,
@@ -105,7 +106,7 @@ class GenerationRepository:
                 return existing, False
 
         settings = get_settings()
-        generation_cost = _generation_cost_for_mode(post_processing_mode)
+        generation_cost = generation_cost_for_mode(post_processing_mode)
         try:
             user = await self._session.get(User, user_id, with_for_update=True)
             if user is None:
@@ -968,8 +969,4 @@ class GenerationRepository:
         )
 
 
-def _generation_cost_for_mode(mode: GenerationPostProcessingMode) -> int:
-    settings = get_settings()
-    if mode == GenerationPostProcessingMode.HD_FACE_FIX:
-        return settings.generation_hd_face_fix_cost_coins
-    return settings.generation_fast_cost_coins
+# Cost resolution lives in ``app.core.pricing.generation_cost_for_mode``.
