@@ -32,6 +32,7 @@ from app.models.payment import Payment
 from app.models.marketplace_export import MarketplaceCredential, MarketplaceExport
 from app.models.smart_variant import SmartVariantItem, SmartVariantSync
 from app.models.style_preset_selection import StylePresetSelection
+from app.models.template import CustomFont, Template, UserSavedDesign
 from app.models.user import User
 from app.models.signup_trial import SignupTrialClaim
 from app.models.winback import WinbackOffer, WinbackStyleNotification
@@ -84,6 +85,9 @@ __all__ = [
     "SmartVariantItem",
     "SmartVariantSync",
     "StylePresetSelection",
+    "CustomFont",
+    "Template",
+    "UserSavedDesign",
     "User",
     "UserPushNotification",
     "SignupTrialClaim",

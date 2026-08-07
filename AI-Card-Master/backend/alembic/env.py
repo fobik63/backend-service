@@ -34,6 +34,7 @@ from app.models import payment as _payment  # noqa: F401
 from app.models import pain_analysis as _pain_analysis  # noqa: F401
 from app.models import stock_parser as _stock_parser  # noqa: F401
 from app.models import style_preset_selection as _style_preset_selection  # noqa: F401
+from app.models import template as _template  # noqa: F401
 from app.models import three_d as _three_d  # noqa: F401
 from app.models import user as _user  # noqa: F401
 from app.models import winback as _winback  # noqa: F401

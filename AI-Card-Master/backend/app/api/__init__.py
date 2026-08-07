@@ -17,6 +17,7 @@ from app.api.exports import router as exports_router
 from app.api.generations import router as generations_router
 from app.api.health import router as health_router
 from app.api.images import router as images_router
+from app.api.fonts import router as fonts_router
 from app.api.legal import router as legal_router
 from app.api.marketplace_bridge import router as marketplace_bridge_router
 from app.api.oracle import router as oracle_router
@@ -24,6 +25,7 @@ from app.api.pain_analysis import router as pain_analysis_router
 from app.api.payments import router as payments_router
 from app.api.referrals import router as referrals_router
 from app.api.smart_variants import router as smart_variants_router
+from app.api.templates import designs_router, templates_router
 from app.api.text_generation import router as text_generation_router
 from app.api.visual_audit import router as visual_audit_router
 from app.api.webhooks import midjourney_webhook_router
@@ -47,7 +49,9 @@ __all__ = [
     "captcha_router",
     "claude_analyses_router",
     "claude_reasoning_router",
+    "designs_router",
     "exports_router",
+    "fonts_router",
     "generations_router",
     "health_router",
     "images_router",
@@ -59,6 +63,7 @@ __all__ = [
     "payments_router",
     "referrals_router",
     "smart_variants_router",
+    "templates_router",
     "text_generation_router",
     "three_d_router",
     "three_d_video_router",

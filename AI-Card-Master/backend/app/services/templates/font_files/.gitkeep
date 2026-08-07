@@ -1,0 +1,2 @@
+# Place system / custom .ttf files here for deterministic server rendering.
+# FontRegistry also searches app/assets/fonts and OS font directories.

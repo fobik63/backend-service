@@ -41,11 +41,13 @@ from app.api import (
     captcha_router,
     claude_analyses_router,
     claude_reasoning_router,
+    designs_router,
     visual_audit_router,
     exports_router,
     generations_router,
     health_router,
     images_router,
+    fonts_router,
     legal_router,
     marketplace_bridge_router,
     midjourney_webhook_router,
@@ -54,6 +56,7 @@ from app.api import (
     payments_router,
     referrals_router,
     smart_variants_router,
+    templates_router,
     text_generation_router,
     winback_router,
     workspaces_router,
@@ -267,6 +270,19 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
     # Run in a worker thread: alembic/env.py uses asyncio.run() for async engines.
     await asyncio.to_thread(apply_alembic_migrations)
 
+    # Register default Cyrillic fonts from assets/fonts into FontRegistry (+ DB).
+    try:
+        from app.services.templates.font_manager import get_font_manager_service
+
+        font_manager = get_font_manager_service()
+        registered = await font_manager.bootstrap(persist_system_fonts=True)
+        logger.info("FontManager registered %s system font file(s)", registered)
+    except Exception:
+        logger.exception(
+            "FontManager bootstrap failed; canvas rendering will use "
+            "FontRegistry discovery / Pillow defaults"
+        )
+
     runtime_settings = get_settings()
     if runtime_settings.app_env == "development":
         try:
@@ -361,6 +377,9 @@ app.include_router(admin_security_ws_router)
 app.include_router(auth_router)
 app.include_router(analytics_router)
 app.include_router(images_router)
+app.include_router(fonts_router)
+app.include_router(templates_router)
+app.include_router(designs_router)
 app.include_router(legal_router)
 app.include_router(account_router)
 app.include_router(captcha_router)

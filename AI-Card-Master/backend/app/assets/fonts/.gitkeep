@@ -1,0 +1,4 @@
+# Place default Cyrillic-capable .ttf / .otf files here for server rendering.
+# Expected families (scanned by FontManagerService on startup):
+#   Inter, Montserrat, Roboto, Oswald, Bebas Neue
+# Example filenames: Inter-Regular.ttf, Montserrat-Bold.ttf, BebasNeue.otf
