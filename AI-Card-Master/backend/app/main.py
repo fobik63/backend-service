@@ -30,6 +30,7 @@ from app.api import (
     admin_security_ws_router,
     ai_strategy_router,
     analytics_router,
+    auth_router,
     brand_dna_router,
     brand_loras_router,
     bulk_generations_router,
@@ -167,6 +168,7 @@ app.add_middleware(DeadMansSwitchMiddleware)
 # Register API routers.
 app.include_router(admin_router)
 app.include_router(admin_security_ws_router)
+app.include_router(auth_router)
 app.include_router(analytics_router)
 app.include_router(images_router)
 app.include_router(legal_router)

@@ -19,6 +19,13 @@ def test_generation_and_webhook_contracts_are_exposed() -> None:
     schema = app.openapi()
     paths = schema["paths"]
 
+    assert "/api/v1/auth/register" in paths
+    assert "post" in paths["/api/v1/auth/register"]
+    assert "201" in paths["/api/v1/auth/register"]["post"]["responses"]
+    assert "/api/v1/auth/login" in paths
+    assert "post" in paths["/api/v1/auth/login"]
+    assert "/api/v1/auth/me" in paths
+    assert "get" in paths["/api/v1/auth/me"]
     assert "/api/v1/generations" in paths
     assert "post" in paths["/api/v1/generations"]
     assert "202" in paths["/api/v1/generations"]["post"]["responses"]
