@@ -31,6 +31,7 @@ celery_app = Celery(
         "app.workers.eye_of_god_tasks",
         "app.workers.competitor_audit_tasks",
         "app.workers.source_retention_tasks",
+        "app.workers.audit_log_tasks",
     ],
 )
 
@@ -84,6 +85,7 @@ celery_app.conf.update(
         "analytics.run_competitor_audit": {"queue": "analytics.scrape"},
         "claude.run_competitor_deep_analysis": {"queue": "claude.reasoning"},
         "privacy.purge_expired_sources": {"queue": "privacy.retention"},
+        "audit.archive_old_events": {"queue": "privacy.retention"},
     },
     beat_schedule={
         "dispatch-generation-outbox": {
@@ -138,6 +140,11 @@ celery_app.conf.update(
         "privacy-purge-expired-sources": {
             "task": "privacy.purge_expired_sources",
             "schedule": settings.source_retention_scan_seconds,
+        },
+        # Enterprise audit: move aged rows from hot table → archive.
+        "audit-archive-old-events": {
+            "task": "audit.archive_old_events",
+            "schedule": settings.audit_log_archive_scan_seconds,
         },
     },
 )

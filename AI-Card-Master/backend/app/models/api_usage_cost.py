@@ -65,6 +65,31 @@ class ApiUsageCost(Base):
         default="USD",
         server_default=text("'USD'"),
     )
+    input_tokens: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    output_tokens: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    status: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="Success",
+        server_default=text("'Success'"),
+        index=True,
+    )
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    task_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        nullable=True,
+        index=True,
+    )
     usage_metadata: Mapped[dict[str, Any] | None] = mapped_column(
         "metadata",
         JSONB,

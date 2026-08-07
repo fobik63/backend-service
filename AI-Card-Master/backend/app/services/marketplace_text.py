@@ -331,6 +331,9 @@ async def _record_anthropic_usage_cost(
         units=units,
         unit_cost_usd=total_cost / Decimal(units),
         total_cost_usd=total_cost,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        status="Success",
         metadata={
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,

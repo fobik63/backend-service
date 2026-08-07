@@ -68,4 +68,19 @@ class ReferralService:
             )
 
         await self._repository.assign_referrer(user_id, referrer_id)
+
+        from app.domain.audit_log import AuditEventStatus, AuditEventType
+        from app.services.audit_events import record_audit_event
+
+        await record_audit_event(
+            event_type=AuditEventType.REFERRAL_APPLIED,
+            status=AuditEventStatus.SUCCESS,
+            user_id=user_id,
+            actor_type="user",
+            message="Referral code applied",
+            metadata={
+                "referrer_id": str(referrer_id),
+                "referral_code": normalized,
+            },
+        )
         return referrer_id

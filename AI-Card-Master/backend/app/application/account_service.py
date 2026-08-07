@@ -99,6 +99,20 @@ class AccountService:
             deleted,
             failed,
         )
+        from app.domain.audit_log import AuditEventStatus, AuditEventType
+        from app.services.audit_events import record_audit_event
+
+        await record_audit_event(
+            event_type=AuditEventType.ACCOUNT_DELETED,
+            status=AuditEventStatus.SUCCESS,
+            user_id=user_id,
+            actor_type="user",
+            message="Account deleted (GDPR erasure)",
+            metadata={
+                "storage_deleted": deleted,
+                "storage_failed": failed,
+            },
+        )
         return AccountDeletionResult(
             user_id=user_id,
             email=email,

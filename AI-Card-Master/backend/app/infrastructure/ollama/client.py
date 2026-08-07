@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -18,6 +20,7 @@ from app.domain.pain_analysis import (
     pain_analysis_system_prompt,
 )
 from app.domain.semantic_filter import estimate_text_tokens
+from app.services.api_usage_costs import record_api_usage_cost
 
 logger = logging.getLogger(__name__)
 
@@ -87,13 +90,37 @@ class OllamaClient:
             ],
             "options": {"temperature": 0.1},
         }
+        started = time.perf_counter()
         try:
             response = await self._client.post("/api/chat", json=body)
             response.raise_for_status()
             payload = response.json()
+        except httpx.TimeoutException as exc:
+            await self._record_usage(
+                operation="ollama_complete_json",
+                input_tokens=estimate_text_tokens(system + user_payload),
+                output_tokens=0,
+                duration_ms=int((time.perf_counter() - started) * 1000),
+                status="Timeout",
+            )
+            raise OllamaError(f"Ollama timeout: {exc}") from exc
         except httpx.HTTPError as exc:
+            await self._record_usage(
+                operation="ollama_complete_json",
+                input_tokens=estimate_text_tokens(system + user_payload),
+                output_tokens=0,
+                duration_ms=int((time.perf_counter() - started) * 1000),
+                status="Error",
+            )
             raise OllamaError(f"Ollama HTTP error: {exc}") from exc
         except ValueError as exc:
+            await self._record_usage(
+                operation="ollama_complete_json",
+                input_tokens=0,
+                output_tokens=0,
+                duration_ms=int((time.perf_counter() - started) * 1000),
+                status="Error",
+            )
             raise OllamaError(f"Ollama returned non-JSON: {exc}") from exc
 
         content = ""
@@ -101,6 +128,13 @@ class OllamaClient:
         if isinstance(message, dict):
             content = str(message.get("content") or "")
         if not content.strip():
+            await self._record_usage(
+                operation="ollama_complete_json",
+                input_tokens=0,
+                output_tokens=0,
+                duration_ms=int((time.perf_counter() - started) * 1000),
+                status="Error",
+            )
             raise OllamaError("Ollama returned empty message content.")
 
         parsed = _parse_json_object(content)
@@ -108,7 +142,47 @@ class OllamaClient:
         eval_est = int(payload.get("eval_count") or 0) if isinstance(payload, dict) else 0
         in_tok = prompt_est or estimate_text_tokens(system + user_payload)
         out_tok = eval_est or estimate_text_tokens(content)
+        await self._record_usage(
+            operation="ollama_complete_json",
+            input_tokens=in_tok,
+            output_tokens=out_tok,
+            duration_ms=int((time.perf_counter() - started) * 1000),
+            status="Success",
+        )
         return parsed, in_tok, out_tok
+
+    async def _record_usage(
+        self,
+        *,
+        operation: str,
+        input_tokens: int,
+        output_tokens: int,
+        duration_ms: int | None,
+        status: str,
+        user_id: UUID | None = None,
+        job_id: UUID | None = None,
+    ) -> None:
+        """Local LLM calls are free but still tracked for resource analytics."""
+
+        await record_api_usage_cost(
+            provider="ollama",
+            model_name=self._model,
+            operation=operation,
+            units=max(input_tokens + output_tokens, 1),
+            unit_cost_usd=Decimal("0"),
+            total_cost_usd=Decimal("0"),
+            user_id=user_id,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            status=status,
+            duration_ms=duration_ms,
+            task_id=job_id,
+            metadata={
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "local": True,
+            },
+        )
 
     async def analyze_competitor_pains(
         self,

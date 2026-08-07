@@ -2,6 +2,7 @@
 
 from app.models.base import Base
 from app.models.api_usage_cost import ApiUsageCost
+from app.models.audit_log import AuditLog, AuditLogArchive
 from app.models.ab_test import AbTestExperiment, AbTestVariant
 from app.models.bulk_generation import (
     BulkGenerationBatch,
@@ -38,6 +39,8 @@ from app.models.workspace import Workspace, WorkspaceMember, WorkspaceSharedGene
 __all__ = [
     "Base",
     "ApiUsageCost",
+    "AuditLog",
+    "AuditLogArchive",
     "AbTestExperiment",
     "AbTestVariant",
     "BulkGenerationBatch",

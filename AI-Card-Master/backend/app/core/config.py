@@ -218,6 +218,78 @@ class Settings(BaseSettings):
         default=5.0,
         alias="SECURITY_STATUS_API_PROBE_TIMEOUT_SECONDS",
     )
+    # AI Cost Dashboard & Resource Analytics (plan §80).
+    cost_daily_limit_usd: Decimal = Field(
+        default=Decimal("50"),
+        alias="COST_DAILY_LIMIT_USD",
+        description="Telegram alert when today's AI spend exceeds this USD amount.",
+    )
+    cost_generation_spike_ratio: float = Field(
+        default=2.0,
+        alias="COST_GENERATION_SPIKE_RATIO",
+        description="Alert when avg generation cost ≥ ratio × previous-week baseline.",
+    )
+    cost_latency_spike_ratio: float = Field(
+        default=2.0,
+        alias="COST_LATENCY_SPIKE_RATIO",
+        description="Alert when avg API latency ≥ ratio × previous-week baseline.",
+    )
+    cost_latency_warn_ms: float = Field(
+        default=15000.0,
+        alias="COST_LATENCY_WARN_MS",
+        description="Absolute avg latency threshold (ms) for slow-API alerts.",
+    )
+    cost_generation_sale_price_usd: Decimal = Field(
+        default=Decimal("0"),
+        alias="COST_GENERATION_SALE_PRICE_USD",
+        description="Known sale price per generation for profitability (0 = unknown).",
+    )
+    cost_alerts_enabled: bool = Field(
+        default=True,
+        alias="COST_ALERTS_ENABLED",
+    )
+    cost_alert_cooldown_seconds: float = Field(
+        default=3600.0,
+        alias="COST_ALERT_COOLDOWN_SECONDS",
+    )
+    # Enterprise Audit Log & Event Tracking (plan §81).
+    audit_log_enabled: bool = Field(
+        default=True,
+        alias="AUDIT_LOG_ENABLED",
+        description="Persist enterprise audit events for user/admin/system actions.",
+    )
+    audit_log_retention_days: int = Field(
+        default=90,
+        alias="AUDIT_LOG_RETENTION_DAYS",
+        description="Move audit rows older than this many days into audit_log_archives.",
+    )
+    audit_log_archive_enabled: bool = Field(
+        default=True,
+        alias="AUDIT_LOG_ARCHIVE_ENABLED",
+    )
+    audit_log_archive_batch_size: int = Field(
+        default=1000,
+        alias="AUDIT_LOG_ARCHIVE_BATCH_SIZE",
+    )
+    audit_log_archive_scan_seconds: float = Field(
+        default=86400.0,
+        alias="AUDIT_LOG_ARCHIVE_SCAN_SECONDS",
+        description="Celery beat interval for automatic audit archival.",
+    )
+    audit_log_admin_access_enabled: bool = Field(
+        default=True,
+        alias="AUDIT_LOG_ADMIN_ACCESS_ENABLED",
+        description="Auto-record admin.endpoint_access for /api/v1/admin hits.",
+    )
+    audit_log_structured_export_enabled: bool = Field(
+        default=True,
+        alias="AUDIT_LOG_STRUCTURED_EXPORT_ENABLED",
+        description="Emit structured logs suitable for ELK / Grafana Loki ingestion.",
+    )
+    audit_request_id_header: str = Field(
+        default="X-Request-Id",
+        alias="AUDIT_REQUEST_ID_HEADER",
+    )
     midjourney_balance_path: str = Field(
         default="",
         alias="MIDJOURNEY_BALANCE_PATH",
@@ -1248,6 +1320,8 @@ class Settings(BaseSettings):
         "winback_offer_ttl_hours",
         "source_retention_hours",
         "source_retention_batch_size",
+        "audit_log_retention_days",
+        "audit_log_archive_batch_size",
         "bulk_generation_max_products",
         "bulk_generation_max_zip_bytes",
         "bulk_generation_poll_batch_size",
@@ -1373,6 +1447,7 @@ class Settings(BaseSettings):
         "winback_inactivity_scan_seconds",
         "winback_style_update_scan_seconds",
         "source_retention_scan_seconds",
+        "audit_log_archive_scan_seconds",
         "bulk_generation_poll_seconds",
         "smart_variant_poll_seconds",
         "brand_lora_poll_seconds",
@@ -1397,11 +1472,20 @@ class Settings(BaseSettings):
     @field_validator(
         "security_status_api_balance_cache_seconds",
         "midjourney_balance_low_threshold",
+        "cost_latency_warn_ms",
+        "cost_alert_cooldown_seconds",
     )
     @classmethod
     def validate_non_negative_security_status_floats(cls, value: float) -> float:
         if value < 0:
             raise ValueError("Security status numeric settings must be >= 0.")
+        return value
+
+    @field_validator("cost_generation_spike_ratio", "cost_latency_spike_ratio")
+    @classmethod
+    def validate_cost_spike_ratios(cls, value: float) -> float:
+        if value < 1.0:
+            raise ValueError("Cost spike ratios must be >= 1.0.")
         return value
 
     @field_validator("captcha_provider")
@@ -1468,6 +1552,8 @@ class Settings(BaseSettings):
         "face_fix_cost_usd",
         "claude_47_input_1k_tokens_cost_usd",
         "claude_47_output_1k_tokens_cost_usd",
+        "cost_daily_limit_usd",
+        "cost_generation_sale_price_usd",
     )
     @classmethod
     def validate_non_negative_costs(cls, value: Decimal) -> Decimal:

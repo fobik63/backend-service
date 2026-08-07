@@ -6,6 +6,7 @@ import asyncio
 import base64
 import logging
 import random
+import time
 from decimal import Decimal
 from typing import Any, Mapping
 from uuid import UUID
@@ -931,6 +932,7 @@ class Claude47VisionClient:
         attempts = self._settings.claude_47_max_retries + 1
         last_transport: Exception | None = None
         for attempt in range(1, attempts + 1):
+            started = time.perf_counter()
             try:
                 response = await self._sdk.messages.parse(
                     model=self._model,
@@ -944,6 +946,16 @@ class Claude47VisionClient:
             except (APITimeoutError, APIConnectionError) as exc:
                 last_transport = exc
                 if attempt >= attempts:
+                    await self._record_usage(
+                        operation=operation,
+                        input_tokens=0,
+                        output_tokens=0,
+                        user_id=user_id,
+                        job_id=job_id,
+                        usage=None,
+                        duration_ms=int((time.perf_counter() - started) * 1000),
+                        status="Timeout" if isinstance(exc, APITimeoutError) else "Error",
+                    )
                     raise ClaudeUpstreamError(
                         "Claude request failed after retries."
                     ) from exc
@@ -978,15 +990,45 @@ class Claude47VisionClient:
                         raise ClaudeUpstreamError(
                             "Claude JSON failed schema validation."
                         ) from validation_exc
+                await self._record_usage(
+                    operation=operation,
+                    input_tokens=0,
+                    output_tokens=0,
+                    user_id=user_id,
+                    job_id=job_id,
+                    usage=None,
+                    duration_ms=int((time.perf_counter() - started) * 1000),
+                    status="Error",
+                )
                 raise ClaudeUpstreamError(
                     f"Claude API error {exc.status_code}: {str(exc)[:500]}"
                 ) from exc
             except Exception as exc:  # noqa: BLE001 — map unknown SDK failures
+                await self._record_usage(
+                    operation=operation,
+                    input_tokens=0,
+                    output_tokens=0,
+                    user_id=user_id,
+                    job_id=job_id,
+                    usage=None,
+                    duration_ms=int((time.perf_counter() - started) * 1000),
+                    status="Error",
+                )
                 raise ClaudeUpstreamError(
                     f"Claude SDK unexpected failure: {type(exc).__name__}"
                 ) from exc
 
             if response.parsed_output is None:
+                await self._record_usage(
+                    operation=operation,
+                    input_tokens=0,
+                    output_tokens=0,
+                    user_id=user_id,
+                    job_id=job_id,
+                    usage=None,
+                    duration_ms=int((time.perf_counter() - started) * 1000),
+                    status="Error",
+                )
                 raise ClaudeUpstreamError(
                     "Claude parse returned empty structured output."
                 )
@@ -1003,6 +1045,8 @@ class Claude47VisionClient:
                     "input_tokens": input_tokens,
                     "output_tokens": output_tokens,
                 },
+                duration_ms=int((time.perf_counter() - started) * 1000),
+                status="Success",
             )
             return response.parsed_output, input_tokens, output_tokens
 
@@ -1079,22 +1123,54 @@ class Claude47VisionClient:
                 "messages": [{"role": "user", "content": content}],
             }
 
+        started = time.perf_counter()
         response = await self._post_with_retry(
             endpoint="/v1/messages",
             headers=headers,
             payload=payload,
         )
+        duration_ms = int((time.perf_counter() - started) * 1000)
         try:
             body = response.json()
             text = _extract_text_content(body.get("content"))
         except (KeyError, IndexError, TypeError, ValueError) as exc:
+            await self._record_usage(
+                operation=operation,
+                input_tokens=0,
+                output_tokens=0,
+                user_id=user_id,
+                job_id=job_id,
+                usage=None,
+                duration_ms=duration_ms,
+                status="Error",
+            )
             raise ClaudeUpstreamError("Unexpected Anthropic response shape.") from exc
         if not isinstance(text, str) or not text.strip():
+            await self._record_usage(
+                operation=operation,
+                input_tokens=0,
+                output_tokens=0,
+                user_id=user_id,
+                job_id=job_id,
+                usage=None,
+                duration_ms=duration_ms,
+                status="Error",
+            )
             raise ClaudeUpstreamError("Anthropic returned empty text.")
 
         try:
             parsed = extract_json_object(text)
         except (ValueError, TypeError) as exc:
+            await self._record_usage(
+                operation=operation,
+                input_tokens=0,
+                output_tokens=0,
+                user_id=user_id,
+                job_id=job_id,
+                usage=None,
+                duration_ms=duration_ms,
+                status="Error",
+            )
             raise ClaudeUpstreamError("Anthropic response is not valid JSON.") from exc
 
         usage = body.get("usage") if isinstance(body, dict) else None
@@ -1111,6 +1187,8 @@ class Claude47VisionClient:
             user_id=user_id,
             job_id=job_id,
             usage=usage if isinstance(usage, dict) else None,
+            duration_ms=duration_ms,
+            status="Success",
         )
         await self._write_analytics_cache(
             cache_key,
@@ -1245,6 +1323,8 @@ class Claude47VisionClient:
         user_id: UUID | None,
         job_id: UUID | None,
         usage: dict[str, Any] | None,
+        duration_ms: int | None = None,
+        status: str = "Success",
     ) -> None:
         total_tokens = input_tokens + output_tokens
         total_cost = (
@@ -1265,10 +1345,16 @@ class Claude47VisionClient:
             total_cost_usd=total_cost,
             user_id=user_id,
             generation_job_id=None,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            status=status,
+            duration_ms=duration_ms,
+            task_id=job_id,
             metadata={
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
                 "claude_reasoning_job_id": str(job_id) if job_id else None,
+                "task_id": str(job_id) if job_id else None,
                 "anthropic_usage": usage,
             },
         )

@@ -15,6 +15,7 @@ from fastapi import (
     Depends,
     HTTPException,
     Query,
+    Request,
     Security,
     WebSocket,
     WebSocketDisconnect,
@@ -25,6 +26,16 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.cost_analytics_schemas import (
+    CostDashboardResponse,
+    snapshot_to_response as cost_snapshot_to_response,
+)
+from app.api.audit_log_schemas import (
+    AuditArchiveResponse,
+    AuditSearchResponse,
+    archive_result_to_response,
+    search_result_to_response,
+)
 from app.api.security_status_schemas import (
     BlockedThreatEventResponse,
     BlockedThreatsLogResponse,
@@ -32,9 +43,14 @@ from app.api.security_status_schemas import (
     snapshot_to_dict,
     snapshot_to_response,
 )
+from app.application.audit_log_service import AuditLogService
+from app.application.cost_analytics_service import CostAnalyticsService
 from app.application.security_status_service import SecurityStatusService
 from app.core.security import InvalidTokenError, decode_and_validate_token
 from app.core.config import get_settings
+from app.domain.audit_log import AuditEventStatus, AuditEventType, AuditSearchQuery
+from app.infrastructure.audit_log_factory import build_audit_log_service
+from app.infrastructure.cost_analytics_factory import build_cost_analytics_service
 from app.infrastructure.security_status_factory import get_security_status_service
 from app.models.database import get_db_session
 from app.models.enums import SubscriptionStatus
@@ -50,6 +66,7 @@ from app.services.admin_service import (
     AdminUserView,
     AdminValidationError,
 )
+from app.services.audit_events import record_audit_event
 
 
 logger = logging.getLogger(__name__)
@@ -172,6 +189,7 @@ async def get_admin_service(db_session: AsyncSession = Depends(get_db_session)) 
 
 
 async def require_admin_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
     db_session: AsyncSession = Depends(get_db_session),
 ) -> User:
@@ -234,6 +252,8 @@ async def require_admin_user(
             detail="Access denied.",
         )
 
+    request.state.audit_user_id = user.id
+    request.state.audit_telegram_id = user.telegram_id
     return user
 
 
@@ -374,6 +394,28 @@ async def update_user_subscription(
             email=payload.email,
             subscription_status=payload.subscription_status,
         )
+        await record_audit_event(
+            event_type=AuditEventType.TARIFF_CHANGED,
+            status=AuditEventStatus.SUCCESS,
+            user_id=user.id,
+            actor_type="admin",
+            message=f"Admin set subscription to {payload.subscription_status.value}",
+            metadata={
+                "subscription_status": payload.subscription_status.value,
+                "source": "admin.patch_subscription",
+            },
+        )
+        await record_audit_event(
+            event_type=AuditEventType.ADMIN_ACTION,
+            status=AuditEventStatus.SUCCESS,
+            user_id=user.id,
+            actor_type="admin",
+            message="Admin updated user subscription",
+            metadata={
+                "action": "update_subscription",
+                "subscription_status": payload.subscription_status.value,
+            },
+        )
         return _admin_user_response(user)
     except AdminNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -403,6 +445,19 @@ async def manage_user_action(
                 email=payload.email,
                 amount=payload.credits,
             )
+            await record_audit_event(
+                event_type=AuditEventType.ADMIN_ACTION,
+                status=AuditEventStatus.SUCCESS,
+                user_id=user.id,
+                telegram_id=None,
+                actor_type="admin",
+                message=f"Admin granted {payload.credits} credits",
+                metadata={
+                    "action": "grant_credits",
+                    "credits": payload.credits,
+                    "target_user_id": str(user.id),
+                },
+            )
         elif payload.action == "ban":
             if payload.reason is None:
                 raise AdminValidationError("reason is required for ban.")
@@ -411,10 +466,26 @@ async def manage_user_action(
                 email=payload.email,
                 reason=payload.reason,
             )
+            await record_audit_event(
+                event_type=AuditEventType.ADMIN_ACTION,
+                status=AuditEventStatus.SUCCESS,
+                user_id=user.id,
+                actor_type="admin",
+                message=f"Admin banned user: {payload.reason}",
+                metadata={"action": "ban", "reason": payload.reason},
+            )
         else:
             user = await admin_service.unban_user(
                 user_id=parsed_user_id,
                 email=payload.email,
+            )
+            await record_audit_event(
+                event_type=AuditEventType.ADMIN_ACTION,
+                status=AuditEventStatus.SUCCESS,
+                user_id=user.id,
+                actor_type="admin",
+                message="Admin unbanned user",
+                metadata={"action": "unban"},
             )
         return _admin_user_response(user)
     except AdminNotFoundError as exc:
@@ -504,6 +575,120 @@ async def create_generation_error_log(
 
 def get_security_status_svc() -> SecurityStatusService:
     return get_security_status_service()
+
+
+async def get_cost_analytics_svc(
+    db_session: AsyncSession = Depends(get_db_session),
+) -> CostAnalyticsService:
+    return build_cost_analytics_service(db_session)
+
+
+async def get_audit_log_svc(
+    db_session: AsyncSession = Depends(get_db_session),
+) -> AuditLogService:
+    return build_audit_log_service(db_session, fail_open=False)
+
+
+@router.get(
+    "/costs",
+    response_model=CostDashboardResponse,
+    summary="AI Cost Dashboard & Resource Analytics",
+)
+async def get_ai_cost_dashboard(
+    expensive_limit: int = Query(default=10, ge=1, le=50),
+    notify_alerts: bool = Query(
+        default=False,
+        description="When true, emit Telegram alerts for triggered budget/latency warnings.",
+    ),
+    service: CostAnalyticsService = Depends(get_cost_analytics_svc),
+) -> CostDashboardResponse:
+    """Today / week / month spend, per-provider breakdown, top ops, profitability, alerts."""
+
+    try:
+        snapshot = await service.get_dashboard(
+            expensive_limit=expensive_limit,
+            notify_alerts=notify_alerts,
+        )
+        return cost_snapshot_to_response(snapshot)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to collect AI cost dashboard.",
+        ) from exc
+
+
+@router.get(
+    "/audit-logs",
+    response_model=AuditSearchResponse,
+    summary="Search enterprise audit log events",
+)
+async def search_audit_logs(
+    user_id: UUID | None = Query(default=None),
+    event_type: str | None = Query(
+        default=None,
+        description="Exact event type, e.g. payment.purchased",
+    ),
+    ip: str | None = Query(default=None, max_length=64),
+    request_id: str | None = Query(default=None, max_length=64),
+    created_from: datetime | None = Query(default=None),
+    created_to: datetime | None = Query(default=None),
+    include_archived: bool = Query(default=False),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    service: AuditLogService = Depends(get_audit_log_svc),
+) -> AuditSearchResponse:
+    """Filter by user, event type, date range, IP, and/or request_id."""
+
+    parsed_type: AuditEventType | None = None
+    if event_type is not None and event_type.strip():
+        try:
+            parsed_type = AuditEventType(event_type.strip())
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unknown event_type: {event_type}",
+            ) from exc
+
+    try:
+        result = await service.search_events(
+            AuditSearchQuery(
+                user_id=user_id,
+                event_type=parsed_type,
+                ip=ip,
+                request_id=request_id,
+                created_from=created_from,
+                created_to=created_to,
+                include_archived=include_archived,
+                limit=limit,
+                offset=offset,
+            )
+        )
+        return search_result_to_response(result)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to search audit logs.",
+        ) from exc
+
+
+@router.post(
+    "/audit-logs/archive",
+    response_model=AuditArchiveResponse,
+    summary="Archive audit logs older than retention policy",
+)
+async def archive_audit_logs(
+    service: AuditLogService = Depends(get_audit_log_svc),
+) -> AuditArchiveResponse:
+    """Move aged hot-table rows into ``audit_log_archives`` (also run by Celery beat)."""
+
+    try:
+        result = await service.archive_old_events()
+        return archive_result_to_response(result)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to archive audit logs.",
+        ) from exc
 
 
 @router.get(

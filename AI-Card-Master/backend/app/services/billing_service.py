@@ -332,6 +332,50 @@ class BillingService:
                 referral_bonus_credited,
             )
 
+        from app.domain.audit_log import AuditEventStatus, AuditEventType
+        from app.services.audit_events import record_audit_event
+
+        await record_audit_event(
+            event_type=AuditEventType.PAYMENT_PURCHASED,
+            status=AuditEventStatus.SUCCESS,
+            user_id=user.id,
+            telegram_id=user.telegram_id,
+            actor_type="user",
+            message=f"Payment succeeded for tariff {plan.code.value}",
+            metadata={
+                "payment_id": str(payment.id),
+                "yookassa_payment_id": yookassa_payment_id,
+                "tariff_code": plan.code.value,
+                "coins_credited": plan.ai_coins,
+                "amount_rub": str(payment.amount_rub),
+            },
+        )
+        await record_audit_event(
+            event_type=AuditEventType.TARIFF_CHANGED,
+            status=AuditEventStatus.SUCCESS,
+            user_id=user.id,
+            telegram_id=user.telegram_id,
+            actor_type="system",
+            message=f"Tariff set to {user.subscription_status.value}",
+            metadata={
+                "subscription_status": user.subscription_status.value,
+                "subscription_ends_at": new_ends_at.isoformat(),
+                "source": "payment",
+            },
+        )
+        if referral_bonus_credited > 0 and user.referred_by_user_id is not None:
+            await record_audit_event(
+                event_type=AuditEventType.REFERRAL_BONUS_CREDITED,
+                status=AuditEventStatus.SUCCESS,
+                user_id=user.referred_by_user_id,
+                actor_type="system",
+                message=f"Referral bonus +{referral_bonus_credited} credits",
+                metadata={
+                    "invited_user_id": str(user.id),
+                    "credits": referral_bonus_credited,
+                },
+            )
+
         return BillingResult(
             payment_id=payment.id,
             user_id=user.id,

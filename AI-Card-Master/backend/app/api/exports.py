@@ -234,6 +234,19 @@ async def save_export_credentials(
         )
     except Exception as exc:  # noqa: BLE001
         raise _map_export_error(exc) from exc
+
+    from app.domain.audit_log import AuditEventStatus, AuditEventType
+    from app.services.audit_events import record_audit_event
+
+    await record_audit_event(
+        event_type=AuditEventType.SETTINGS_CHANGED,
+        status=AuditEventStatus.SUCCESS,
+        user_id=current_user.id,
+        telegram_id=current_user.telegram_id,
+        actor_type="user",
+        message=f"Export credentials saved for {platform.value}",
+        metadata={"setting": "export_credentials", "platform": platform.value},
+    )
     return _credential_response(row)
 
 
@@ -252,6 +265,18 @@ async def delete_export_credentials(
     except Exception as exc:  # noqa: BLE001
         raise _map_export_error(exc) from exc
 
+    from app.domain.audit_log import AuditEventStatus, AuditEventType
+    from app.services.audit_events import record_audit_event
+
+    await record_audit_event(
+        event_type=AuditEventType.SETTINGS_CHANGED,
+        status=AuditEventStatus.SUCCESS,
+        user_id=current_user.id,
+        telegram_id=current_user.telegram_id,
+        actor_type="user",
+        message=f"Export credentials deleted for {platform.value}",
+        metadata={"setting": "export_credentials_deleted", "platform": platform.value},
+    )
 
 @router.post("/validate", response_model=FailSafeSandboxResponse)
 async def validate_export_card(

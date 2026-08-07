@@ -39,7 +39,8 @@ from app.models.generation_job import (
     GenerationSlide,
     GenerationWebhookEvent,
 )
-from app.models.api_usage_cost import ApiUsageCost
+from app.domain.cost_analytics import CostCallStatus, CostEventRecord
+from app.infrastructure.persistence.cost_analytics_repository import CostAnalyticsRepository
 from app.models.user import User
 from app.services.billing_service import BillingValidationError
 from app.services.series_generator import SeriesTask
@@ -157,6 +158,39 @@ class GenerationRepository:
             )
             await self._session.commit()
             await self._session.refresh(job)
+
+            from app.domain.audit_log import AuditEventStatus, AuditEventType
+            from app.services.audit_events import record_audit_event
+
+            telegram_id = user.telegram_id if user is not None else None
+            await record_audit_event(
+                event_type=AuditEventType.GENERATION_STARTED,
+                status=AuditEventStatus.SUCCESS,
+                user_id=user_id,
+                telegram_id=telegram_id,
+                actor_type="user",
+                message="Generation job queued",
+                metadata={
+                    "job_id": str(job.id),
+                    "engine_mode": engine_mode.value,
+                    "post_processing_mode": post_processing_mode.value,
+                    "coins_charged": int(job.coins_charged or 0),
+                },
+            )
+            if settings.generation_charge_coins and generation_cost > 0:
+                await record_audit_event(
+                    event_type=AuditEventType.CREDIT_DEDUCTED,
+                    status=AuditEventStatus.SUCCESS,
+                    user_id=user_id,
+                    telegram_id=telegram_id,
+                    actor_type="system",
+                    message=f"Deducted {generation_cost} credits for generation",
+                    metadata={
+                        "job_id": str(job.id),
+                        "amount": generation_cost,
+                        "reason": "generation",
+                    },
+                )
             return job, True
         except IntegrityError:
             await self._session.rollback()
@@ -756,8 +790,28 @@ class GenerationRepository:
         job = await self._session.get(GenerationJob, job_id, with_for_update=True)
         if job is None:
             return
+        already_refunded = bool(job.coin_refunded)
+        refund_amount = int(job.coins_charged or 1)
+        user_id = job.user_id
         await self._refund_locked_job(job)
         await self._session.commit()
+        if already_refunded or not job.coin_charged:
+            return
+        from app.domain.audit_log import AuditEventStatus, AuditEventType
+        from app.services.audit_events import record_audit_event
+
+        await record_audit_event(
+            event_type=AuditEventType.CREDIT_REFUNDED,
+            status=AuditEventStatus.SUCCESS,
+            user_id=user_id,
+            actor_type="system",
+            message=f"Refunded {refund_amount} credits after generation failure",
+            metadata={
+                "job_id": str(job_id),
+                "amount": refund_amount,
+                "reason": "generation_refund",
+            },
+        )
 
     async def _refund_locked_job(self, job: GenerationJob) -> None:
         if not job.coin_charged or job.coin_refunded:
@@ -785,17 +839,26 @@ class GenerationRepository:
             return
 
         unit_cost = Decimal(str(get_settings().midjourney_generation_cost_usd))
-        self._session.add(
-            ApiUsageCost(
+        task_uuid: UUID | None = None
+        try:
+            task_uuid = UUID(str(external_job_id))
+        except (TypeError, ValueError):
+            task_uuid = job.id
+        await CostAnalyticsRepository(self._session).stage_event(
+            CostEventRecord(
+                provider="midjourney",
+                operation="image_generation_submit",
+                model_name=provider_name[:128],
+                status=CostCallStatus.SUCCESS,
+                total_cost_usd=unit_cost,
+                unit_cost_usd=unit_cost,
+                units=1,
+                input_tokens=0,
+                output_tokens=0,
                 user_id=job.user_id,
                 generation_job_id=job.id,
-                provider="midjourney",
-                model_name=provider_name[:128],
-                operation="image_generation_submit",
-                units=1,
-                unit_cost_usd=unit_cost,
-                total_cost_usd=unit_cost,
-                usage_metadata={
+                task_id=task_uuid,
+                metadata={
                     "slide_id": str(slide.id),
                     "external_job_id": external_job_id,
                     "provider_name": provider_name,

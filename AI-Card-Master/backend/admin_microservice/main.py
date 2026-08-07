@@ -33,6 +33,16 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.cost_analytics_schemas import (
+    CostDashboardResponse,
+    snapshot_to_response as cost_snapshot_to_response,
+)
+from app.api.audit_log_schemas import (
+    AuditArchiveResponse,
+    AuditSearchResponse,
+    archive_result_to_response,
+    search_result_to_response,
+)
 from app.api.security_status_schemas import (
     BlockedThreatEventResponse,
     BlockedThreatsLogResponse,
@@ -40,12 +50,18 @@ from app.api.security_status_schemas import (
     snapshot_to_dict,
     snapshot_to_response,
 )
+from app.application.audit_log_service import AuditLogService
+from app.application.cost_analytics_service import CostAnalyticsService
 from app.application.security_status_service import SecurityStatusService
 from app.core.admin_token import AdminTokenClaims, AdminTokenError, verify_admin_panel_token
 from app.core.cloudflare_middleware import CloudflareProtectionMiddleware
 from app.core.config import get_settings
 from app.core.dead_mans_switch_middleware import DeadMansSwitchMiddleware
+from app.core.request_context_middleware import RequestContextMiddleware
 from app.core.suspicious_activity_middleware import SuspiciousActivityMiddleware
+from app.domain.audit_log import AuditEventType, AuditSearchQuery
+from app.infrastructure.audit_log_factory import build_audit_log_service
+from app.infrastructure.cost_analytics_factory import build_cost_analytics_service
 from app.infrastructure.security_status_factory import get_security_status_service
 from app.models.database import engine, get_db_session
 from app.models.enums import SubscriptionStatus
@@ -213,6 +229,7 @@ if settings.admin_panel_cors_origins_list:
     )
 
 app.add_middleware(CloudflareProtectionMiddleware)
+app.add_middleware(RequestContextMiddleware)
 app.add_middleware(SuspiciousActivityMiddleware)
 app.add_middleware(DeadMansSwitchMiddleware)
 
@@ -544,6 +561,85 @@ async def get_api_cost_stats(
 ) -> AdminApiCostStatsResponse:
     stats: AdminApiCostStatistics = await admin_service.get_api_cost_statistics()
     return AdminApiCostStatsResponse(**asdict(stats))
+
+
+async def _cost_analytics_service(
+    db_session: AsyncSession = Depends(get_db_session),
+) -> CostAnalyticsService:
+    return build_cost_analytics_service(db_session)
+
+
+@app.get("/costs", response_model=CostDashboardResponse, tags=["costs"])
+async def get_ai_cost_dashboard(
+    _: AdminTokenClaims = Depends(require_admin_panel_token),
+    expensive_limit: int = Query(default=10, ge=1, le=50),
+    notify_alerts: bool = Query(default=False),
+    service: CostAnalyticsService = Depends(_cost_analytics_service),
+) -> CostDashboardResponse:
+    """AI Cost Dashboard: today/week/month, providers, top ops, profitability, alerts."""
+
+    snapshot = await service.get_dashboard(
+        expensive_limit=expensive_limit,
+        notify_alerts=notify_alerts,
+    )
+    return cost_snapshot_to_response(snapshot)
+
+
+async def _audit_log_service(
+    db_session: AsyncSession = Depends(get_db_session),
+) -> AuditLogService:
+    return build_audit_log_service(db_session, fail_open=False)
+
+
+@app.get("/audit-logs", response_model=AuditSearchResponse, tags=["audit"])
+async def search_audit_logs(
+    _: AdminTokenClaims = Depends(require_admin_panel_token),
+    user_id: UUID | None = Query(default=None),
+    event_type: str | None = Query(default=None),
+    ip: str | None = Query(default=None, max_length=64),
+    request_id: str | None = Query(default=None, max_length=64),
+    created_from: datetime | None = Query(default=None),
+    created_to: datetime | None = Query(default=None),
+    include_archived: bool = Query(default=False),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    service: AuditLogService = Depends(_audit_log_service),
+) -> AuditSearchResponse:
+    """Search enterprise audit events by user / type / date / IP / request_id."""
+
+    parsed_type: AuditEventType | None = None
+    if event_type is not None and event_type.strip():
+        try:
+            parsed_type = AuditEventType(event_type.strip())
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unknown event_type: {event_type}",
+            ) from exc
+
+    result = await service.search_events(
+        AuditSearchQuery(
+            user_id=user_id,
+            event_type=parsed_type,
+            ip=ip,
+            request_id=request_id,
+            created_from=created_from,
+            created_to=created_to,
+            include_archived=include_archived,
+            limit=limit,
+            offset=offset,
+        )
+    )
+    return search_result_to_response(result)
+
+
+@app.post("/audit-logs/archive", response_model=AuditArchiveResponse, tags=["audit"])
+async def archive_audit_logs(
+    _: AdminTokenClaims = Depends(require_admin_panel_token),
+    service: AuditLogService = Depends(_audit_log_service),
+) -> AuditArchiveResponse:
+    result = await service.archive_old_events()
+    return archive_result_to_response(result)
 
 
 @app.get("/users/by-email", response_model=AdminUserResponse)

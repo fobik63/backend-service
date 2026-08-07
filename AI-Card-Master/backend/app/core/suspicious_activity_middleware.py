@@ -133,6 +133,20 @@ class SuspiciousActivityMiddleware(BaseHTTPMiddleware):
                 threat,
                 score,
             )
+            from app.domain.audit_log import AuditEventStatus, AuditEventType
+            from app.services.audit_events import record_audit_event
+
+            await record_audit_event(
+                event_type=AuditEventType.SECURITY_SUSPICIOUS,
+                status=AuditEventStatus.DENIED,
+                ip=client_ip,
+                user_agent=(request.headers.get("user-agent") or "")[:512] or None,
+                endpoint=path,
+                http_method=request.method,
+                actor_type="system",
+                message=f"Suspicious request: {threat}",
+                metadata={"category": threat, "score": score},
+            )
             if score >= settings.security_auto_block_threat_score:
                 await _auto_ban(
                     client_ip=client_ip,
@@ -210,6 +224,26 @@ async def _handle_rate_limit_breach(
         action="banned" if banned else "rate_limited",
         http_status=status.HTTP_429_TOO_MANY_REQUESTS,
         api_key_fingerprint=api_key_fp,
+    )
+
+    from app.domain.audit_log import AuditEventStatus, AuditEventType
+    from app.services.audit_events import record_audit_event
+
+    await record_audit_event(
+        event_type=AuditEventType.SECURITY_ERROR,
+        status=AuditEventStatus.DENIED,
+        ip=client_ip,
+        user_agent=(request.headers.get("user-agent") or "")[:512] or None,
+        endpoint=path,
+        http_method=request.method,
+        actor_type="system",
+        message=f"Rate limit breached ({subject})",
+        metadata={
+            "category": category,
+            "banned": banned,
+            "subject": subject,
+            "retry_after_seconds": rate.retry_after_seconds,
+        },
     )
 
     headers = {"Retry-After": str(rate.retry_after_seconds)}

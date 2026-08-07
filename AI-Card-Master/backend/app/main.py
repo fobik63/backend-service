@@ -60,6 +60,7 @@ from app.core.dead_mans_switch_middleware import DeadMansSwitchMiddleware
 from app.core.http_errors import shape_http_exception_body
 from app.core.input_sanitization_middleware import InputSanitizationMiddleware
 from app.core.logging_config import configure_logging
+from app.core.request_context_middleware import RequestContextMiddleware
 from app.core.suspicious_activity_middleware import SuspiciousActivityMiddleware
 from app.infrastructure.redis import close_redis_client, redis_healthcheck
 from app.models.database import SessionLocal, engine
@@ -153,10 +154,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 # Security stack (Starlette: last added = outermost).
-# Order: DeadMans → Cloudflare → Great Wall (Suspicious) → Sanitization → AdminOnly → CORS → route.
+# Order: DeadMans → Cloudflare → RequestContext → Great Wall → Sanitization → AdminOnly → CORS → route.
 app.add_middleware(AdminOnlyMiddleware)
 app.add_middleware(InputSanitizationMiddleware)
 app.add_middleware(SuspiciousActivityMiddleware)
+app.add_middleware(RequestContextMiddleware)
 app.add_middleware(CloudflareProtectionMiddleware)
 app.add_middleware(DeadMansSwitchMiddleware)
 
