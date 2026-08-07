@@ -10,7 +10,9 @@ from app.application.competitor_audit_service import (
     CeleryCompetitorDeepAnalysisTrigger,
     CompetitorAuditService,
 )
+from app.application.zero_hallucination_service import ZeroHallucinationService
 from app.core.config import get_settings
+from app.domain.smart_reasoning import ReasoningTaskKind
 from app.infrastructure.claude_client_loader import load_claude_client
 from app.infrastructure.claude_stage_cache import RedisClaudeStageCache
 from app.infrastructure.competitor_audit.deep_scraper import CompetitorDeepScraper
@@ -19,6 +21,10 @@ from app.infrastructure.competitor_audit.ozon_deep_client import OzonDeepClient
 from app.infrastructure.competitor_audit.wb_deep_client import WildberriesDeepClient
 from app.infrastructure.persistence.competitor_audit_repository import (
     CompetitorAuditRepository,
+)
+from app.infrastructure.smart_reasoning_factory import (
+    build_analytics_cache,
+    resolve_claude_model,
 )
 from app.infrastructure.stock_parser.proxy_pool import ProxyPool
 
@@ -76,6 +82,14 @@ def build_competitor_audit_service(
         max_bytes=settings.generation_max_upload_bytes,
     )
 
+    # Reuse the same Claude client for OCR dual-check (plan §57); service does
+    # not own/close it — CompetitorAuditService.aclose closes the analyzer.
+    cross_check = ZeroHallucinationService(
+        analyzer,
+        enabled=settings.zero_hallucination_enabled,
+        max_vision_images=settings.zero_hallucination_max_vision_images,
+    )
+
     return CompetitorAuditService(
         CompetitorAuditRepository(db_session),
         scraper=scraper,
@@ -85,16 +99,25 @@ def build_competitor_audit_service(
         analysis_trigger=(
             CeleryCompetitorDeepAnalysisTrigger() if enqueue_analysis else None
         ),
-        model_name=settings.claude_47_model,
+        model_name=resolve_claude_model(ReasoningTaskKind.COMPETITOR_AUDIT, settings),
         max_vision_images=settings.competitor_audit_max_vision_images,
         stage_cache=RedisClaudeStageCache(),
+        cross_check=cross_check,
     )
 
 
 def _build_claude_analyzer(settings: Any, *, require_claude_client: bool) -> Any | None:
     """Lazy-import Claude client so API enqueue/poll works without anthropic SDK."""
 
-    return load_claude_client(settings, require=require_claude_client)
+    task = ReasoningTaskKind.COMPETITOR_AUDIT
+    return load_claude_client(
+        settings,
+        require=require_claude_client,
+        model_name=resolve_claude_model(task, settings),
+        analytics_cache=build_analytics_cache(),
+        analytics_cache_ttl_seconds=settings.claude_analytics_cache_ttl_seconds,
+        analytics_task_kind=task.value,
+    )
 
 
 class _NoopScraper:

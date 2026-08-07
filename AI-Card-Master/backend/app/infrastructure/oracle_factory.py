@@ -9,9 +9,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.application.oracle_service import OracleService
 from app.core.config import get_settings
 from app.domain.oracle import OracleGapConfig
+from app.domain.smart_reasoning import ReasoningTaskKind
 from app.infrastructure.claude_client_loader import load_claude_client
 from app.infrastructure.claude_stage_cache import RedisClaudeStageCache
 from app.infrastructure.persistence.oracle_repository import OracleRepository
+from app.infrastructure.smart_reasoning_factory import (
+    build_analytics_cache,
+    resolve_claude_model,
+)
 
 
 def build_oracle_service(
@@ -23,10 +28,17 @@ def build_oracle_service(
     """Wire ports for HTTP handlers and Celery workers."""
 
     settings = get_settings()
+    task = ReasoningTaskKind.ORACLE_ENRICHMENT
+    model_name = resolve_claude_model(task, settings)
+    analytics_cache = build_analytics_cache()
     client = load_claude_client(
         settings,
         require=require_claude_client,
         existing=enrichment,
+        model_name=model_name,
+        analytics_cache=analytics_cache,
+        analytics_cache_ttl_seconds=settings.claude_analytics_cache_ttl_seconds,
+        analytics_task_kind=task.value,
     )
 
     gap_config = OracleGapConfig(
@@ -40,7 +52,7 @@ def build_oracle_service(
 
     return OracleService(
         OracleRepository(db_session),
-        model_name=settings.claude_47_model,
+        model_name=model_name,
         redis_stage_ttl_seconds=settings.claude_47_stage_cache_ttl_seconds,
         default_gap_config=gap_config,
         enrichment=client,

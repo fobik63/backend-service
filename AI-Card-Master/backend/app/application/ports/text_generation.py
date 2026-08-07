@@ -17,5 +17,10 @@ class MarketplaceTextProviderPort(Protocol):
         product_category: str | None,
         slides: tuple[SlideWorkItem, ...],
         images: tuple[bytes, ...],
+        brand_dna_context: str | None = None,
     ) -> MarketplaceTextContent:
-        """Return SEO title, long selling description, and key advantages."""
+        """Return SEO title, long selling description, and key advantages.
+
+        Optional ``brand_dna_context`` keeps Claude copy aligned with the
+        seller BrandDNA learned from successful generations (plan §58).
+        """

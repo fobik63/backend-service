@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from app.domain.generation import MarketplaceTextContent, SlideWorkItem
 from app.core.config import get_settings
 from app.core.prompt_safety import fence_untrusted_text, harden_system_prompt
+from app.domain.brand_dna import mix_claude_system_prompt, mix_claude_user_prompt
 from app.services.api_usage_costs import record_api_usage_cost
 from app.services.ai_engine import _detect_image_mime_type
 from app.services.infographic_service import (
@@ -69,6 +70,7 @@ class MarketplaceTextService:
         product_category: str | None,
         slides: tuple[SlideWorkItem, ...],
         images: tuple[bytes, ...],
+        brand_dna_context: str | None = None,
     ) -> MarketplaceTextContent:
         """Analyze final generated cards and return strict marketplace JSON."""
 
@@ -78,9 +80,19 @@ class MarketplaceTextService:
             raise MarketplaceTextUpstreamError("Slides and image payloads do not match.")
 
         if self._llm_config.provider == "openai":
-            raw_text = await self._call_openai(product_category, slides, images)
+            raw_text = await self._call_openai(
+                product_category,
+                slides,
+                images,
+                brand_dna_context=brand_dna_context,
+            )
         else:
-            raw_text = await self._call_anthropic(product_category, slides, images)
+            raw_text = await self._call_anthropic(
+                product_category,
+                slides,
+                images,
+                brand_dna_context=brand_dna_context,
+            )
         return _parse_marketplace_text(raw_text)
 
     async def _call_openai(
@@ -88,6 +100,8 @@ class MarketplaceTextService:
         product_category: str | None,
         slides: tuple[SlideWorkItem, ...],
         images: tuple[bytes, ...],
+        *,
+        brand_dna_context: str | None = None,
     ) -> str:
         headers = {
             "Authorization": f"Bearer {self._llm_config.api_key}",
@@ -96,7 +110,11 @@ class MarketplaceTextService:
         user_content: list[dict[str, Any]] = [
             {
                 "type": "text",
-                "text": _build_user_prompt(product_category, slides),
+                "text": _build_user_prompt(
+                    product_category,
+                    slides,
+                    brand_dna_context=brand_dna_context,
+                ),
             }
         ]
         for image in images[:5]:
@@ -112,7 +130,10 @@ class MarketplaceTextService:
             "max_tokens": 1700,
             "response_format": {"type": "json_object"},
             "messages": [
-                {"role": "system", "content": _SYSTEM_PROMPT},
+                {
+                    "role": "system",
+                    "content": _system_prompt_with_brand_dna(brand_dna_context),
+                },
                 {"role": "user", "content": user_content},
             ],
         }
@@ -135,6 +156,8 @@ class MarketplaceTextService:
         product_category: str | None,
         slides: tuple[SlideWorkItem, ...],
         images: tuple[bytes, ...],
+        *,
+        brand_dna_context: str | None = None,
     ) -> str:
         headers = {
             "x-api-key": self._llm_config.api_key,
@@ -144,7 +167,11 @@ class MarketplaceTextService:
         content: list[dict[str, Any]] = [
             {
                 "type": "text",
-                "text": _build_user_prompt(product_category, slides),
+                "text": _build_user_prompt(
+                    product_category,
+                    slides,
+                    brand_dna_context=brand_dna_context,
+                ),
             }
         ]
         for image in images[:5]:
@@ -163,7 +190,7 @@ class MarketplaceTextService:
             "model": self._llm_config.model,
             "max_tokens": 1700,
             "temperature": 0.45,
-            "system": _SYSTEM_PROMPT,
+            "system": _system_prompt_with_brand_dna(brand_dna_context),
             "messages": [{"role": "user", "content": content}],
         }
         response = await self._post_with_retry(
@@ -237,9 +264,17 @@ _SYSTEM_PROMPT = harden_system_prompt(
 )
 
 
+def _system_prompt_with_brand_dna(brand_dna_context: str | None) -> str:
+    """Append seller BrandDNA to the Claude/OpenAI system prompt when present."""
+
+    return mix_claude_system_prompt(_SYSTEM_PROMPT, brand_dna_context)
+
+
 def _build_user_prompt(
     product_category: str | None,
     slides: tuple[SlideWorkItem, ...],
+    *,
+    brand_dna_context: str | None = None,
 ) -> str:
     slide_context = "; ".join(
         f"{slide.position}. {slide.slide_key}: {slide.prompt}" for slide in slides
@@ -247,7 +282,7 @@ def _build_user_prompt(
     category = product_category.strip() if product_category else "не указана"
     fenced_category = fence_untrusted_text(category, label="product_category")
     fenced_slides = fence_untrusted_text(slide_context, label="slide_context")
-    return (
+    prompt = (
         "Проанализируй сгенерированные изображения товара и подготовь JSON для карточки "
         "WB/Ozon. Структура строго такая: "
         '{"title": "...", "description": "...", "characteristics": ["...", "..."]}. '
@@ -258,6 +293,7 @@ def _build_user_prompt(
         "ключевых преимуществ товара. Не используй emoji, markdown и HTML. "
         f"Категория товара: {fenced_category}. Контекст слайдов: {fenced_slides}."
     )
+    return mix_claude_user_prompt(prompt, brand_dna_context)
 
 
 def _image_data_uri(image: bytes) -> str:

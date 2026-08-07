@@ -15,6 +15,7 @@ from app.application.ports.competitor_audit import (
     CompetitorDeepAnalysisTriggerPort,
     CompetitorDeepScraperPort,
 )
+from app.application.zero_hallucination_service import ZeroHallucinationService
 from app.domain.competitor_audit import (
     MAX_VISION_IMAGES_PER_CARD,
     CompetitorAuditEnqueueRequest,
@@ -27,6 +28,7 @@ from app.domain.competitor_audit import (
     CompetitorCardScrapeResult,
     CompetitorDeepAnalysisBundle,
     assemble_deep_analysis_bundle,
+    attach_cross_check_to_card,
     build_insufficient_card_analysis,
     card_has_sufficient_analysis_inputs,
     dump_competitor_audit_result,
@@ -83,6 +85,7 @@ class CompetitorAuditService:
         model_name: str = "claude-opus-4-7",
         max_vision_images: int = MAX_VISION_IMAGES_PER_CARD,
         stage_cache: ClaudeStageCachePort | None = None,
+        cross_check: ZeroHallucinationService | None = None,
     ) -> None:
         if redis_raw_ttl_seconds <= 0:
             raise CompetitorAuditValidationError(
@@ -99,6 +102,7 @@ class CompetitorAuditService:
         self._model_name = model_name.strip() or "claude-opus-4-7"
         self._max_vision_images = max_vision_images
         self._stage_cache = stage_cache or _NullStageCache()
+        self._cross_check = cross_check
 
     async def enqueue_audit(
         self,
@@ -493,7 +497,26 @@ class CompetitorAuditService:
             user_id=user_id,
             job_id=job_id,
         )
-        return result, in_tok, out_tok, None
+
+        cross_in = 0
+        cross_out = 0
+        if self._cross_check is not None and self._cross_check.enabled and images:
+            specs_lines = [f"{row.name}: {row.value}" for row in card.specs]
+            cross_result, cross_in, cross_out = await self._cross_check.cross_check_card(
+                images=images,
+                title=card.title,
+                description=card.description,
+                specs=specs_lines,
+                marketplace=card.marketplace.value,
+                article=card.article,
+                user_id=user_id,
+                job_id=job_id,
+            )
+            result = attach_cross_check_to_card(result, cross_check=cross_result)
+        else:
+            result = attach_cross_check_to_card(result, cross_check=None)
+
+        return result, in_tok + cross_in, out_tok + cross_out, None
 
     def _enqueue_analysis_if_needed(self, *, job_id: UUID) -> None:
         if self._analysis_trigger is None:
@@ -538,6 +561,7 @@ class CompetitorAuditService:
             await self._analyzer.aclose()
         if self._images is not None:
             await self._images.aclose()
+        # cross_check reuses the analyzer Claude client — do not double-close.
 
 
 class CeleryCompetitorDeepAnalysisTrigger:

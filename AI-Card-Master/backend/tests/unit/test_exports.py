@@ -14,6 +14,7 @@ from app.application.export_service import (
 )
 from app.core.credential_crypto import decrypt_credentials, encrypt_credentials
 from app.domain.export import (
+    ExportCardSource,
     ExportStatus,
     ImageAssetMeta,
     MarketplaceCredentialView,
@@ -123,7 +124,7 @@ class FakeExportRepository:
     def __init__(self) -> None:
         self.credentials: dict[tuple, str] = {}
         self.exports: list[ExportResultView] = []
-        self.source: tuple[MarketplaceTextContent, tuple[str, ...]] | None = None
+        self.source: ExportCardSource | None = None
 
     async def upsert_credentials(self, *, user_id, platform, ciphertext, label):
         self.credentials[(user_id, platform)] = ciphertext
@@ -243,7 +244,10 @@ async def test_export_dry_run_persists_validated_without_seller_call() -> None:
         characteristics=("Лёгкие", "Дышащие", "Стильные"),
     )
     repo = FakeExportRepository()
-    repo.source = (text, tuple(image.object_key for image in images))
+    repo.source = ExportCardSource(
+        text=text,
+        object_keys=tuple(image.object_key for image in images),
+    )
     seller = FakeSeller()
     service = ExportService(
         repo,
@@ -277,7 +281,10 @@ async def test_export_submits_after_validation_when_credentials_exist() -> None:
         characteristics=("Лёгкие", "Дышащие", "Стильные"),
     )
     repo = FakeExportRepository()
-    repo.source = (text, tuple(image.object_key for image in images))
+    repo.source = ExportCardSource(
+        text=text,
+        object_keys=tuple(image.object_key for image in images),
+    )
     seller = FakeSeller()
     service = ExportService(
         repo,
@@ -316,7 +323,10 @@ async def test_export_requires_credentials_when_not_dry_run() -> None:
         characteristics=("Лёгкие", "Дышащие", "Стильные"),
     )
     repo = FakeExportRepository()
-    repo.source = (text, tuple(image.object_key for image in images))
+    repo.source = ExportCardSource(
+        text=text,
+        object_keys=tuple(image.object_key for image in images),
+    )
     service = ExportService(
         repo,
         FakeImages(images),
@@ -353,7 +363,7 @@ async def test_export_blocks_when_validation_fails() -> None:
         characteristics=("Лёгкие", "Дышащие", "Стильные"),
     )
     repo = FakeExportRepository()
-    repo.source = (text, ("bad.jpg",))
+    repo.source = ExportCardSource(text=text, object_keys=("bad.jpg",))
     service = ExportService(
         repo,
         FakeImages(bad_images),
@@ -367,6 +377,7 @@ async def test_export_blocks_when_validation_fails() -> None:
             generation_job_id=job_id,
             platform=MarketplacePlatform.WILDBERRIES,
             vendor_code="ART-4",
+            extras={"subject_id": 105},
             dry_run=True,
         )
     assert not exc_info.value.report.is_valid

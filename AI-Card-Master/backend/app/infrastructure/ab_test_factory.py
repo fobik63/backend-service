@@ -12,11 +12,16 @@ from app.core.config import get_settings
 from app.core.credential_crypto import CredentialCryptoError, decrypt_credentials
 from app.domain.ab_test import AbTestConfig
 from app.domain.export import MarketplacePlatform
+from app.domain.smart_reasoning import ReasoningTaskKind
 from app.infrastructure.claude_client_loader import load_claude_client
 from app.infrastructure.claude_stage_cache import RedisClaudeStageCache
 from app.infrastructure.marketplaces.ads_clients import build_marketplace_ads_client
 from app.infrastructure.persistence.ab_test_repository import AbTestRepository
 from app.infrastructure.persistence.export_repository import ExportRepository
+from app.infrastructure.smart_reasoning_factory import (
+    build_analytics_cache,
+    resolve_claude_model,
+)
 
 
 class ExportAdsCredentialsAdapter:
@@ -64,10 +69,17 @@ def build_ab_test_service(
     """Wire ports for HTTP handlers and Celery workers."""
 
     settings = get_settings()
+    task = ReasoningTaskKind.AB_HYPOTHESES
+    model_name = resolve_claude_model(task, settings)
+    analytics_cache = build_analytics_cache()
     client = load_claude_client(
         settings,
         require=require_claude_client,
         existing=hypothesis_generator,
+        model_name=model_name,
+        analytics_cache=analytics_cache,
+        analytics_cache_ttl_seconds=settings.claude_analytics_cache_ttl_seconds,
+        analytics_task_kind=task.value,
     )
 
     secret = settings.marketplace_credentials_secret.get_secret_value().strip()
@@ -94,7 +106,7 @@ def build_ab_test_service(
 
     return AbTestService(
         AbTestRepository(db_session),
-        model_name=settings.claude_47_model,
+        model_name=model_name,
         redis_stage_ttl_seconds=settings.claude_47_stage_cache_ttl_seconds,
         default_config=config,
         hypothesis_generator=client,

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 from uuid import UUID
 
+from app.application.ports.export_fail_safe import ExportFixSuggestPort
 from app.application.ports.exports import (
     ExportPersistencePort,
     ImageAssetPort,
@@ -26,6 +28,13 @@ from app.domain.export import (
     get_marketplace_requirements,
     validate_card_for_marketplace,
 )
+from app.domain.export_fail_safe import (
+    FailSafeSandboxReport,
+    FailSafeSandboxResult,
+    run_fail_safe_sandbox,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class ExportError(Exception):
@@ -35,9 +44,16 @@ class ExportError(Exception):
 class ExportValidationError(ExportError):
     """Card fails automatic marketplace limit / photo checks."""
 
-    def __init__(self, message: str, report: CardValidationReport) -> None:
+    def __init__(
+        self,
+        message: str,
+        report: CardValidationReport,
+        *,
+        suggested_fix: Any | None = None,
+    ) -> None:
         super().__init__(message)
         self.report = report
+        self.suggested_fix = suggested_fix
 
 
 class ExportNotFoundError(ExportError):
@@ -62,6 +78,9 @@ class ExportService:
         sellers: dict[MarketplacePlatform, MarketplaceSellerPort],
         *,
         fernet_secret: str,
+        fix_suggester: ExportFixSuggestPort | None = None,
+        fail_safe_enabled: bool = True,
+        claude_fix_enabled: bool = True,
     ) -> None:
         if not fernet_secret.strip():
             raise ValueError("Marketplace credential encryption secret is not configured.")
@@ -69,6 +88,9 @@ class ExportService:
         self._images = images
         self._sellers = sellers
         self._fernet_secret = fernet_secret
+        self._fix_suggester = fix_suggester
+        self._fail_safe_enabled = fail_safe_enabled
+        self._claude_fix_enabled = claude_fix_enabled
 
     def get_requirements(self, platform: MarketplacePlatform) -> MarketplaceRequirements:
         """Return documented limits used by automatic pre-export checks."""
@@ -115,19 +137,84 @@ class ExportService:
         user_id: UUID,
         generation_job_id: UUID,
         platform: MarketplacePlatform,
-    ) -> CardValidationReport:
-        """Run automatic character and photo checks without calling the marketplace."""
+        extras: dict[str, Any] | None = None,
+        require_category_ids: bool = False,
+        suggest_fix: bool = True,
+    ) -> FailSafeSandboxResult:
+        """Run Fail-Safe sandbox (photo weight, forbidden words, category)."""
 
-        title, description, characteristics, images = await self._load_card_assets(
-            user_id=user_id,
-            generation_job_id=generation_job_id,
+        title, description, characteristics, images, product_category = (
+            await self._load_card_assets(
+                user_id=user_id,
+                generation_job_id=generation_job_id,
+            )
         )
-        return validate_card_for_marketplace(
+        if not self._fail_safe_enabled:
+            base = validate_card_for_marketplace(
+                platform=platform,
+                title=title,
+                description=description,
+                characteristics=characteristics,
+                images=images,
+            )
+            return FailSafeSandboxResult(
+                sandbox=FailSafeSandboxReport(
+                    validation=base,
+                    forbidden_hits=0,
+                    category_errors=0,
+                ),
+                suggested_fix=None,
+                claude_fix_attempted=False,
+            )
+
+        sandbox = run_fail_safe_sandbox(
             platform=platform,
             title=title,
             description=description,
             characteristics=characteristics,
             images=images,
+            extras=extras,
+            product_category=product_category,
+            require_category_ids=require_category_ids,
+        )
+        suggested = None
+        attempted = False
+        in_tokens = 0
+        out_tokens = 0
+        if (
+            suggest_fix
+            and self._claude_fix_enabled
+            and self._fix_suggester is not None
+            and not sandbox.is_valid
+        ):
+            attempted = True
+            requirements = sandbox.validation.requirements
+            try:
+                suggested, in_tokens, out_tokens = await self._fix_suggester.suggest_export_fixes(
+                    platform=platform,
+                    title=title,
+                    description=description,
+                    characteristics=characteristics,
+                    issues=sandbox.validation.errors,
+                    product_category=product_category,
+                    extras=extras,
+                    title_max=requirements.text.title_max,
+                    description_max=requirements.text.description_max,
+                    characteristics_max=requirements.text.characteristics_max,
+                    characteristic_max_length=requirements.text.characteristic_max_length,
+                    user_id=user_id,
+                    job_id=generation_job_id,
+                )
+            except Exception:  # noqa: BLE001 — never block validation on Claude failure
+                logger.exception("Fail-Safe Claude auto-fix failed; returning sandbox only")
+                suggested = None
+
+        return FailSafeSandboxResult(
+            sandbox=sandbox,
+            suggested_fix=suggested,
+            claude_fix_attempted=attempted,
+            claude_input_tokens=in_tokens,
+            claude_output_tokens=out_tokens,
         )
 
     async def export_to_draft(
@@ -141,7 +228,7 @@ class ExportService:
         dry_run: bool = False,
     ) -> ExportResultView:
         """
-        One-click export: validate limits, then create a marketplace draft.
+        One-click export: Fail-Safe sandbox, then create a marketplace draft.
 
         dry_run=True only validates and persists a validated record (no seller API call).
         """
@@ -153,22 +240,70 @@ class ExportService:
                 report=_empty_report(platform),
             )
 
-        title, description, characteristics, images = await self._load_card_assets(
-            user_id=user_id,
-            generation_job_id=generation_job_id,
-        )
-        report = validate_card_for_marketplace(
-            platform=platform,
-            title=title,
-            description=description,
-            characteristics=characteristics,
-            images=images,
-        )
-        if not report.is_valid:
-            raise ExportValidationError(
-                f"Card does not meet {platform.value} requirements.",
-                report=report,
+        title, description, characteristics, images, product_category = (
+            await self._load_card_assets(
+                user_id=user_id,
+                generation_job_id=generation_job_id,
             )
+        )
+
+        if self._fail_safe_enabled:
+            sandbox = run_fail_safe_sandbox(
+                platform=platform,
+                title=title,
+                description=description,
+                characteristics=characteristics,
+                images=images,
+                extras=extras,
+                product_category=product_category,
+                require_category_ids=True,
+            )
+            report = sandbox.validation
+            suggested = None
+            if (
+                not report.is_valid
+                and self._claude_fix_enabled
+                and self._fix_suggester is not None
+            ):
+                requirements = report.requirements
+                try:
+                    suggested, _, _ = await self._fix_suggester.suggest_export_fixes(
+                        platform=platform,
+                        title=title,
+                        description=description,
+                        characteristics=characteristics,
+                        issues=report.errors,
+                        product_category=product_category,
+                        extras=extras,
+                        title_max=requirements.text.title_max,
+                        description_max=requirements.text.description_max,
+                        characteristics_max=requirements.text.characteristics_max,
+                        characteristic_max_length=requirements.text.characteristic_max_length,
+                        user_id=user_id,
+                        job_id=generation_job_id,
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.exception("Fail-Safe Claude auto-fix failed during export")
+                    suggested = None
+            if not report.is_valid:
+                raise ExportValidationError(
+                    f"Card does not meet {platform.value} requirements.",
+                    report=report,
+                    suggested_fix=suggested,
+                )
+        else:
+            report = validate_card_for_marketplace(
+                platform=platform,
+                title=title,
+                description=description,
+                characteristics=characteristics,
+                images=images,
+            )
+            if not report.is_valid:
+                raise ExportValidationError(
+                    f"Card does not meet {platform.value} requirements.",
+                    report=report,
+                )
 
         request_payload = {
             "vendor_code": code,
@@ -244,7 +379,7 @@ class ExportService:
         *,
         user_id: UUID,
         generation_job_id: UUID,
-    ) -> tuple[str, str, tuple[str, ...], tuple]:
+    ) -> tuple[str, str, tuple[str, ...], tuple, str | None]:
         source = await self._repository.get_completed_export_source(
             user_id=user_id,
             generation_job_id=generation_job_id,
@@ -253,14 +388,21 @@ class ExportService:
             raise ExportNotFoundError(
                 "Completed generation with marketplace text and photos was not found."
             )
-        text, object_keys = source
+        text = source.text
+        object_keys = source.object_keys
         if not object_keys:
             raise ExportValidationError(
                 "Generation has no completed slide images to export.",
                 report=_empty_report(MarketplacePlatform.WILDBERRIES),
             )
         images = await self._images.inspect_images(object_keys)
-        return text.title, text.description, text.characteristics, images
+        return (
+            text.title,
+            text.description,
+            text.characteristics,
+            images,
+            source.product_category,
+        )
 
     async def _load_decrypted_credentials(
         self, *, user_id: UUID, platform: MarketplacePlatform

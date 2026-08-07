@@ -7,6 +7,8 @@ from datetime import datetime
 from enum import StrEnum
 from uuid import UUID
 
+from app.domain.generation import MarketplaceTextContent
+
 
 class MarketplaceSellerError(Exception):
     """Raised by marketplace adapters when the seller API call fails."""
@@ -233,6 +235,15 @@ class ExportResultView:
     message: str
     validation: CardValidationReport
     created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ExportCardSource:
+    """Completed generation assets prepared for Fail-Safe / Direct Export."""
+
+    text: MarketplaceTextContent
+    object_keys: tuple[str, ...]
+    product_category: str | None = None
 
 
 def get_marketplace_requirements(platform: MarketplacePlatform) -> MarketplaceRequirements:

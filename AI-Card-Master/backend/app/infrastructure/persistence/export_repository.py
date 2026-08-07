@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from app.domain.export import (
     CardValidationReport,
+    ExportCardSource,
     ExportResultView,
     ExportStatus,
     MarketplaceCredentialView,
@@ -134,7 +135,7 @@ class ExportRepository:
 
     async def get_completed_export_source(
         self, *, user_id: UUID, generation_job_id: UUID
-    ) -> tuple[MarketplaceTextContent, tuple[str, ...]] | None:
+    ) -> ExportCardSource | None:
         job = await self._session.scalar(
             select(GenerationJob)
             .where(
@@ -157,7 +158,12 @@ class ExportRepository:
         )
         if not keys:
             return None
-        return text, keys
+        category = (job.product_category or "").strip() or None
+        return ExportCardSource(
+            text=text,
+            object_keys=keys,
+            product_category=category,
+        )
 
     async def save_export(
         self,

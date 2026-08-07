@@ -559,6 +559,20 @@ class Settings(BaseSettings):
         default=True,
         alias="BRAND_LORA_PREFER_REPLICATE",
     )
+
+    # Plan §58 — BrandDNA learned from successful seller generations.
+    brand_dna_enabled: bool = Field(
+        default=True,
+        alias="BRAND_DNA_ENABLED",
+    )
+    brand_dna_sample_limit: int = Field(
+        default=25,
+        alias="BRAND_DNA_SAMPLE_LIMIT",
+    )
+    brand_dna_min_samples: int = Field(
+        default=1,
+        alias="BRAND_DNA_MIN_SAMPLES",
+    )
     replicate_api_token: SecretStr | None = Field(
         default=None,
         alias="REPLICATE_API_TOKEN",
@@ -624,6 +638,16 @@ class Settings(BaseSettings):
     marketplace_bridge_timeout_seconds: float = Field(
         default=45.0,
         alias="MARKETPLACE_BRIDGE_TIMEOUT_SECONDS",
+    )
+
+    # Plan §59 — Fail-Safe Export sandbox (photo weight, forbidden words, category).
+    fail_safe_export_enabled: bool = Field(
+        default=True,
+        alias="FAIL_SAFE_EXPORT_ENABLED",
+    )
+    fail_safe_export_claude_fix_enabled: bool = Field(
+        default=True,
+        alias="FAIL_SAFE_EXPORT_CLAUDE_FIX_ENABLED",
     )
 
     # Isolated stock parser (WB/Ozon mobile JSON endpoints — no Selenium).
@@ -694,6 +718,16 @@ class Settings(BaseSettings):
     competitor_audit_image_timeout_seconds: float = Field(
         default=20.0,
         alias="COMPETITOR_AUDIT_IMAGE_TIMEOUT_SECONDS",
+    )
+
+    # Plan §57 — Zero-Hallucination OCR ↔ description dual check.
+    zero_hallucination_enabled: bool = Field(
+        default=True,
+        alias="ZERO_HALLUCINATION_ENABLED",
+    )
+    zero_hallucination_max_vision_images: int = Field(
+        default=5,
+        alias="ZERO_HALLUCINATION_MAX_VISION_IMAGES",
     )
 
     smart_inpainting_edge_pass_enabled: bool = Field(
@@ -816,6 +850,11 @@ class Settings(BaseSettings):
         default="claude-opus-4-7",
         alias="CLAUDE_47_MODEL",
     )
+    # Plan §55 — cheap model for simple text analytics (Smart Reasoning Routing).
+    claude_35_haiku_model: str = Field(
+        default="claude-3-5-haiku-20241022",
+        alias="CLAUDE_35_HAIKU_MODEL",
+    )
     claude_47_api_version: str = Field(
         default="2023-06-01",
         alias="CLAUDE_47_API_VERSION",
@@ -863,8 +902,13 @@ class Settings(BaseSettings):
         alias="CLAUDE_47_MAX_IMAGES_PER_REQUEST",
     )
     claude_47_stage_cache_ttl_seconds: int = Field(
-        default=3600,
+        default=86400,
         alias="CLAUDE_47_STAGE_CACHE_TTL_SECONDS",
+    )
+    # Plan §55 — content-addressed Claude analytics cache (24h → ~30% API savings).
+    claude_analytics_cache_ttl_seconds: int = Field(
+        default=86400,
+        alias="CLAUDE_ANALYTICS_CACHE_TTL_SECONDS",
     )
     claude_47_processing_timeout_seconds: int = Field(
         default=900,
@@ -1119,6 +1163,8 @@ class Settings(BaseSettings):
         "brand_lora_max_references",
         "brand_lora_training_cost_coins",
         "brand_lora_poll_batch_size",
+        "brand_dna_sample_limit",
+        "brand_dna_min_samples",
         "replicate_lora_training_steps",
         "generation_fast_cost_coins",
         "generation_hd_face_fix_cost_coins",
@@ -1144,6 +1190,7 @@ class Settings(BaseSettings):
         "claude_47_reasoning_max_tokens",
         "claude_47_max_images_per_request",
         "claude_47_stage_cache_ttl_seconds",
+        "claude_analytics_cache_ttl_seconds",
         "claude_47_processing_timeout_seconds",
         "claude_47_outbox_batch_size",
         "claude_47_recovery_batch_size",
@@ -1168,6 +1215,7 @@ class Settings(BaseSettings):
         "competitor_audit_redis_ttl_seconds",
         "competitor_audit_max_reviews",
         "competitor_audit_max_vision_images",
+        "zero_hallucination_max_vision_images",
         "security_rate_limit_per_minute",
         "security_auto_block_threat_score",
         "security_ip_block_ttl_seconds",

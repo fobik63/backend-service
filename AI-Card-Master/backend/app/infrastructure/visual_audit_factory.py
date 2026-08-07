@@ -8,10 +8,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.visual_audit_service import VisualAuditService
 from app.core.config import get_settings
+from app.domain.smart_reasoning import ReasoningTaskKind
 from app.domain.visual_audit import VisualAuditFilterConfig
 from app.infrastructure.claude_client_loader import load_claude_client
 from app.infrastructure.claude_stage_cache import RedisClaudeStageCache
 from app.infrastructure.persistence.visual_audit_repository import VisualAuditRepository
+from app.infrastructure.smart_reasoning_factory import (
+    build_analytics_cache,
+    resolve_claude_model,
+)
 from app.services.s3_storage import get_s3_storage
 
 
@@ -24,10 +29,17 @@ def build_visual_audit_service(
     """Wire ports for HTTP handlers and Celery workers."""
 
     settings = get_settings()
+    task = ReasoningTaskKind.VISUAL_AUDIT
+    model_name = resolve_claude_model(task, settings)
+    analytics_cache = build_analytics_cache()
     client = load_claude_client(
         settings,
         require=require_claude_client,
         existing=vision,
+        model_name=model_name,
+        analytics_cache=analytics_cache,
+        analytics_cache_ttl_seconds=settings.claude_analytics_cache_ttl_seconds,
+        analytics_task_kind=task.value,
     )
 
     filter_config = VisualAuditFilterConfig(
@@ -44,7 +56,7 @@ def build_visual_audit_service(
     return VisualAuditService(
         VisualAuditRepository(db_session),
         storage=get_s3_storage(),
-        model_name=settings.claude_47_model,
+        model_name=model_name,
         max_image_bytes=settings.generation_max_upload_bytes,
         redis_stage_ttl_seconds=settings.claude_47_stage_cache_ttl_seconds,
         default_filter_config=filter_config,

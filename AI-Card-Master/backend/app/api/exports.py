@@ -1,4 +1,4 @@
-"""Direct Export API: credentials, validation, and one-click marketplace drafts."""
+"""Direct Export API: credentials, Fail-Safe sandbox, and one-click drafts."""
 
 from __future__ import annotations
 
@@ -18,7 +18,6 @@ from app.application.export_service import (
     ExportUpstreamError,
     ExportValidationError,
 )
-from app.core.config import get_settings
 from app.domain.export import (
     CardValidationReport,
     ExportResultView,
@@ -27,11 +26,8 @@ from app.domain.export import (
     MarketplaceRequirements,
     ValidationSeverity,
 )
-from app.infrastructure.marketplaces.amazon_client import AmazonSellerClient
-from app.infrastructure.marketplaces.image_assets import S3ImageAssetAdapter
-from app.infrastructure.marketplaces.ozon_client import OzonSellerClient
-from app.infrastructure.marketplaces.wildberries_client import WildberriesSellerClient
-from app.infrastructure.persistence.export_repository import ExportRepository
+from app.domain.export_fail_safe import ExportFixSuggestion, FailSafeSandboxResult
+from app.infrastructure.export_factory import build_export_service
 from app.models.database import get_db_session
 from app.models.user import User
 
@@ -73,8 +69,13 @@ class CredentialResponse(StrictAPIModel):
 
 
 class ValidateExportRequest(StrictAPIModel):
+    """Fail-Safe sandbox request (plan §59)."""
+
     generation_job_id: UUID
     platform: MarketplacePlatform
+    extras: dict[str, Any] = Field(default_factory=dict)
+    require_category_ids: bool = False
+    suggest_fix: bool = True
 
 
 class ExportDraftRequest(StrictAPIModel):
@@ -137,6 +138,40 @@ class ValidationReportResponse(StrictAPIModel):
     description_length: int
     photo_count: int
     issues: list[ValidationIssueResponse]
+    forbidden_hits: int = 0
+    category_errors: int = 0
+
+
+class ExportFixSuggestionResponse(StrictAPIModel):
+    title: str
+    description: str
+    characteristics: list[str]
+    category_hint: str = ""
+    suggested_subject_id: int | None = None
+    suggested_description_category_id: int | None = None
+    suggested_type_id: int | None = None
+    suggested_product_type: str = ""
+    fix_summary: str
+    removed_phrases: list[str] = Field(default_factory=list)
+    model_name: str = ""
+    confidence: float = 0.0
+
+
+class FailSafeSandboxResponse(StrictAPIModel):
+    """Fail-Safe validator-sandbox result with optional Claude auto-fix."""
+
+    platform: MarketplacePlatform
+    is_valid: bool
+    title_length: int
+    description_length: int
+    photo_count: int
+    issues: list[ValidationIssueResponse]
+    forbidden_hits: int = 0
+    category_errors: int = 0
+    suggested_fix: ExportFixSuggestionResponse | None = None
+    claude_fix_attempted: bool = False
+    claude_input_tokens: int = 0
+    claude_output_tokens: int = 0
 
 
 class ExportResultResponse(StrictAPIModel):
@@ -155,31 +190,9 @@ class ExportResultResponse(StrictAPIModel):
 async def get_export_service(
     db_session: AsyncSession = Depends(get_db_session),
 ) -> ExportService:
-    """Request-scoped Direct Export use-case service."""
+    """Request-scoped Direct Export + Fail-Safe use-case service."""
 
-    settings = get_settings()
-    secret = settings.marketplace_credentials_secret.get_secret_value()
-    if not secret.strip():
-        secret = settings.jwt_secret_key.get_secret_value()
-    return ExportService(
-        ExportRepository(db_session),
-        S3ImageAssetAdapter(),
-        {
-            MarketplacePlatform.WILDBERRIES: WildberriesSellerClient(
-                base_url=settings.wildberries_content_api_base_url,
-                timeout_seconds=settings.marketplace_export_timeout_seconds,
-            ),
-            MarketplacePlatform.OZON: OzonSellerClient(
-                base_url=settings.ozon_seller_api_base_url,
-                timeout_seconds=settings.marketplace_export_timeout_seconds,
-            ),
-            MarketplacePlatform.AMAZON: AmazonSellerClient(
-                sp_api_base_url=settings.amazon_sp_api_base_url,
-                timeout_seconds=settings.marketplace_export_timeout_seconds,
-            ),
-        },
-        fernet_secret=secret,
-    )
+    return build_export_service(db_session)
 
 
 @router.get("/requirements/{platform}", response_model=RequirementsResponse)
@@ -240,23 +253,26 @@ async def delete_export_credentials(
         raise _map_export_error(exc) from exc
 
 
-@router.post("/validate", response_model=ValidationReportResponse)
+@router.post("/validate", response_model=FailSafeSandboxResponse)
 async def validate_export_card(
     body: ValidateExportRequest,
     current_user: User = Depends(get_current_user),
     service: ExportService = Depends(get_export_service),
-) -> ValidationReportResponse:
-    """Automatically check title/description limits and photo requirements."""
+) -> FailSafeSandboxResponse:
+    """Fail-Safe sandbox: photo weight, forbidden words, category + Claude fix."""
 
     try:
-        report = await service.validate_generation(
+        result = await service.validate_generation(
             user_id=current_user.id,
             generation_job_id=body.generation_job_id,
             platform=body.platform,
+            extras=body.extras,
+            require_category_ids=body.require_category_ids,
+            suggest_fix=body.suggest_fix,
         )
     except Exception as exc:  # noqa: BLE001
         raise _map_export_error(exc) from exc
-    return _validation_response(report)
+    return _sandbox_response(result)
 
 
 @router.post("/{platform}", response_model=ExportResultResponse)
@@ -266,7 +282,7 @@ async def export_generation_to_draft(
     current_user: User = Depends(get_current_user),
     service: ExportService = Depends(get_export_service),
 ) -> ExportResultResponse:
-    """One-click: validate limits, then push the card into the marketplace draft."""
+    """One-click: Fail-Safe validate, then push the card into the marketplace draft."""
 
     try:
         result = await service.export_to_draft(
@@ -318,7 +334,12 @@ def _requirements_response(req: MarketplaceRequirements) -> RequirementsResponse
     )
 
 
-def _validation_response(report: CardValidationReport) -> ValidationReportResponse:
+def _validation_response(
+    report: CardValidationReport,
+    *,
+    forbidden_hits: int = 0,
+    category_errors: int = 0,
+) -> ValidationReportResponse:
     return ValidationReportResponse(
         platform=report.platform,
         is_valid=report.is_valid,
@@ -334,6 +355,55 @@ def _validation_response(report: CardValidationReport) -> ValidationReportRespon
             )
             for issue in report.issues
         ],
+        forbidden_hits=forbidden_hits,
+        category_errors=category_errors,
+    )
+
+
+def _fix_response(fix: ExportFixSuggestion) -> ExportFixSuggestionResponse:
+    return ExportFixSuggestionResponse(
+        title=fix.title,
+        description=fix.description,
+        characteristics=list(fix.characteristics),
+        category_hint=fix.category_hint,
+        suggested_subject_id=fix.suggested_subject_id,
+        suggested_description_category_id=fix.suggested_description_category_id,
+        suggested_type_id=fix.suggested_type_id,
+        suggested_product_type=fix.suggested_product_type,
+        fix_summary=fix.fix_summary,
+        removed_phrases=list(fix.removed_phrases),
+        model_name=fix.model_name,
+        confidence=fix.confidence,
+    )
+
+
+def _sandbox_response(result: FailSafeSandboxResult) -> FailSafeSandboxResponse:
+    report = result.sandbox.validation
+    return FailSafeSandboxResponse(
+        platform=report.platform,
+        is_valid=report.is_valid,
+        title_length=report.title_length,
+        description_length=report.description_length,
+        photo_count=report.photo_count,
+        issues=[
+            ValidationIssueResponse(
+                code=issue.code,
+                message=issue.message,
+                severity=issue.severity,
+                field=issue.field,
+            )
+            for issue in report.issues
+        ],
+        forbidden_hits=result.sandbox.forbidden_hits,
+        category_errors=result.sandbox.category_errors,
+        suggested_fix=(
+            _fix_response(result.suggested_fix)
+            if result.suggested_fix is not None
+            else None
+        ),
+        claude_fix_attempted=result.claude_fix_attempted,
+        claude_input_tokens=result.claude_input_tokens,
+        claude_output_tokens=result.claude_output_tokens,
     )
 
 
@@ -354,12 +424,17 @@ def _export_response(result: ExportResultView) -> ExportResultResponse:
 
 def _map_export_error(exc: Exception) -> HTTPException:
     if isinstance(exc, ExportValidationError):
+        detail: dict[str, Any] = {
+            "message": str(exc),
+            "validation": _validation_response(exc.report).model_dump(mode="json"),
+        }
+        if exc.suggested_fix is not None:
+            detail["suggested_fix"] = _fix_response(exc.suggested_fix).model_dump(
+                mode="json"
+            )
         return HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "message": str(exc),
-                "validation": _validation_response(exc.report).model_dump(mode="json"),
-            },
+            detail=detail,
         )
     if isinstance(exc, ExportNotFoundError):
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))

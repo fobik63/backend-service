@@ -29,6 +29,7 @@ from app.api import (
     admin_router,
     ai_strategy_router,
     analytics_router,
+    brand_dna_router,
     brand_loras_router,
     bulk_generations_router,
     captcha_router,
@@ -175,6 +176,7 @@ app.include_router(marketplace_bridge_router)
 app.include_router(bulk_generations_router)
 app.include_router(smart_variants_router)
 app.include_router(brand_loras_router)
+app.include_router(brand_dna_router)
 app.include_router(claude_analyses_router)
 app.include_router(claude_reasoning_router)
 app.include_router(visual_audit_router)

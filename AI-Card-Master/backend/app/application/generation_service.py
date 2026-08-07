@@ -6,6 +6,7 @@ import asyncio
 import io
 import logging
 import zipfile
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 from urllib.parse import quote, urlencode
@@ -80,12 +81,17 @@ class GenerationApplicationService:
         async_providers: tuple[AsyncImageProviderPort, ...],
         immediate_provider: ImmediateImageProviderPort,
         text_provider: MarketplaceTextProviderPort | None = None,
+        brand_dna_claude_context_loader: Callable[[UUID], Awaitable[str | None]]
+        | None = None,
+        on_generation_completed: Callable[[UUID], None] | None = None,
     ) -> None:
         self._repository = repository
         self._storage = storage
         self._async_providers = async_providers
         self._immediate_provider = immediate_provider
         self._text_provider = text_provider
+        self._brand_dna_claude_context_loader = brand_dna_claude_context_loader
+        self._on_generation_completed = on_generation_completed
         self._settings = get_settings()
 
     async def submit_job(self, job_id: UUID) -> None:
@@ -195,15 +201,26 @@ class GenerationApplicationService:
                     for slide in work.slides
                 )
             )
-            marketplace_text = (
-                await self._text_provider.generate_marketplace_text(
+            marketplace_text = work.marketplace_text
+            if self._text_provider is not None:
+                brand_dna_context: str | None = None
+                if self._brand_dna_claude_context_loader is not None:
+                    try:
+                        brand_dna_context = await self._brand_dna_claude_context_loader(
+                            work.user_id
+                        )
+                    except Exception:
+                        logger.warning(
+                            "BrandDNA lookup failed during finalize job_id=%s",
+                            work.id,
+                            exc_info=True,
+                        )
+                marketplace_text = await self._text_provider.generate_marketplace_text(
                     product_category=work.product_category,
                     slides=work.slides,
                     images=tuple(images),
+                    brand_dna_context=brand_dna_context,
                 )
-                if self._text_provider is not None
-                else work.marketplace_text
-            )
             zip_bytes = await asyncio.to_thread(
                 _build_archive,
                 tuple(zip(work.slides, images, strict=True)),
@@ -249,6 +266,15 @@ class GenerationApplicationService:
                 warning=warning,
             )
             await invalidate_generation_history_cache(work.user_id)
+            if self._on_generation_completed is not None:
+                try:
+                    self._on_generation_completed(work.user_id)
+                except Exception:
+                    logger.warning(
+                        "BrandDNA refresh hook failed user_id=%s",
+                        work.user_id,
+                        exc_info=True,
+                    )
         except Exception as exc:
             await self._fail_job(work.id, exc)
 

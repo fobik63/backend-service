@@ -12,10 +12,16 @@ from app.application.eye_of_god_bridge_service import (
 )
 from app.core.config import get_settings
 from app.domain.eye_of_god import SalesSpikeConfig
+from app.domain.smart_reasoning import ReasoningTaskKind
 from app.infrastructure.claude_client_loader import load_claude_client
+from app.infrastructure.claude_stage_cache import RedisClaudeStageCache
 from app.infrastructure.eye_of_god.sku_image_fetcher import SkuCardImageFetcher
 from app.infrastructure.persistence.eye_of_god_repository import EyeOfGodRepository
 from app.infrastructure.persistence.stock_parser_repository import StockParserRepository
+from app.infrastructure.smart_reasoning_factory import (
+    build_analytics_cache,
+    resolve_claude_model,
+)
 
 
 def build_eye_of_god_bridge_service(
@@ -26,13 +32,24 @@ def build_eye_of_god_bridge_service(
     vision: Any | None = None,
     images: SkuCardImageFetcher | None = None,
 ) -> EyeOfGodBridgeService:
-    """Wire ports for stock-parser workers and Eye-of-God Celery tasks."""
+    """Wire ports for stock-parser workers and Eye-of-God Celery tasks.
+
+    Plan §55: deep «Глаз Бога» analysis always routes to Claude 4.7 Opus and
+    caches Vision analytics in Redis for 24h.
+    """
 
     settings = get_settings()
+    task = ReasoningTaskKind.EYE_OF_GOD
+    model_name = resolve_claude_model(task, settings)
+    analytics_cache = build_analytics_cache()
     client = load_claude_client(
         settings,
         require=require_claude_client,
         existing=vision,
+        model_name=model_name,
+        analytics_cache=analytics_cache,
+        analytics_cache_ttl_seconds=settings.claude_analytics_cache_ttl_seconds,
+        analytics_task_kind=task.value,
     )
 
     image_fetcher = images or SkuCardImageFetcher(
@@ -53,11 +70,13 @@ def build_eye_of_god_bridge_service(
         persistence=EyeOfGodRepository(db_session),
         stock_persistence=StockParserRepository(db_session),
         spike_config=spike_config,
-        model_name=settings.claude_47_model,
+        model_name=model_name,
         prefer_hour_utc=settings.stock_parser_beat_hour_utc,
         lookback_days=settings.eye_of_god_lookback_days,
         vision=client,
         images=image_fetcher,
         trigger=CeleryEyeOfGodTrigger() if enqueue_trigger else None,
         max_images=settings.eye_of_god_max_images,
+        stage_cache=RedisClaudeStageCache(),
+        redis_stage_ttl_seconds=settings.claude_47_stage_cache_ttl_seconds,
     )

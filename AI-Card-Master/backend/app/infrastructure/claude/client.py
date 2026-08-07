@@ -7,7 +7,7 @@ import base64
 import logging
 import random
 from decimal import Decimal
-from typing import Any
+from typing import Any, Mapping
 from uuid import UUID
 
 import httpx
@@ -80,11 +80,30 @@ from app.domain.competitor_audit import (
     competitor_deep_analysis_system_prompt,
     normalize_deep_analysis_card,
 )
+from app.domain.zero_hallucination import (
+    ZERO_HALLUCINATION_JSON_SCHEMA,
+    ClaudeCrossCheckPayload,
+    build_cross_check_user_prompt,
+    cross_check_system_prompt,
+)
+from app.domain.export import MarketplacePlatform, ValidationIssue
+from app.domain.export_fail_safe import (
+    EXPORT_FIX_JSON_SCHEMA,
+    ExportFixSuggestion,
+    build_export_fix_prompt,
+    export_fix_system_prompt,
+    normalize_export_fix_payload,
+)
 from app.domain.visual_audit import (
     RISING_STAR_VISION_JSON_SCHEMA,
     RisingStarVisionDissection,
     build_rising_star_vision_prompt,
     rising_star_vision_system_prompt,
+)
+from app.domain.smart_reasoning import (
+    fingerprint_messages_request,
+    model_supports_adaptive_thinking,
+    redis_analytics_key,
 )
 from app.infrastructure.claude.image_normalize import normalize_image_for_claude
 from app.services.api_usage_costs import record_api_usage_cost
@@ -106,9 +125,21 @@ class ClaudeUpstreamError(ClaudeIntegrationError):
 
 
 class Claude47VisionClient:
-    """Async Anthropic Messages client for Vision + structured JSON CoT."""
+    """Async Anthropic Messages client for Vision + structured JSON CoT.
 
-    def __init__(self, settings: Settings | None = None) -> None:
+    Plan §55: ``model_name`` selects Haiku (simple) vs Opus (deep / Eye of God).
+    Optional ``analytics_cache`` stores identical request results for 24h.
+    """
+
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        *,
+        model_name: str | None = None,
+        analytics_cache: Any | None = None,
+        analytics_cache_ttl_seconds: int | None = None,
+        analytics_task_kind: str | None = None,
+    ) -> None:
         self._settings = settings or get_settings()
         api_key = self._settings.claude_47_api_key
         if api_key is None or not api_key.get_secret_value().strip():
@@ -116,9 +147,26 @@ class Claude47VisionClient:
                 "CLAUDE_47_API_KEY is required for Claude Vision reasoning."
             )
         self._api_key = api_key.get_secret_value().strip()
-        self._model = self._settings.claude_47_model.strip()
-        if not self._model:
-            raise ClaudeConfigurationError("CLAUDE_47_MODEL must not be empty.")
+        resolved = (model_name or self._settings.claude_47_model).strip()
+        if not resolved:
+            raise ClaudeConfigurationError(
+                "Claude model name must not be empty "
+                "(CLAUDE_47_MODEL / CLAUDE_35_HAIKU_MODEL)."
+            )
+        self._model = resolved
+        self._adaptive = model_supports_adaptive_thinking(self._model)
+        self._analytics_cache = analytics_cache
+        ttl = (
+            analytics_cache_ttl_seconds
+            if analytics_cache_ttl_seconds is not None
+            else self._settings.claude_analytics_cache_ttl_seconds
+        )
+        if ttl <= 0:
+            raise ClaudeConfigurationError(
+                "claude_analytics_cache_ttl_seconds must be positive."
+            )
+        self._analytics_cache_ttl_seconds = ttl
+        self._analytics_task_kind = (analytics_task_kind or "claude").strip() or "claude"
         self._sdk = AsyncAnthropic(
             api_key=self._api_key,
             base_url=self._settings.claude_47_base_url.rstrip("/"),
@@ -140,6 +188,10 @@ class Claude47VisionClient:
     @property
     def model_name(self) -> str:
         return self._model
+
+    @property
+    def uses_adaptive_thinking(self) -> bool:
+        return self._adaptive
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -417,6 +469,75 @@ class Claude47VisionClient:
         except (ValidationError, ValueError) as exc:
             raise ClaudeUpstreamError(
                 f"Claude competitor deep analysis failed validation: {exc}"
+            ) from exc
+        return result, input_tokens, output_tokens
+
+    async def extract_and_cross_check(
+        self,
+        *,
+        images: tuple[tuple[bytes, str], ...],
+        title: str | None,
+        description: str | None,
+        specs: list[str],
+        marketplace: str | None = None,
+        article: str | None = None,
+        user_id: UUID | None = None,
+        job_id: UUID | None = None,
+    ) -> tuple[ClaudeCrossCheckPayload, int, int]:
+        """Plan §57: Vision OCR claims ↔ listing description dual verification."""
+
+        if not images:
+            raise ClaudeUpstreamError(
+                "At least one competitor image is required for OCR cross-check."
+            )
+        max_images = min(
+            self._settings.claude_47_max_images_per_request,
+            self._settings.zero_hallucination_max_vision_images,
+        )
+        selected = images[:max_images]
+        content: list[dict[str, Any]] = []
+        for image_bytes, mime_type in selected:
+            normalized, media_type = normalize_image_for_claude(
+                image_bytes,
+                media_type=mime_type,
+            )
+            content.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": base64.b64encode(normalized).decode("ascii"),
+                    },
+                }
+            )
+        content.append(
+            {
+                "type": "text",
+                "text": build_cross_check_user_prompt(
+                    title=title,
+                    description=description,
+                    specs=list(specs),
+                    image_count=len(selected),
+                    marketplace=marketplace,
+                    article=article,
+                ),
+            }
+        )
+        payload_json, input_tokens, output_tokens = await self._messages_json(
+            system=cross_check_system_prompt(),
+            content=content,
+            json_schema=ZERO_HALLUCINATION_JSON_SCHEMA,
+            max_tokens=self._settings.claude_47_vision_max_tokens,
+            operation="claude_zero_hallucination_cross_check",
+            user_id=user_id,
+            job_id=job_id,
+        )
+        try:
+            result = ClaudeCrossCheckPayload.model_validate(payload_json)
+        except ValidationError as exc:
+            raise ClaudeUpstreamError(
+                "Claude Zero-Hallucination cross-check JSON failed schema validation."
             ) from exc
         return result, input_tokens, output_tokens
 
@@ -702,6 +823,65 @@ class Claude47VisionClient:
             ) from exc
         return result, input_tokens, output_tokens
 
+    async def suggest_export_fixes(
+        self,
+        *,
+        platform: MarketplacePlatform,
+        title: str,
+        description: str,
+        characteristics: tuple[str, ...],
+        issues: tuple[ValidationIssue, ...],
+        product_category: str | None = None,
+        extras: Mapping[str, Any] | None = None,
+        title_max: int,
+        description_max: int,
+        characteristics_max: int,
+        characteristic_max_length: int,
+        user_id: UUID | None = None,
+        job_id: UUID | None = None,
+    ) -> tuple[ExportFixSuggestion, int, int]:
+        """Plan §59: propose corrected card text after Fail-Safe sandbox errors."""
+
+        if not issues:
+            raise ClaudeUpstreamError("No validation issues provided for export auto-fix.")
+        content: list[dict[str, Any]] = [
+            {
+                "type": "text",
+                "text": build_export_fix_prompt(
+                    platform=platform,
+                    title=title,
+                    description=description,
+                    characteristics=characteristics,
+                    issues=issues,
+                    product_category=product_category,
+                    extras=extras,
+                    title_max=title_max,
+                    description_max=description_max,
+                    characteristics_max=characteristics_max,
+                    characteristic_max_length=characteristic_max_length,
+                ),
+            }
+        ]
+        payload_json, input_tokens, output_tokens = await self._messages_json(
+            system=export_fix_system_prompt(),
+            content=content,
+            json_schema=EXPORT_FIX_JSON_SCHEMA,
+            max_tokens=self._settings.claude_47_reasoning_max_tokens,
+            operation="claude_export_fail_safe_fix",
+            user_id=user_id,
+            job_id=job_id,
+        )
+        try:
+            result = normalize_export_fix_payload(
+                payload_json,
+                model_name=self._model,
+            )
+        except (ValidationError, ValueError) as exc:
+            raise ClaudeUpstreamError(
+                f"Claude export fail-safe fix failed validation: {exc}"
+            ) from exc
+        return result, input_tokens, output_tokens
+
     async def _messages_parse(
         self,
         *,
@@ -716,9 +896,31 @@ class Claude47VisionClient:
     ) -> tuple[Any, int, int]:
         """Prefer official SDK parse; fall back to schema-constrained create.
 
-        Timeouts and connection errors are retried so a slow Anthropic edge
-        never bubbles as an unhandled crash into the API process.
+        Haiku / non-adaptive models skip Opus-only adaptive thinking and use
+        the JSON path. Timeouts and connection errors are retried so a slow
+        Anthropic edge never bubbles as an unhandled crash into the API process.
         """
+
+        if not self._adaptive:
+            payload_json, input_tokens, output_tokens = await self._messages_json(
+                system=system,
+                content=content,
+                json_schema=fallback_schema,
+                max_tokens=max_tokens,
+                operation=operation,
+                user_id=user_id,
+                job_id=job_id,
+            )
+            try:
+                return (
+                    output_format.model_validate(payload_json),
+                    input_tokens,
+                    output_tokens,
+                )
+            except ValidationError as validation_exc:
+                raise ClaudeUpstreamError(
+                    "Claude JSON failed schema validation."
+                ) from validation_exc
 
         attempts = self._settings.claude_47_max_retries + 1
         last_transport: Exception | None = None
@@ -813,30 +1015,64 @@ class Claude47VisionClient:
         user_id: UUID | None,
         job_id: UUID | None,
     ) -> tuple[dict[str, Any], int, int]:
+        cache_key = self._analytics_cache_key(
+            system=system,
+            content=content,
+            json_schema=json_schema,
+            operation=operation,
+        )
+        cached = await self._read_analytics_cache(cache_key)
+        if cached is not None:
+            payload_hit = cached.get("payload")
+            if isinstance(payload_hit, dict):
+                logger.info(
+                    "Claude analytics cache hit operation=%s model=%s",
+                    operation,
+                    self._model,
+                )
+                return payload_hit, 0, 0
+
         headers = {
             "x-api-key": self._api_key,
             "anthropic-version": self._settings.claude_47_api_version,
             "content-type": "application/json",
         }
         beta = self._settings.claude_47_structured_outputs_beta.strip()
-        if beta:
+        if beta and self._adaptive:
             headers["anthropic-beta"] = beta
 
-        # Opus 4.7 rejects temperature/top_p/top_k and token-budget thinking.
-        payload: dict[str, Any] = {
-            "model": self._model,
-            "max_tokens": max_tokens,
-            "thinking": {"type": "adaptive"},
-            "system": harden_system_prompt(system),
-            "messages": [{"role": "user", "content": content}],
-            "output_config": {
-                "effort": self._settings.claude_47_effort,
-                "format": {
-                    "type": "json_schema",
-                    "schema": json_schema,
+        hardened = harden_system_prompt(system)
+        if self._adaptive:
+            # Opus 4.7 rejects temperature/top_p/top_k and token-budget thinking.
+            payload: dict[str, Any] = {
+                "model": self._model,
+                "max_tokens": max_tokens,
+                "thinking": {"type": "adaptive"},
+                "system": hardened,
+                "messages": [{"role": "user", "content": content}],
+                "output_config": {
+                    "effort": self._settings.claude_47_effort,
+                    "format": {
+                        "type": "json_schema",
+                        "schema": json_schema,
+                    },
                 },
-            },
-        }
+            }
+        else:
+            # Claude 3.5 Haiku: classic Messages API + JSON-in-text contract.
+            haiku_system = (
+                f"{hardened}\n\n"
+                "Respond with a single JSON object only (no markdown fences). "
+                "The JSON must match the required schema."
+            )
+            payload = {
+                "model": self._model,
+                "max_tokens": max_tokens,
+                "temperature": self._settings.claude_47_temperature,
+                "system": haiku_system,
+                "messages": [{"role": "user", "content": content}],
+            }
+
         response = await self._post_with_retry(
             endpoint="/v1/messages",
             headers=headers,
@@ -870,7 +1106,78 @@ class Claude47VisionClient:
             job_id=job_id,
             usage=usage if isinstance(usage, dict) else None,
         )
+        await self._write_analytics_cache(
+            cache_key,
+            {
+                "payload": parsed,
+                "model": self._model,
+                "operation": operation,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cache_hit": False,
+            },
+        )
         return parsed, input_tokens, output_tokens
+
+    def _analytics_cache_key(
+        self,
+        *,
+        system: str,
+        content: list[dict[str, Any]],
+        json_schema: dict[str, Any],
+        operation: str,
+    ) -> str | None:
+        if self._analytics_cache is None:
+            return None
+        try:
+            fingerprint = fingerprint_messages_request(
+                model_name=self._model,
+                system=system,
+                content=content,
+                json_schema=json_schema,
+                operation=operation,
+            )
+            return redis_analytics_key(
+                task_kind=self._analytics_task_kind,
+                model_name=self._model,
+                fingerprint=fingerprint,
+            )
+        except (TypeError, ValueError):
+            logger.debug(
+                "Skipped analytics cache key for operation=%s",
+                operation,
+                exc_info=True,
+            )
+            return None
+
+    async def _read_analytics_cache(
+        self, cache_key: str | None
+    ) -> dict[str, Any] | None:
+        if cache_key is None or self._analytics_cache is None:
+            return None
+        try:
+            return await self._analytics_cache.get(cache_key)
+        except Exception:  # noqa: BLE001 — fail-open
+            logger.warning(
+                "Analytics cache read failed key=%s", cache_key, exc_info=True
+            )
+            return None
+
+    async def _write_analytics_cache(
+        self, cache_key: str | None, payload: dict[str, Any]
+    ) -> None:
+        if cache_key is None or self._analytics_cache is None:
+            return
+        try:
+            await self._analytics_cache.set(
+                cache_key,
+                payload,
+                self._analytics_cache_ttl_seconds,
+            )
+        except Exception:  # noqa: BLE001 — fail-open
+            logger.warning(
+                "Analytics cache write failed key=%s", cache_key, exc_info=True
+            )
 
     async def _post_with_retry(
         self,

@@ -9,6 +9,7 @@ from app.models.bulk_generation import (
     UserPushNotification,
 )
 from app.models.brand_lora import BrandLoraProfile, BrandLoraReference
+from app.models.brand_dna import BrandDNA
 from app.models.ai_strategy import AiStrategyJob
 from app.models.claude_reasoning import ClaudeReasoningJob, ClaudeReasoningOutbox
 from app.models.pain_analysis import PainAnalysisJob
@@ -43,6 +44,7 @@ __all__ = [
     "BulkGenerationItem",
     "BrandLoraProfile",
     "BrandLoraReference",
+    "BrandDNA",
     "AiStrategyJob",
     "ClaudeReasoningJob",
     "ClaudeReasoningOutbox",

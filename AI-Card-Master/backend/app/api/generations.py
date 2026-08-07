@@ -29,6 +29,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.captcha import enforce_generation_behavioral_limit
 from app.api.payments import get_current_user
 from app.core.config import get_settings
+from app.domain.brand_dna import (
+    apply_brand_dna_to_prompt,
+    apply_brand_dna_to_style,
+)
 from app.domain.brand_lora import (
     apply_brand_filter_to_prompt,
     apply_brand_filter_to_style,
@@ -36,6 +40,7 @@ from app.domain.brand_lora import (
 from app.domain.generation import GenerationJobStatus, MarketplaceTextContent, SlideStatus
 from app.domain.generation import GenerationEngineMode, GenerationPostProcessingMode
 from app.domain.source_retention import SourceRetentionStatus
+from app.infrastructure.brand_dna_factory import build_brand_dna_service
 from app.infrastructure.brand_lora_factory import build_brand_lora_service
 from app.infrastructure.generation_history_cache import (
     get_cached_generation_history,
@@ -75,7 +80,11 @@ async def _slide_tasks_with_brand_lora(
     user_id: UUID,
     slide_tasks: tuple[SeriesTask, ...] | list[SeriesTask],
 ) -> tuple[SeriesTask, ...]:
-    """Auto-inject the user's active Custom Brand LoRA into every slide."""
+    """Auto-inject active Custom Brand LoRA + BrandDNA into every slide.
+
+    Brand LoRA (trained brandbook filter) and BrandDNA (learned from successful
+    generations) are composed so Midjourney/SD prompts stay brand-consistent.
+    """
 
     try:
         brand_filter = await build_brand_lora_service(db_session).get_active_filter(
@@ -88,18 +97,40 @@ async def _slide_tasks_with_brand_lora(
             exc_info=True,
         )
         brand_filter = None
-    if brand_filter is None:
-        return tuple(slide_tasks)
-    return tuple(
-        SeriesTask(
-            slide_key=task.slide_key,
-            selected_style=apply_brand_filter_to_style(
-                task.selected_style, brand_filter
-            ),
-            user_text=apply_brand_filter_to_prompt(task.user_text, brand_filter),
+
+    try:
+        brand_dna = await build_brand_dna_service(db_session).get_active_context(
+            user_id=user_id
         )
-        for task in slide_tasks
-    )
+    except Exception:
+        logger.warning(
+            "Active BrandDNA lookup failed user_id=%s; continuing without DNA",
+            user_id,
+            exc_info=True,
+        )
+        brand_dna = None
+
+    if brand_filter is None and brand_dna is None:
+        return tuple(slide_tasks)
+
+    patched: list[SeriesTask] = []
+    for task in slide_tasks:
+        style = task.selected_style
+        text = task.user_text
+        if brand_filter is not None:
+            style = apply_brand_filter_to_style(style, brand_filter)
+            text = apply_brand_filter_to_prompt(text, brand_filter)
+        if brand_dna is not None:
+            style = apply_brand_dna_to_style(style, brand_dna)
+            text = apply_brand_dna_to_prompt(text, brand_dna)
+        patched.append(
+            SeriesTask(
+                slide_key=task.slide_key,
+                selected_style=style,
+                user_text=text,
+            )
+        )
+    return tuple(patched)
 
 
 def _archive_retention() -> timedelta:

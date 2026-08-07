@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Sequence
+from typing import Any, Sequence
 from uuid import UUID
 
 from app.application.ports.eye_of_god import (
@@ -19,6 +19,7 @@ from app.application.ports.eye_of_god import (
     EyeOfGodVisionPort,
     SkuCardImagePort,
 )
+from app.application.ports.claude_reasoning import ClaudeStageCachePort
 from app.application.ports.stock_parser import StockParserPersistencePort
 from app.domain.eye_of_god import (
     EyeOfGodJobStatus,
@@ -29,6 +30,7 @@ from app.domain.eye_of_god import (
     build_money_confirmed_trigger_config,
     detect_sales_spike,
     dump_money_trigger_config,
+    redis_eye_of_god_key,
 )
 from app.domain.stock_parser import ParserMarketplace, SkuItemView
 from app.domain.stock_sales import (
@@ -39,6 +41,14 @@ from app.domain.stock_sales import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class _NullStageCache:
+    async def get(self, key: str) -> dict[str, Any] | None:
+        return None
+
+    async def set(self, key: str, payload: dict[str, Any], ttl_seconds: int) -> None:
+        return None
 
 
 class EyeOfGodBridgeError(Exception):
@@ -74,11 +84,17 @@ class EyeOfGodBridgeService:
         images: SkuCardImagePort | None = None,
         trigger: EyeOfGodTriggerPort | None = None,
         max_images: int = 3,
+        stage_cache: ClaudeStageCachePort | None = None,
+        redis_stage_ttl_seconds: int = 86400,
     ) -> None:
         if not model_name.strip():
             raise EyeOfGodValidationError("model_name must not be empty.")
         if max_images < 1:
             raise EyeOfGodValidationError("max_images must be >= 1.")
+        if redis_stage_ttl_seconds <= 0:
+            raise EyeOfGodValidationError(
+                "redis_stage_ttl_seconds must be positive."
+            )
         self._persistence = persistence
         self._stock_persistence = stock_persistence
         self._spike_config = spike_config or SalesSpikeConfig()
@@ -90,6 +106,8 @@ class EyeOfGodBridgeService:
         self._images = images
         self._trigger = trigger
         self._max_images = max_images
+        self._stage_cache = stage_cache or _NullStageCache()
+        self._redis_stage_ttl_seconds = redis_stage_ttl_seconds
 
     def _require_vision(self) -> EyeOfGodVisionPort:
         if self._vision is None:
@@ -256,19 +274,29 @@ class EyeOfGodBridgeService:
             image_tuples = tuple((blob, mime) for blob, mime, _url in fetched)
             analyzed_urls = [url for _b, _m, url in fetched]
 
-            result, in_tok, out_tok = await vision.analyze_money_confirmed_trigger(
-                sku=job.article,
-                title=job.title,
-                marketplace=job.marketplace,
-                growth_ratio=spike.growth_ratio,
-                recent_avg_daily_sales=spike.recent_avg_daily_sales,
-                baseline_avg_daily_sales=spike.baseline_avg_daily_sales,
-                recent_window_days=spike.recent_window_days,
-                images=image_tuples,
-                job_id=job_id,
-            )
-            if not isinstance(result, MoneyConfirmedVisionResult):
-                result = MoneyConfirmedVisionResult.model_validate(result)
+            cached_vision = await self._read_stage_cache(job_id, "vision")
+            if cached_vision is not None:
+                result = MoneyConfirmedVisionResult.model_validate(cached_vision)
+                in_tok, out_tok = 0, 0
+            else:
+                result, in_tok, out_tok = await vision.analyze_money_confirmed_trigger(
+                    sku=job.article,
+                    title=job.title,
+                    marketplace=job.marketplace,
+                    growth_ratio=spike.growth_ratio,
+                    recent_avg_daily_sales=spike.recent_avg_daily_sales,
+                    baseline_avg_daily_sales=spike.baseline_avg_daily_sales,
+                    recent_window_days=spike.recent_window_days,
+                    images=image_tuples,
+                    job_id=job_id,
+                )
+                if not isinstance(result, MoneyConfirmedVisionResult):
+                    result = MoneyConfirmedVisionResult.model_validate(result)
+                await self._write_stage_cache(
+                    job_id,
+                    "vision",
+                    result.model_dump(mode="json"),
+                )
 
             config = build_money_confirmed_trigger_config(
                 spike=spike,
@@ -276,6 +304,11 @@ class EyeOfGodBridgeService:
                 model_name=vision.model_name or self._model_name,
                 analyzed_at=datetime.now(UTC),
                 image_urls_analyzed=analyzed_urls,
+            )
+            await self._write_stage_cache(
+                job_id,
+                "money_trigger",
+                dump_money_trigger_config(config),
             )
             return await self._persistence.save_money_trigger_result(
                 job_id=job_id,
@@ -324,6 +357,37 @@ class EyeOfGodBridgeService:
             config=self._sales_config,
             prefer_hour_utc=self._prefer_hour_utc,
         )
+
+    async def _write_stage_cache(
+        self, job_id: UUID, stage: str, payload: dict[str, Any]
+    ) -> None:
+        try:
+            await self._stage_cache.set(
+                redis_eye_of_god_key(job_id, stage),
+                payload,
+                self._redis_stage_ttl_seconds,
+            )
+        except Exception:  # noqa: BLE001 — fail-open
+            logger.warning(
+                "Skipped eye-of-god cache job_id=%s stage=%s",
+                job_id,
+                stage,
+                exc_info=True,
+            )
+
+    async def _read_stage_cache(
+        self, job_id: UUID, stage: str
+    ) -> dict[str, Any] | None:
+        try:
+            return await self._stage_cache.get(redis_eye_of_god_key(job_id, stage))
+        except Exception:  # noqa: BLE001 — fail-open
+            logger.warning(
+                "Eye-of-god cache read failed job_id=%s stage=%s",
+                job_id,
+                stage,
+                exc_info=True,
+            )
+            return None
 
 
 class CeleryEyeOfGodTrigger:

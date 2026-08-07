@@ -200,6 +200,8 @@ class KillerRecommendation(StrictDomainModel):
     user_current: str | None = Field(default=None, max_length=500)
     leader_reference: str | None = Field(default=None, max_length=500)
     expected_impact: str = Field(min_length=1, max_length=300)
+    # Plan §57 — достоверность совета 0–100%.
+    advice_reliability_pct: float = Field(default=70.0, ge=0.0, le=100.0)
 
 
 class ClaudeStrategyEnrichment(StrictDomainModel):
@@ -243,6 +245,12 @@ class StrategyPlanResult(StrictDomainModel):
     executive_summary: str = Field(min_length=1, max_length=800)
     model_name: str = Field(min_length=1, max_length=128)
     confidence_score: float = Field(ge=0.0, le=1.0)
+    advice_reliability_pct: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=100.0,
+        description="Aggregate advice reliability 0–100% (plan §57).",
+    )
     notes: list[str] = Field(default_factory=list, max_length=40)
 
 
@@ -583,6 +591,8 @@ def compare_user_vs_leader(
 
     recommendations: list[KillerRecommendation] = []
     for step_number, delta in enumerate(truncated, start=1):
+        # Deterministic reliability from gap_score (0–100 already).
+        reliability = round(min(100.0, max(35.0, delta.gap_score)), 1)
         recommendations.append(
             KillerRecommendation(
                 step_number=step_number,
@@ -601,6 +611,7 @@ def compare_user_vs_leader(
                     f"Ожидаемый вклад в CTR: ≈{delta.attributed_ctr_lift_pct:.0f}% "
                     f"от преимущества лидера."
                 ),
+                advice_reliability_pct=reliability,
             )
         )
 
@@ -684,6 +695,10 @@ def build_plan_result(
                     user_current=rec.user_current,
                     leader_reference=rec.leader_reference,
                     expected_impact=enriched.expected_impact,
+                    advice_reliability_pct=round(
+                        min(100.0, max(0.0, enriched.confidence * 100.0)),
+                        1,
+                    ),
                 )
             )
         else:
@@ -730,6 +745,7 @@ def build_plan_result(
         executive_summary=summary,
         model_name=model_name.strip() or "deterministic",
         confidence_score=round(confidence, 4),
+        advice_reliability_pct=round(min(100.0, max(0.0, confidence * 100.0)), 1),
         notes=notes[:40],
     )
 

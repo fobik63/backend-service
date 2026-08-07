@@ -170,8 +170,9 @@ class AnalyzeLinksJobResponse(StrictAPIModel):
         default=None,
         description=(
             "Claude deep analysis: competitor_weaknesses, conversion_triggers, "
-            "actionable_blueprint per card; insufficient_data when evidence is "
-            "too thin to invent weaknesses."
+            "actionable_blueprint per card; cross_check (OCR↔description, "
+            "verdict «Аномалия» on contradictions) + advice_reliability_pct 0–100%; "
+            "insufficient_data when evidence is too thin to invent weaknesses."
         ),
     )
     model_name: str | None = None

@@ -67,12 +67,28 @@ async def _build_service(
         text_provider = get_marketplace_text_service()
     except MarketplaceTextConfigurationError:
         logger.warning("Marketplace text generation is disabled: LLM is not configured.")
+
+    async def _load_brand_dna_claude_context(user_id: UUID) -> str | None:
+        from app.infrastructure.brand_dna_factory import build_brand_dna_service
+
+        dna = await build_brand_dna_service(repository._session).get_active_context(
+            user_id=user_id
+        )
+        return dna.claude_context if dna is not None else None
+
+    def _on_generation_completed(user_id: UUID) -> None:
+        from app.workers.brand_dna_tasks import enqueue_brand_dna_refresh
+
+        enqueue_brand_dna_refresh(user_id)
+
     return GenerationApplicationService(
         repository=repository,
         storage=get_s3_storage(),
         async_providers=await get_healthy_async_midjourney_providers(),
         immediate_provider=get_stable_diffusion_adapter(),
         text_provider=text_provider,
+        brand_dna_claude_context_loader=_load_brand_dna_claude_context,
+        on_generation_completed=_on_generation_completed,
     )
 
 

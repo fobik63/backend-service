@@ -6,13 +6,13 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from app.domain.export import (
+    ExportCardSource,
     ExportResultView,
     ExportStatus,
     ImageAssetMeta,
     MarketplaceCredentialView,
     MarketplacePlatform,
 )
-from app.domain.generation import MarketplaceTextContent
 
 
 class ExportPersistencePort(Protocol):
@@ -41,9 +41,9 @@ class ExportPersistencePort(Protocol):
 
     async def get_completed_export_source(
         self, *, user_id: UUID, generation_job_id: UUID
-    ) -> tuple[MarketplaceTextContent, tuple[str, ...]] | None:
+    ) -> ExportCardSource | None:
         """
-        Return marketplace text and ordered slide object keys for a completed job.
+        Return marketplace text, slide keys, and product_category for a completed job.
 
         None when the job is missing, not owned, incomplete, or lacks text/images.
         """

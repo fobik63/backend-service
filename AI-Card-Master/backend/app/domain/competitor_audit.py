@@ -28,6 +28,11 @@ from pydantic import (
     model_validator,
 )
 
+from app.domain.zero_hallucination import (
+    ZeroHallucinationCrossCheck,
+    reliability_pct_from_confidence,
+)
+
 
 MAX_LINKS_PER_REQUEST = 3
 MAX_REVIEWS_PER_CARD = 50
@@ -308,6 +313,15 @@ class CompetitorCardDeepAnalysis(PersistedDomainModel):
     market_gap: MarketGapVector = Field(default_factory=MarketGapVector)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     reasoning_trace: str = Field(default="", max_length=4000)
+    # Plan §57 — attached post-Claude by Zero-Hallucination Cross-Check (not in
+    # COMPETITOR_DEEP_ANALYSIS_JSON_SCHEMA — Claude must not invent these).
+    cross_check: ZeroHallucinationCrossCheck | None = None
+    advice_reliability_pct: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=100.0,
+        description="Достоверность совета 0–100% after OCR↔description dual-check.",
+    )
 
     @field_validator(
         "competitor_weaknesses",
@@ -566,6 +580,8 @@ def build_insufficient_card_analysis(
         market_gap=MarketGapVector(),
         confidence=0.0,
         reasoning_trace=reason[:4000],
+        cross_check=None,
+        advice_reliability_pct=0.0,
     )
 
 
@@ -612,6 +628,29 @@ def normalize_deep_analysis_card(
                 raise ValueError(f"actionable_blueprint.{key} is required.")
 
     return CompetitorCardDeepAnalysis.model_validate(merged)
+
+
+def attach_cross_check_to_card(
+    card: CompetitorCardDeepAnalysis,
+    *,
+    cross_check: ZeroHallucinationCrossCheck | None,
+) -> CompetitorCardDeepAnalysis:
+    """Merge dual-check verdict + advice reliability % onto a deep-analysis card."""
+
+    if cross_check is None:
+        reliability = reliability_pct_from_confidence(card.confidence)
+        return card.model_copy(
+            update={
+                "cross_check": None,
+                "advice_reliability_pct": reliability,
+            }
+        )
+    return card.model_copy(
+        update={
+            "cross_check": cross_check,
+            "advice_reliability_pct": cross_check.advice_reliability_pct,
+        }
+    )
 
 
 def dump_deep_analysis_bundle(bundle: CompetitorDeepAnalysisBundle) -> dict[str, Any]:
