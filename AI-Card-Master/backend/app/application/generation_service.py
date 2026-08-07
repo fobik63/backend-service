@@ -450,6 +450,15 @@ class GenerationApplicationService:
             for provider in self._async_providers:
                 if provider.name in excluded_providers:
                     continue
+                if not await self._ai_engine.provider_health.allow_primary(
+                    provider.name
+                ):
+                    logger.info(
+                        "Skipping provider due to open circuit provider=%s slide=%s",
+                        provider.name,
+                        slide.id,
+                    )
+                    continue
                 attempt = None
                 try:
                     reply_ref = create_reply_ref(

@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -22,6 +23,10 @@ from app.domain.smart_variant import (
     VariantSyncView,
     map_job_status_to_item,
     resolve_sync_terminal_status,
+)
+from app.infrastructure.persistence.batching import (
+    DEFAULT_UPSERT_BATCH_SIZE,
+    chunk_rows,
 )
 from app.models.generation_job import GenerationJob
 from app.models.smart_variant import SmartVariantItem, SmartVariantSync
@@ -144,19 +149,33 @@ class SmartVariantRepository:
         )
         self._session.add(row)
         await self._session.flush()
-        for position, color in enumerate(colors, start=1):
-            self._session.add(
-                SmartVariantItem(
-                    sync_id=row.id,
-                    position=position,
-                    color_name=color.name,
-                    color_hex=color.normalize_hex(),
-                    color_slug=color.slug,
-                    status=VariantItemStatus.PENDING.value,
-                    created_at=now,
-                    updated_at=now,
-                )
+        payloads: list[dict] = [
+            {
+                "id": uuid4(),
+                "sync_id": row.id,
+                "position": position,
+                "color_name": color.name,
+                "color_hex": color.normalize_hex(),
+                "color_slug": color.slug,
+                "status": VariantItemStatus.PENDING.value,
+                "created_at": now,
+                "updated_at": now,
+            }
+            for position, color in enumerate(colors, start=1)
+        ]
+        for batch_rows in chunk_rows(payloads, DEFAULT_UPSERT_BATCH_SIZE):
+            insert_stmt = pg_insert(SmartVariantItem).values(batch_rows)
+            stmt = insert_stmt.on_conflict_do_update(
+                index_elements=["sync_id", "position"],
+                set_={
+                    "color_name": insert_stmt.excluded.color_name,
+                    "color_hex": insert_stmt.excluded.color_hex,
+                    "color_slug": insert_stmt.excluded.color_slug,
+                    "status": insert_stmt.excluded.status,
+                    "updated_at": insert_stmt.excluded.updated_at,
+                },
             )
+            await self._session.execute(stmt)
         await self._session.commit()
         refreshed = await self._session.scalar(
             select(SmartVariantSync)

@@ -18,13 +18,19 @@ class FaceFixAdapter:
 
 
 class ProviderHealthAdapter:
-    """Delegates to Midjourney pool health counters."""
+    """Delegates to the shared AI Circuit Breaker (Redis-backed)."""
 
     async def note_success(self, provider_name: str) -> None:
         await _ai_engine.note_provider_success(provider_name)
 
     async def note_failure(self, provider_name: str) -> None:
         await _ai_engine.note_provider_failure(provider_name)
+
+    async def allow_primary(self, provider_name: str) -> bool:
+        from app.infrastructure.circuit_breaker import get_circuit_breaker
+
+        decision = await get_circuit_breaker().before_call(provider_name)
+        return not decision.use_fallback
 
 
 class DefaultAIEngineFacade:

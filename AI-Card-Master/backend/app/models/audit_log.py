@@ -23,7 +23,6 @@ class AuditLog(Base):
         Index("ix_audit_logs_event_type_created_at", "event_type", "created_at"),
         Index("ix_audit_logs_ip_created_at", "ip", "created_at"),
         Index("ix_audit_logs_request_id", "request_id"),
-        Index("ix_audit_logs_created_at", "created_at"),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -69,6 +68,7 @@ class AuditLog(Base):
         DateTime(timezone=True),
         nullable=False,
         server_default=text("CURRENT_TIMESTAMP"),
+        index=True,
     )
 
 
@@ -80,7 +80,6 @@ class AuditLogArchive(Base):
         Index("ix_audit_log_archives_user_id_created_at", "user_id", "created_at"),
         Index("ix_audit_log_archives_event_type_created_at", "event_type", "created_at"),
         Index("ix_audit_log_archives_request_id", "request_id"),
-        Index("ix_audit_log_archives_created_at", "created_at"),
         Index("ix_audit_log_archives_archived_at", "archived_at"),
     )
 
@@ -88,9 +87,13 @@ class AuditLogArchive(Base):
         PGUUID(as_uuid=True),
         primary_key=True,
     )
-    user_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
-    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
-    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    user_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        nullable=True,
+        index=True,
+    )
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
     ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     visitor_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     telegram_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
@@ -109,6 +112,7 @@ class AuditLogArchive(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
+        index=True,
     )
     archived_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

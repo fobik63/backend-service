@@ -77,7 +77,11 @@ from app.services.s3_storage import (
     close_s3_storage,
     get_s3_storage,
 )
-from app.services.telegram_alerts import notify_critical_500
+from app.infrastructure.observability.sentry import (
+    capture_unhandled_exception,
+    init_sentry,
+)
+from app.services.telegram_alerts import notify_critical_500, resolve_request_user_id
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIASGIMiddleware
 
@@ -135,6 +139,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
 
 
 settings = get_settings()
+init_sentry(settings)
 _docs_enabled = settings.app_env != "production"
 
 app = FastAPI(
@@ -243,9 +248,14 @@ async def request_validation_exception_handler(
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    """Catch unexpected exceptions and prevent trace leaks to clients."""
+    """Catch unexpected exceptions and prevent trace leaks to clients.
+
+    Forwards the event to Sentry (PII-scrubbed) and sends a short Telegram
+    admin alert with file/line/endpoint/user_id via httpx.
+    """
 
     logger.exception("Unhandled server error: %s", exc)
+    capture_unhandled_exception(exc, user_id=resolve_request_user_id(request))
     await notify_critical_500(request, exc)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -295,6 +305,7 @@ async def health() -> HealthResponse:
 
 
 @app.get("/health/live", response_model=HealthResponse, tags=["system"])
+@app.get("/healthz", response_model=HealthResponse, tags=["system"])
 @limiter.exempt
 async def liveness() -> HealthResponse:
     """Process-only liveness; orchestration should restart on failure."""

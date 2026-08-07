@@ -50,23 +50,17 @@ async def test_format_http_alert_includes_error_type_file_line(
         request = SimpleNamespace(
             method="GET",
             url=SimpleNamespace(path="/api/v1/generations/history"),
-            state=SimpleNamespace(client_ip="1.2.3.4"),
-        )
-        monkeypatch.setattr(
-            telegram_alerts,
-            "get_settings",
-            lambda: SimpleNamespace(
-                cloudflare_trust_headers=False,
-                trusted_proxy_cidrs="",
-            ),
+            state=SimpleNamespace(client_ip="1.2.3.4", user_id="user-42"),
+            headers={},
         )
         message = telegram_alerts._format_http_alert(request, exc)  # type: ignore[arg-type]
 
-    assert "error_type: RuntimeError" in message
     assert "file:" in message
     assert "line:" in message
-    assert "function: _boom" in message
-    assert "path: /api/v1/generations/history" in message
+    assert "endpoint: GET /api/v1/generations/history" in message
+    assert "user_id: user-42" in message
+    assert "RuntimeError: db down" in message
+    assert "Traceback" not in message
 
 
 @pytest.mark.asyncio

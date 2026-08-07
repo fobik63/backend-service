@@ -56,7 +56,7 @@ class SuspiciousActivityMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         path = request.url.path
-        if path in {"/", "/health", "/health/live", "/health/ready"}:
+        if path in {"/", "/health", "/health/live", "/healthz", "/health/ready"}:
             return await call_next(request)
         if path.startswith("/docs") or path.startswith("/redoc") or path == "/openapi.json":
             return await call_next(request)

@@ -41,6 +41,10 @@ import httpx
 from pydantic import HttpUrl, TypeAdapter
 
 from app.core.config import get_settings
+from app.domain.circuit_breaker import (
+    CIRCUIT_STABLE_DIFFUSION,
+    is_trip_worthy_status,
+)
 from app.domain.generation import (
     GenerationEngineMode,
     ProviderSubmission,
@@ -392,6 +396,18 @@ class StableDiffusionService:
     ) -> httpx.Response:
         """Send request with exponential backoff retry for transient errors."""
 
+        from app.infrastructure.circuit_breaker import get_circuit_breaker
+
+        breaker = get_circuit_breaker()
+        decision = await breaker.before_call(CIRCUIT_STABLE_DIFFUSION)
+        if decision.use_fallback:
+            # SD is the last-resort image engine; OPEN means fail fast without
+            # hammering Stability while Midjourney pool recovery continues.
+            raise AIEngineUpstreamError(
+                "Stable Diffusion circuit is open; provider temporarily unavailable."
+            )
+        track_primary = not decision.use_fallback
+
         max_attempts = self._config.max_retries + 1
         last_error: Exception | None = None
 
@@ -423,6 +439,8 @@ class StableDiffusionService:
                     continue
 
                 response.raise_for_status()
+                if track_primary:
+                    await breaker.record_success(CIRCUIT_STABLE_DIFFUSION)
                 return response
 
             except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as exc:
@@ -435,6 +453,11 @@ class StableDiffusionService:
                 if status_code in TRANSIENT_HTTP_CODES and attempt < max_attempts:
                     await asyncio.sleep(self._compute_retry_delay(attempt, exc.response))
                     continue
+                if track_primary:
+                    await breaker.record_failure(
+                        CIRCUIT_STABLE_DIFFUSION,
+                        trip_worthy=is_trip_worthy_status(status_code),
+                    )
                 error_message = _extract_error_message(exc.response)
                 if status_code == 429:
                     raise AIEngineRateLimitError(
@@ -449,6 +472,11 @@ class StableDiffusionService:
                     f"{error_message}"
                 ) from exc
 
+        if track_primary:
+            await breaker.record_failure(
+                CIRCUIT_STABLE_DIFFUSION,
+                trip_worthy=True,
+            )
         raise AIEngineUpstreamError(
             "Stable Diffusion API is temporarily unavailable after retries."
         ) from last_error

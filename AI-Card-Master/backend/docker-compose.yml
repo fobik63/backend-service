@@ -9,8 +9,8 @@
 #   python deploy/autoscale.py
 #   bash deploy/rollback.sh
 #
-# Postgres/Redis are internal-only (no host port publish). Attach a
-# docker-compose.override.yml locally if you need host-side 5432/6379.
+# Postgres/Redis publish only on loopback (127.0.0.1) — not on the public interface.
+# Scaled/prod overlays (deploy/docker-compose.scale.yml) reset these ports.
 
 services:
   postgres:
@@ -20,6 +20,8 @@ services:
       POSTGRES_DB: ai_card_master
       POSTGRES_USER: ai_card
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+    ports:
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -42,6 +44,8 @@ services:
         "--maxmemory-policy",
         "volatile-lru",
       ]
+    ports:
+      - "127.0.0.1:6379:6379"
     volumes:
       - redisdata:/data
     healthcheck:
@@ -101,6 +105,12 @@ services:
       - "8000:8000"
     volumes:
       - uploads:/app/uploads
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
     command:
       [
         "gunicorn",

@@ -19,8 +19,17 @@ from anthropic import (
 )
 from pydantic import BaseModel, ValidationError
 
+from app.application.ports.circuit_breaker import CircuitBreakerPort
 from app.core.config import Settings, get_settings
 from app.core.prompt_safety import harden_system_prompt
+from app.domain.circuit_breaker import (
+    CIRCUIT_ANTHROPIC,
+    CircuitCallDecision,
+    CircuitState,
+    is_trip_worthy_status,
+    resolve_base_url_for_circuit,
+    resolve_model_for_circuit,
+)
 from app.domain.ab_test import (
     AB_HYPOTHESES_JSON_SCHEMA,
     AbProductBrief,
@@ -149,6 +158,7 @@ class Claude47VisionClient:
         analytics_cache: Any | None = None,
         analytics_cache_ttl_seconds: int | None = None,
         analytics_task_kind: str | None = None,
+        circuit_breaker: CircuitBreakerPort | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         api_key = self._settings.claude_47_api_key
@@ -177,13 +187,34 @@ class Claude47VisionClient:
             )
         self._analytics_cache_ttl_seconds = ttl
         self._analytics_task_kind = (analytics_task_kind or "claude").strip() or "claude"
-        # Single HTTP transport: official AsyncAnthropic SDK (no parallel httpx pool).
+        self._circuit_name = CIRCUIT_ANTHROPIC
+        if circuit_breaker is not None:
+            self._circuit_breaker: CircuitBreakerPort | None = circuit_breaker
+        else:
+            from app.infrastructure.circuit_breaker import get_circuit_breaker
+
+            self._circuit_breaker = get_circuit_breaker()
+        primary_base = self._settings.claude_47_base_url.rstrip("/")
+        # Official AsyncAnthropic SDK transport (retries owned by this client).
         self._sdk = AsyncAnthropic(
             api_key=self._api_key,
-            base_url=self._settings.claude_47_base_url.rstrip("/"),
+            base_url=primary_base,
             timeout=self._settings.claude_47_timeout_seconds,
             max_retries=0,
         )
+        fallback_base = resolve_base_url_for_circuit(
+            primary_base_url=primary_base,
+            fallback_base_url=self._settings.claude_fallback_base_url,
+            use_fallback=True,
+        )
+        self._fallback_sdk: AsyncAnthropic | None = None
+        if fallback_base and fallback_base != primary_base:
+            self._fallback_sdk = AsyncAnthropic(
+                api_key=self._api_key,
+                base_url=fallback_base,
+                timeout=self._settings.claude_47_timeout_seconds,
+                max_retries=0,
+            )
 
     @property
     def model_name(self) -> str:
@@ -195,6 +226,47 @@ class Claude47VisionClient:
 
     async def aclose(self) -> None:
         await self._sdk.close()
+        if self._fallback_sdk is not None:
+            await self._fallback_sdk.close()
+
+    async def _circuit_decision(self) -> CircuitCallDecision:
+        """Ask the breaker whether to hit primary Anthropic or silent fallback."""
+
+        if self._circuit_breaker is None:
+            return CircuitCallDecision(
+                state=CircuitState.CLOSED,
+                use_fallback=False,
+                is_probe=False,
+            )
+        return await self._circuit_breaker.before_call(self._circuit_name)
+
+    def _sdk_for_decision(self, decision: CircuitCallDecision) -> AsyncAnthropic:
+        if decision.use_fallback and self._fallback_sdk is not None:
+            return self._fallback_sdk
+        return self._sdk
+
+    def _fallback_model_name(self) -> str:
+        return (
+            self._settings.claude_35_haiku_model.strip()
+            or self._model
+        )
+
+    async def _record_circuit_success(self, *, track_primary: bool) -> None:
+        if track_primary and self._circuit_breaker is not None:
+            await self._circuit_breaker.record_success(self._circuit_name)
+
+    async def _record_circuit_failure(
+        self,
+        exc: BaseException,
+        *,
+        track_primary: bool,
+    ) -> None:
+        if not track_primary or self._circuit_breaker is None:
+            return
+        await self._circuit_breaker.record_failure(
+            self._circuit_name,
+            trip_worthy=_is_trip_worthy_claude_exc(exc),
+        )
 
     async def analyze_visual_triggers(
         self,
@@ -852,11 +924,22 @@ class Claude47VisionClient:
         """Prefer official SDK parse; fall back to schema-constrained create.
 
         Haiku / non-adaptive models skip Opus-only adaptive thinking and use
-        the JSON path. Timeouts and connection errors are retried so a slow
-        Anthropic edge never bubbles as an unhandled crash into the API process.
+        the JSON path. When the Anthropic circuit is OPEN (or a non-probe
+        HALF_OPEN), silently route to Haiku / alternate proxy via JSON path.
         """
 
-        if not self._adaptive:
+        decision = await self._circuit_decision()
+        if (not self._adaptive) or decision.use_fallback:
+            model_override = (
+                self._fallback_model_name() if decision.use_fallback else None
+            )
+            if decision.use_fallback:
+                logger.info(
+                    "Claude circuit %s → JSON fallback model=%s operation=%s",
+                    decision.state.value,
+                    model_override,
+                    operation,
+                )
             payload_json, input_tokens, output_tokens = await self._messages_json(
                 system=system,
                 content=content,
@@ -865,6 +948,8 @@ class Claude47VisionClient:
                 operation=operation,
                 user_id=user_id,
                 job_id=job_id,
+                model_override=model_override,
+                circuit_decision=decision,
             )
             try:
                 return (
@@ -877,12 +962,14 @@ class Claude47VisionClient:
                     "Claude JSON failed schema validation."
                 ) from validation_exc
 
+        track_primary = not decision.use_fallback
+        sdk = self._sdk_for_decision(decision)
         attempts = self._settings.claude_47_max_retries + 1
         last_transport: Exception | None = None
         for attempt in range(1, attempts + 1):
             started = time.perf_counter()
             try:
-                response = await self._sdk.messages.parse(
+                response = await sdk.messages.parse(
                     model=self._model,
                     max_tokens=max_tokens,
                     system=_system_blocks_with_cache(harden_system_prompt(system)),
@@ -894,6 +981,9 @@ class Claude47VisionClient:
             except (APITimeoutError, APIConnectionError) as exc:
                 last_transport = exc
                 if attempt >= attempts:
+                    await self._record_circuit_failure(
+                        exc, track_primary=track_primary
+                    )
                     await self._record_usage(
                         operation=operation,
                         input_tokens=0,
@@ -927,6 +1017,7 @@ class Claude47VisionClient:
                         operation=operation,
                         user_id=user_id,
                         job_id=job_id,
+                        circuit_decision=decision,
                     )
                     try:
                         return (
@@ -938,6 +1029,9 @@ class Claude47VisionClient:
                         raise ClaudeUpstreamError(
                             "Claude JSON failed schema validation."
                         ) from validation_exc
+                await self._record_circuit_failure(
+                    exc, track_primary=track_primary
+                )
                 await self._record_usage(
                     operation=operation,
                     input_tokens=0,
@@ -952,6 +1046,9 @@ class Claude47VisionClient:
                     f"Claude API error {exc.status_code}: {str(exc)[:500]}"
                 ) from exc
             except Exception as exc:  # noqa: BLE001 — map unknown SDK failures
+                await self._record_circuit_failure(
+                    exc, track_primary=track_primary
+                )
                 await self._record_usage(
                     operation=operation,
                     input_tokens=0,
@@ -967,6 +1064,10 @@ class Claude47VisionClient:
                 ) from exc
 
             if response.parsed_output is None:
+                await self._record_circuit_failure(
+                    ClaudeUpstreamError("empty parse"),
+                    track_primary=track_primary,
+                )
                 await self._record_usage(
                     operation=operation,
                     input_tokens=0,
@@ -996,8 +1097,13 @@ class Claude47VisionClient:
                 duration_ms=int((time.perf_counter() - started) * 1000),
                 status="Success",
             )
+            await self._record_circuit_success(track_primary=track_primary)
             return response.parsed_output, input_tokens, output_tokens
 
+        await self._record_circuit_failure(
+            last_transport or ClaudeUpstreamError("retries exhausted"),
+            track_primary=track_primary,
+        )
         raise ClaudeUpstreamError(
             "Claude request failed after retries."
         ) from last_transport
@@ -1013,7 +1119,12 @@ class Claude47VisionClient:
         user_id: UUID | None,
         job_id: UUID | None,
         model_override: str | None = None,
+        circuit_decision: CircuitCallDecision | None = None,
     ) -> tuple[dict[str, Any], int, int]:
+        decision = circuit_decision or await self._circuit_decision()
+        track_primary = not decision.use_fallback
+        sdk = self._sdk_for_decision(decision)
+
         cache_key = self._analytics_cache_key(
             system=system,
             content=content,
@@ -1032,7 +1143,20 @@ class Claude47VisionClient:
                 )
                 return payload_hit, 0, 0
 
-        effective_model = (model_override or self._model).strip() or self._model
+        primary_model = (model_override or self._model).strip() or self._model
+        effective_model = resolve_model_for_circuit(
+            primary_model=primary_model,
+            fallback_model=self._fallback_model_name(),
+            use_fallback=decision.use_fallback,
+        )
+        if decision.use_fallback and effective_model != primary_model:
+            logger.info(
+                "Claude circuit %s → model fallback %s → %s operation=%s",
+                decision.state.value,
+                primary_model,
+                effective_model,
+                operation,
+            )
         adaptive = model_supports_adaptive_thinking(effective_model)
 
         extra_headers: dict[str, str] = {}
@@ -1078,6 +1202,8 @@ class Claude47VisionClient:
         response = await self._messages_create_with_retry(
             create_kwargs=create_kwargs,
             extra_headers=extra_headers or None,
+            sdk=sdk,
+            track_primary=track_primary,
         )
         duration_ms = int((time.perf_counter() - started) * 1000)
         try:
@@ -1222,9 +1348,12 @@ class Claude47VisionClient:
         *,
         create_kwargs: dict[str, Any],
         extra_headers: dict[str, str] | None = None,
+        sdk: AsyncAnthropic | None = None,
+        track_primary: bool = True,
     ) -> Any:
         """Send Messages.create via the sole SDK transport with transient retries."""
 
+        client = sdk or self._sdk
         attempts = self._settings.claude_47_max_retries + 1
         last_error: Exception | None = None
         call_kwargs = dict(create_kwargs)
@@ -1232,7 +1361,9 @@ class Claude47VisionClient:
             call_kwargs["extra_headers"] = extra_headers
         for attempt in range(1, attempts + 1):
             try:
-                return await self._sdk.messages.create(**call_kwargs)
+                result = await client.messages.create(**call_kwargs)
+                await self._record_circuit_success(track_primary=track_primary)
+                return result
             except (APITimeoutError, APIConnectionError) as exc:
                 last_error = exc
                 if attempt >= attempts:
@@ -1247,9 +1378,16 @@ class Claude47VisionClient:
                     retry_after = _retry_after_from_status_error(exc)
                     await asyncio.sleep(self._retry_delay(attempt, retry_after))
                     continue
+                await self._record_circuit_failure(
+                    exc, track_primary=track_primary
+                )
                 raise ClaudeUpstreamError(
                     f"Claude API error {exc.status_code}: {str(exc)[:500]}"
                 ) from exc
+        if last_error is not None:
+            await self._record_circuit_failure(
+                last_error, track_primary=track_primary
+            )
         raise ClaudeUpstreamError(
             "Claude request failed after retries."
         ) from last_error
@@ -1326,6 +1464,24 @@ class Claude47VisionClient:
             task_id=job_id,
             metadata=meta,
         )
+
+
+def _is_trip_worthy_claude_exc(exc: BaseException) -> bool:
+    """Timeouts / transport errors and 429/500/502/503 trip the circuit."""
+
+    if isinstance(exc, (APITimeoutError, APIConnectionError)):
+        return True
+    if isinstance(exc, APIStatusError):
+        return is_trip_worthy_status(exc.status_code)
+    if isinstance(exc, ClaudeUpstreamError):
+        message = str(exc).lower()
+        if "timeout" in message or "after retries" in message:
+            return True
+        for code in (429, 500, 502, 503):
+            if f"error {code}" in message or f" {code}:" in message:
+                return True
+        return False
+    return False
 
 
 def _system_blocks_with_cache(system_text: str) -> list[dict[str, Any]]:

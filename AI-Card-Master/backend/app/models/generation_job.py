@@ -244,6 +244,7 @@ class GenerationSlide(Base):
         DateTime(timezone=True),
         nullable=False,
         server_default=text("CURRENT_TIMESTAMP"),
+        index=True,
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -302,7 +303,10 @@ class GenerationProviderAttempt(Base):
     )
     reply_ref: Mapped[str] = mapped_column(String(1024), nullable=False)
     status: Mapped[str] = mapped_column(
-        String(64), nullable=False, server_default=text("'created'")
+        String(64),
+        nullable=False,
+        server_default=text("'created'"),
+        index=True,
     )
     progress: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("0")
@@ -319,6 +323,7 @@ class GenerationProviderAttempt(Base):
         DateTime(timezone=True),
         nullable=False,
         server_default=text("CURRENT_TIMESTAMP"),
+        index=True,
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -426,4 +431,5 @@ class GenerationOutbox(Base):
         DateTime(timezone=True),
         nullable=False,
         server_default=text("CURRENT_TIMESTAMP"),
+        index=True,
     )

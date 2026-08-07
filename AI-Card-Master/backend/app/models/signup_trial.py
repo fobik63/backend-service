@@ -22,14 +22,12 @@ class SignupTrialClaim(Base):
 
     __tablename__ = "signup_trial_claims"
     __table_args__ = (
-        Index("ix_signup_trial_claims_fingerprint_hash", "fingerprint_hash"),
         Index(
             "ix_signup_trial_claims_fp_granted",
             "fingerprint_hash",
             "trial_granted",
         ),
         Index("ix_signup_trial_claims_ip_subnet", "ip_subnet"),
-        Index("ix_signup_trial_claims_created_at", "created_at"),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -47,6 +45,7 @@ class SignupTrialClaim(Base):
     fingerprint_hash: Mapped[str | None] = mapped_column(
         String(64),
         nullable=True,
+        index=True,
     )
     client_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     ip_subnet: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -63,4 +62,5 @@ class SignupTrialClaim(Base):
         DateTime(timezone=True),
         nullable=False,
         server_default=text("CURRENT_TIMESTAMP"),
+        index=True,
     )

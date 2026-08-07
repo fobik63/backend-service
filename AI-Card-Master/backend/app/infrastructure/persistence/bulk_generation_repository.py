@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import delete, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -21,6 +22,10 @@ from app.domain.generation import (
     GenerationEngineMode,
     GenerationJobStatus,
     GenerationPostProcessingMode,
+)
+from app.infrastructure.persistence.batching import (
+    DEFAULT_UPSERT_BATCH_SIZE,
+    chunk_rows,
 )
 from app.models.bulk_generation import BulkGenerationBatch, BulkGenerationItem
 from app.models.generation_job import GenerationJob
@@ -205,19 +210,33 @@ class BulkGenerationRepository:
             delete(BulkGenerationItem).where(BulkGenerationItem.batch_id == batch_id)
         )
         now = datetime.now(UTC)
-        created: list[BulkGenerationItem] = []
-        for position, product_key, source_path in items:
-            item = BulkGenerationItem(
-                batch_id=batch_id,
-                position=position,
-                product_key=product_key,
-                source_path=source_path,
-                status=BulkItemStatus.PENDING.value,
-                created_at=now,
-                updated_at=now,
+        payloads: list[dict] = [
+            {
+                "id": uuid4(),
+                "batch_id": batch_id,
+                "position": position,
+                "product_key": product_key,
+                "source_path": source_path,
+                "status": BulkItemStatus.PENDING.value,
+                "input_retention_status": "available",
+                "created_at": now,
+                "updated_at": now,
+            }
+            for position, product_key, source_path in items
+        ]
+        for batch_rows in chunk_rows(payloads, DEFAULT_UPSERT_BATCH_SIZE):
+            insert_stmt = pg_insert(BulkGenerationItem).values(batch_rows)
+            stmt = insert_stmt.on_conflict_do_update(
+                index_elements=["batch_id", "position"],
+                set_={
+                    "product_key": insert_stmt.excluded.product_key,
+                    "source_path": insert_stmt.excluded.source_path,
+                    "status": insert_stmt.excluded.status,
+                    "input_retention_status": insert_stmt.excluded.input_retention_status,
+                    "updated_at": insert_stmt.excluded.updated_at,
+                },
             )
-            self._session.add(item)
-            created.append(item)
+            await self._session.execute(stmt)
         batch = await self._session.get(BulkGenerationBatch, batch_id)
         if batch is not None:
             batch.total_items = len(items)
@@ -226,9 +245,12 @@ class BulkGenerationRepository:
             batch.skipped_items = 0
             batch.updated_at = now
         await self._session.commit()
-        for item in created:
-            await self._session.refresh(item)
-        return tuple(_item_view(item) for item in created)
+        result = await self._session.execute(
+            select(BulkGenerationItem)
+            .where(BulkGenerationItem.batch_id == batch_id)
+            .order_by(BulkGenerationItem.position.asc())
+        )
+        return tuple(_item_view(item) for item in result.scalars().all())
 
     async def mark_item_input(
         self,

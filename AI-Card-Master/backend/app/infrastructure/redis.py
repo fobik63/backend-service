@@ -127,45 +127,40 @@ async def delete_keys_by_prefix(prefix: str, *, scan_count: int = 100) -> int:
 
 
 async def is_provider_circuit_open(provider_name: str) -> bool:
-    """Return whether a provider is temporarily removed from the pool."""
+    """Return whether a Midjourney provider circuit is OPEN (skip in pool).
+
+    HALF_OPEN providers remain eligible so a single probe can recover health.
+    """
+
+    from app.infrastructure.circuit_breaker import get_circuit_breaker
 
     try:
-        value = await get_redis_client().get(f"provider:circuit:{provider_name}:open")
-        return value is not None
-    except RedisError:
-        # Redis failure must not take generation down. Try the provider.
+        return await get_circuit_breaker().is_open(provider_name)
+    except Exception:  # noqa: BLE001 — fail-open
+        logger.warning(
+            "Circuit breaker open-check failed for %s; allowing provider",
+            provider_name,
+        )
         return False
 
 
 async def record_provider_success(provider_name: str) -> None:
     """Reset provider failure counters after a successful operation."""
 
+    from app.infrastructure.circuit_breaker import get_circuit_breaker
+
     try:
-        await get_redis_client().delete(
-            f"provider:circuit:{provider_name}:failures",
-            f"provider:circuit:{provider_name}:open",
-        )
-    except RedisError:
+        await get_circuit_breaker().record_success(provider_name)
+    except Exception:  # noqa: BLE001 — best-effort
         logger.warning("Could not reset provider circuit for %s", provider_name)
 
 
 async def record_provider_failure(provider_name: str) -> None:
-    """Increment failures and open the circuit when the threshold is reached."""
+    """Increment trip-worthy failures; open the circuit at the shared threshold."""
 
-    settings = get_settings()
-    failures_key = f"provider:circuit:{provider_name}:failures"
-    open_key = f"provider:circuit:{provider_name}:open"
+    from app.infrastructure.circuit_breaker import get_circuit_breaker
+
     try:
-        client = get_redis_client()
-        failures = int(await client.incr(failures_key))
-        await client.expire(
-            failures_key, settings.midjourney_circuit_breaker_ttl_seconds
-        )
-        if failures >= settings.midjourney_circuit_breaker_failures:
-            await client.set(
-                open_key,
-                "1",
-                ex=settings.midjourney_circuit_breaker_ttl_seconds,
-            )
-    except RedisError:
+        await get_circuit_breaker().record_failure(provider_name, trip_worthy=True)
+    except Exception:  # noqa: BLE001 — best-effort
         logger.warning("Could not update provider circuit for %s", provider_name)

@@ -599,10 +599,30 @@ class Settings(BaseSettings):
     midjourney_circuit_breaker_failures: int = Field(
         default=3,
         alias="MIDJOURNEY_CIRCUIT_BREAKER_FAILURES",
+        description="Deprecated alias: prefer AI_CIRCUIT_BREAKER_FAILURE_THRESHOLD.",
     )
     midjourney_circuit_breaker_ttl_seconds: int = Field(
-        default=120,
+        default=180,
         alias="MIDJOURNEY_CIRCUIT_BREAKER_TTL_SECONDS",
+        description="Deprecated alias: prefer AI_CIRCUIT_BREAKER_OPEN_DURATION_SECONDS.",
+    )
+    # Shared Circuit Breaker for Anthropic / Midjourney / Vision / SD.
+    # 3 trip-worthy failures (429/500/502/503/timeout) in 60s → OPEN for 180s.
+    ai_circuit_breaker_failure_threshold: int = Field(
+        default=3,
+        alias="AI_CIRCUIT_BREAKER_FAILURE_THRESHOLD",
+    )
+    ai_circuit_breaker_failure_window_seconds: int = Field(
+        default=60,
+        alias="AI_CIRCUIT_BREAKER_FAILURE_WINDOW_SECONDS",
+    )
+    ai_circuit_breaker_open_duration_seconds: int = Field(
+        default=180,
+        alias="AI_CIRCUIT_BREAKER_OPEN_DURATION_SECONDS",
+    )
+    ai_circuit_breaker_probe_lock_seconds: int = Field(
+        default=30,
+        alias="AI_CIRCUIT_BREAKER_PROBE_LOCK_SECONDS",
     )
     midjourney_generation_cost_usd: Decimal = Field(
         default=Decimal("0"),
@@ -1043,7 +1063,8 @@ class Settings(BaseSettings):
     # Production pool / logging knobs.
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     db_pool_size: int = Field(default=20, alias="DB_POOL_SIZE")
-    db_max_overflow: int = Field(default=40, alias="DB_MAX_OVERFLOW")
+    db_max_overflow: int = Field(default=10, alias="DB_MAX_OVERFLOW")
+    db_pool_timeout_seconds: int = Field(default=30, alias="DB_POOL_TIMEOUT_SECONDS")
     db_pool_recycle_seconds: int = Field(default=1800, alias="DB_POOL_RECYCLE_SECONDS")
     telegram_error_logging_enabled: bool = Field(
         default=True,
@@ -1098,6 +1119,18 @@ class Settings(BaseSettings):
         alias="S3_PRESIGN_TTL_SECONDS",
     )
 
+    # Sentry error tracking (optional; disabled when DSN is empty).
+    sentry_dsn: str | None = Field(default=None, alias="SENTRY_DSN")
+    sentry_release: str | None = Field(default=None, alias="SENTRY_RELEASE")
+    sentry_traces_sample_rate: float = Field(
+        default=0.0,
+        alias="SENTRY_TRACES_SAMPLE_RATE",
+    )
+    sentry_profiles_sample_rate: float = Field(
+        default=0.0,
+        alias="SENTRY_PROFILES_SAMPLE_RATE",
+    )
+
     # Critical 500 alerts sent to an operator-owned Telegram bot.
     telegram_error_bot_token: SecretStr | None = Field(
         default=None,
@@ -1131,11 +1164,17 @@ class Settings(BaseSettings):
         default="https://api.anthropic.com",
         alias="CLAUDE_47_BASE_URL",
     )
+    # Alternate Anthropic-compatible proxy used when the primary circuit is OPEN.
+    claude_fallback_base_url: str = Field(
+        default="",
+        alias="CLAUDE_FALLBACK_BASE_URL",
+    )
     claude_47_model: str = Field(
         default="claude-opus-4-7",
         alias="CLAUDE_47_MODEL",
     )
     # Plan §55 — cheap model for simple text analytics (Smart Reasoning Routing).
+    # Also used as Circuit Breaker fallback when Opus/Sonnet primary is OPEN.
     claude_35_haiku_model: str = Field(
         default="claude-3-5-haiku-20241022",
         alias="CLAUDE_35_HAIKU_MODEL",
@@ -1466,6 +1505,10 @@ class Settings(BaseSettings):
         "midjourney_max_poll_attempts",
         "midjourney_circuit_breaker_failures",
         "midjourney_circuit_breaker_ttl_seconds",
+        "ai_circuit_breaker_failure_threshold",
+        "ai_circuit_breaker_failure_window_seconds",
+        "ai_circuit_breaker_open_duration_seconds",
+        "ai_circuit_breaker_probe_lock_seconds",
         "celery_outbox_batch_size",
         "generation_job_timeout_seconds",
         "generation_max_upload_bytes",
@@ -1502,6 +1545,7 @@ class Settings(BaseSettings):
         "generation_status_terminal_cache_ttl_seconds",
         "db_pool_size",
         "db_max_overflow",
+        "db_pool_timeout_seconds",
         "db_pool_recycle_seconds",
         "telegram_error_alert_cooldown_seconds",
         "stable_diffusion_max_connections",
@@ -1675,6 +1719,13 @@ class Settings(BaseSettings):
     def validate_claude_temperature(cls, value: float) -> float:
         if not 0.0 <= value <= 1.0:
             raise ValueError("CLAUDE_47_TEMPERATURE must be in [0, 1].")
+        return value
+
+    @field_validator("sentry_traces_sample_rate", "sentry_profiles_sample_rate")
+    @classmethod
+    def validate_sentry_sample_rates(cls, value: float) -> float:
+        if not 0.0 <= value <= 1.0:
+            raise ValueError("Sentry sample rates must be in [0, 1].")
         return value
 
     @field_validator(

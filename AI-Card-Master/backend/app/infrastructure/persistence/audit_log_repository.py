@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import Select, delete, func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.audit_log import (
@@ -16,6 +17,10 @@ from app.domain.audit_log import (
     AuditSearchQuery,
     AuditSearchResult,
     normalize_audit_event as _normalize,
+)
+from app.infrastructure.persistence.batching import (
+    DEFAULT_UPSERT_BATCH_SIZE,
+    chunk_rows,
 )
 from app.models.audit_log import AuditLog, AuditLogArchive
 
@@ -187,37 +192,48 @@ class AuditLogRepository:
             return AuditArchiveResult(archived_count=0, cutoff=cutoff_utc, batches=0)
 
         now = datetime.now(UTC)
+        payloads: list[dict] = []
         ids: list[UUID] = []
         for row in rows:
             ids.append(row.id)
-            self._session.add(
-                AuditLogArchive(
-                    id=row.id,
-                    user_id=row.user_id,
-                    event_type=row.event_type,
-                    status=row.status,
-                    ip=row.ip,
-                    visitor_id=row.visitor_id,
-                    telegram_id=row.telegram_id,
-                    user_agent=row.user_agent,
-                    endpoint=row.endpoint,
-                    http_method=row.http_method,
-                    request_id=row.request_id,
-                    duration_ms=row.duration_ms,
-                    actor_type=row.actor_type,
-                    message=row.message,
-                    event_metadata=row.event_metadata,
-                    created_at=row.created_at,
-                    archived_at=now,
-                )
+            payloads.append(
+                {
+                    "id": row.id,
+                    "user_id": row.user_id,
+                    "event_type": row.event_type,
+                    "status": row.status,
+                    "ip": row.ip,
+                    "visitor_id": row.visitor_id,
+                    "telegram_id": row.telegram_id,
+                    "user_agent": row.user_agent,
+                    "endpoint": row.endpoint,
+                    "http_method": row.http_method,
+                    "request_id": row.request_id,
+                    "duration_ms": row.duration_ms,
+                    "actor_type": row.actor_type,
+                    "message": row.message,
+                    "event_metadata": row.event_metadata,
+                    "created_at": row.created_at,
+                    "archived_at": now,
+                }
             )
-        await self._session.flush()
+
+        upsert_batches = 0
+        for batch in chunk_rows(payloads, DEFAULT_UPSERT_BATCH_SIZE):
+            stmt = (
+                pg_insert(AuditLogArchive)
+                .values(batch)
+                .on_conflict_do_nothing(index_elements=["id"])
+            )
+            await self._session.execute(stmt)
+            upsert_batches += 1
+
         await self._session.execute(delete(AuditLog).where(AuditLog.id.in_(ids)))
         await self._session.commit()
         return AuditArchiveResult(
             archived_count=len(ids),
             cutoff=cutoff_utc,
-            batches=1,
+            batches=upsert_batches,
         )
 
 

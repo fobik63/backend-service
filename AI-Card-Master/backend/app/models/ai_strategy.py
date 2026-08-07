@@ -94,6 +94,7 @@ class AiStrategyJob(Base):
         DateTime(timezone=True),
         nullable=False,
         server_default=text("NOW()"),
+        index=True,
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

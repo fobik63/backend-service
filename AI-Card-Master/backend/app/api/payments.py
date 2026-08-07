@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Security, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
@@ -143,6 +143,7 @@ async def get_payment_application_service(
 
 
 async def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
     db_session: AsyncSession = Depends(get_db_session),
 ) -> User:
@@ -201,6 +202,8 @@ async def get_current_user(
         await db_session.commit()
         await db_session.refresh(user)
 
+    # Correlate 500 alerts / Sentry events with the authenticated subject.
+    request.state.user_id = str(user.id)
     return user
 
 

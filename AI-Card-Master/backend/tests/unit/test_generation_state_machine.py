@@ -311,6 +311,9 @@ class _NoopProviderHealth:
     async def note_failure(self, provider_name: str) -> None:
         return None
 
+    async def allow_primary(self, provider_name: str) -> bool:
+        return True
+
 
 class _TestAIEngine:
     def __init__(self, face_fix: FaceFixProvider | None = None) -> None:

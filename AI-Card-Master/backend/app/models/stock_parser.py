@@ -32,7 +32,6 @@ class ParserHealth(Base):
     __tablename__ = "parser_health"
     __table_args__ = (
         Index("uq_parser_health_marketplace", "marketplace", unique=True),
-        Index("ix_parser_health_status", "status"),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -47,6 +46,7 @@ class ParserHealth(Base):
         nullable=False,
         default="healthy",
         server_default=text("'healthy'"),
+        index=True,
     )
     consecutive_errors: Mapped[int] = mapped_column(
         Integer,
@@ -77,6 +77,7 @@ class ParserHealth(Base):
         DateTime(timezone=True),
         nullable=False,
         server_default=text("NOW()"),
+        index=True,
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -124,6 +125,7 @@ class SkuItem(Base):
         DateTime(timezone=True),
         nullable=False,
         server_default=text("NOW()"),
+        index=True,
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -196,4 +198,5 @@ class StockSnapshot(Base):
         DateTime(timezone=True),
         nullable=False,
         server_default=text("NOW()"),
+        index=True,
     )

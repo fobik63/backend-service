@@ -19,8 +19,8 @@ from app.domain.stock_parser import (
     SkuItemView,
     StockSnapshotView,
     StockSnapshotWrite,
-    chunk_sequence,
 )
+from app.infrastructure.persistence.batching import chunk_rows
 from app.models.stock_parser import ParserHealth, SkuItem, StockSnapshot
 
 
@@ -296,7 +296,7 @@ class StockParserRepository:
             )
 
         views: list[StockSnapshotView] = []
-        for batch in chunk_sequence(prepared, STOCK_SNAPSHOT_UPSERT_BATCH_SIZE):
+        for batch in chunk_rows(prepared, STOCK_SNAPSHOT_UPSERT_BATCH_SIZE):
             insert_stmt = pg_insert(StockSnapshot).values(batch)
             stmt = insert_stmt.on_conflict_do_update(
                 index_elements=["sku_id", "warehouse_id", "captured_at"],

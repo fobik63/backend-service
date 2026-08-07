@@ -166,8 +166,11 @@ async def test_result_download_rejects_non_https_url_before_network() -> None:
 async def test_redis_circuit_breaker_opens_after_threshold(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from app.infrastructure.circuit_breaker import reset_circuit_breaker_cache
+
     fake = fakeredis.FakeAsyncRedis(decode_responses=True)
     monkeypatch.setattr(redis_module, "_redis_client", fake)
+    reset_circuit_breaker_cache()
 
     assert not await is_provider_circuit_open("primary")
     await record_provider_failure("primary")
@@ -176,6 +179,7 @@ async def test_redis_circuit_breaker_opens_after_threshold(
 
     assert await is_provider_circuit_open("primary")
     await fake.aclose()
+    reset_circuit_breaker_cache()
 
 
 @pytest.mark.asyncio

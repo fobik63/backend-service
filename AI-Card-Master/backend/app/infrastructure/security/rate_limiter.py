@@ -50,6 +50,7 @@ PUBLIC_HEALTHCHECK_PATHS = frozenset(
         "/",
         "/health",
         "/health/live",
+        "/healthz",
         "/health/ready",
     }
 )

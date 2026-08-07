@@ -23,6 +23,9 @@ class ProviderHealthPort(Protocol):
     async def note_failure(self, provider_name: str) -> None:
         """Mark a provider attempt as failed."""
 
+    async def allow_primary(self, provider_name: str) -> bool:
+        """False when the circuit is OPEN or a non-probe HALF_OPEN slot."""
+
 
 @runtime_checkable
 class AIEnginePort(Protocol):

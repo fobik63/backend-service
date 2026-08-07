@@ -24,6 +24,7 @@ _ALWAYS_ALLOW_PATHS: frozenset[str] = frozenset(
     {
         "/health",
         "/health/live",
+        "/healthz",
         "/security/dead-mans-switch/db-auth-failure",
         "/security/dead-mans-switch/trigger",
     }

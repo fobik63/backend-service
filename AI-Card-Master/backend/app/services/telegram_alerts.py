@@ -1,7 +1,7 @@
 """Best-effort Telegram alerts for backend failures (plan §16).
 
-Every alert includes explicit ``error_type``, ``file``, and ``line`` fields
-so operators can jump to the failing code without parsing a full traceback.
+Critical 500 alerts are intentionally short: ``file``, ``line``, ``endpoint``,
+and ``user_id`` so operators can triage quickly. Full traces go to Sentry.
 """
 
 from __future__ import annotations
@@ -10,11 +10,11 @@ import logging
 import traceback
 from dataclasses import dataclass
 from typing import Any
+from uuid import UUID
 
 import httpx
 from fastapi import Request
 
-from app.core.client_ip import resolve_client_ip
 from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -58,8 +58,48 @@ def extract_error_location(exc: BaseException) -> ErrorLocation:
     )
 
 
+def resolve_request_user_id(request: Request) -> str | None:
+    """Best-effort user id from request state or Bearer JWT ``sub`` claim."""
+
+    state = getattr(request, "state", None)
+    if state is not None:
+        for attr in ("user_id", "audit_user_id"):
+            raw = getattr(state, attr, None)
+            if raw is None:
+                continue
+            text = str(raw).strip()
+            if text:
+                return text
+
+    headers = getattr(request, "headers", None)
+    if headers is None:
+        return None
+    try:
+        auth = headers.get("Authorization") or headers.get("authorization") or ""
+    except Exception:
+        return None
+    scheme, _, token = auth.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        return None
+
+    try:
+        from app.core.security import decode_and_validate_token
+
+        payload = decode_and_validate_token(token.strip(), expected_type="access")
+    except Exception:
+        return None
+
+    subject = str(payload.get("sub") or "").strip()
+    if not subject:
+        return None
+    try:
+        return str(UUID(subject))
+    except ValueError:
+        return subject
+
+
 async def notify_critical_500(request: Request, exc: Exception) -> None:
-    """Send traceback details to the configured Telegram bot, if enabled."""
+    """Send a short 500 alert to the configured Telegram admin chat via httpx."""
 
     settings = get_settings()
     token = (
@@ -154,27 +194,21 @@ def notify_error_sync(
 
 
 def _format_http_alert(request: Request, exc: Exception) -> str:
-    settings = get_settings()
-    client_host = getattr(request.state, "client_ip", None) or resolve_client_ip(
-        request,
-        trust_cloudflare=settings.cloudflare_trust_headers,
-        trusted_proxy_cidrs=settings.trusted_proxy_cidrs,
-    )
+    """Short operator alert: file, line, endpoint, user_id (+ error type)."""
+
     location = extract_error_location(exc)
-    traceback_text = "".join(
-        traceback.format_exception(type(exc), exc, exc.__traceback__)
-    )
+    user_id = resolve_request_user_id(request) or "anonymous"
+    endpoint = f"{request.method} {request.url.path}"
+    error_line = str(exc).strip() or type(exc).__name__
+    if len(error_line) > 240:
+        error_line = error_line[:237] + "..."
     return (
-        "AI-Card-Master critical 500\n"
-        f"error_type: {type(exc).__name__}\n"
+        "AI-Card-Master 500\n"
         f"file: {location.short_filename}\n"
         f"line: {location.lineno}\n"
-        f"function: {location.func_name}\n"
-        f"method: {request.method}\n"
-        f"path: {request.url.path}\n"
-        f"client: {client_host}\n"
-        f"message: {exc}\n\n"
-        f"{traceback_text}"
+        f"endpoint: {endpoint}\n"
+        f"user_id: {user_id}\n"
+        f"error: {type(exc).__name__}: {error_line}"
     )
 
 
