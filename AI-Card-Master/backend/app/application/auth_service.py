@@ -18,8 +18,7 @@ from app.application.ports.signup_trial import (
     SignupTrialStoreUnavailableError,
 )
 from app.core.security import (
-    create_access_token,
-    create_refresh_token,
+    decode_and_validate_token,
     hash_password,
     verify_password,
 )
@@ -28,6 +27,14 @@ from app.domain.auth import (
     AuthUserView,
     LoginCommand,
     RegisterCommand,
+)
+from app.services.auth import (
+    FAMILY_REUSE_DETAIL,
+    InvalidRefreshTokenError,
+    RefreshTokenRotationService,
+    TokenFamilyRevokedError,
+    TokenRotationStoreError,
+    get_refresh_token_rotation_service,
 )
 from app.domain.disposable_email import is_disposable_email
 from app.domain.referral import generate_referral_code
@@ -65,6 +72,34 @@ class AuthDisposableEmailError(AuthError):
     """Temporary / disposable mailbox domains are not allowed."""
 
 
+class AuthRegistrationBlockedError(AuthError):
+    """Hard anti-abuse block: fingerprint or /24 subnet already exhausted."""
+
+    def __init__(
+        self,
+        message: str = (
+            "Регистрация с этого устройства или сети недоступна. "
+            "Смените устройство или сеть и попробуйте снова."
+        ),
+    ) -> None:
+        super().__init__(message)
+
+
+class AuthRefreshError(AuthError):
+    """Refresh token is invalid or expired."""
+
+
+class AuthTokenFamilyRevokedError(AuthError):
+    """Refresh reuse detected — token family burned."""
+
+    def __init__(self, message: str = FAMILY_REUSE_DETAIL) -> None:
+        super().__init__(message)
+
+
+class AuthTokenStoreError(AuthError):
+    """RTR security store (Redis) unavailable."""
+
+
 def _to_view(user: User) -> AuthUserView:
     return AuthUserView(
         id=user.id,
@@ -76,14 +111,6 @@ def _to_view(user: User) -> AuthUserView:
         is_admin=bool(user.is_admin),
         is_banned=bool(user.is_banned),
         created_at=user.created_at,
-    )
-
-
-def _issue_tokens(user_id: UUID) -> AuthTokens:
-    subject = str(user_id)
-    return AuthTokens(
-        access_token=create_access_token(subject),
-        refresh_token=create_refresh_token(subject),
     )
 
 
@@ -99,6 +126,7 @@ class AuthService:
         trial_claims: SignupTrialClaimRepositoryPort | None = None,
         proxy_detector: ProxyDetectorPort | None = None,
         silent_ban_store: SilentBanStorePort | None = None,
+        token_rotation: RefreshTokenRotationService | None = None,
         trial_coins: int = 5,
         subnet_max_accounts: int = 3,
         subnet_ttl_seconds: int = 86_400,
@@ -112,12 +140,31 @@ class AuthService:
         self._trial_claims = trial_claims
         self._proxy_detector = proxy_detector
         self._silent_ban_store = silent_ban_store
+        self._token_rotation = token_rotation or get_refresh_token_rotation_service()
         self._trial_coins = max(0, int(trial_coins))
         self._subnet_max_accounts = max(1, int(subnet_max_accounts))
         self._subnet_ttl_seconds = max(60, int(subnet_ttl_seconds))
         self._fingerprint_ttl_seconds = max(0, int(fingerprint_ttl_seconds))
         self._flagged_ip_ttl_seconds = max(0, int(flagged_ip_ttl_seconds))
         self._trial_enabled = trial_enabled
+
+    def _issue_tokens(self, user_id: UUID) -> AuthTokens:
+        """Issue a new token family (login / register)."""
+
+        return self._token_rotation.issue_token_pair(user_id)
+
+    @staticmethod
+    def _compute_fingerprint_hash(
+        context: SignupAbuseContext,
+    ) -> str | None:
+        device_fp = context.device_fingerprint.strip()
+        if not device_fp:
+            return None
+        return compute_device_fingerprint_hash(
+            device_fingerprint=device_fp,
+            user_agent=context.user_agent,
+            accept_language=context.accept_language,
+        )
 
     async def register(
         self,
@@ -134,10 +181,26 @@ class AuthService:
         if existing is not None:
             raise AuthConflictError("Email is already registered.")
 
+        fingerprint_hash: str | None = None
+        if abuse_context is not None:
+            fingerprint_hash = self._compute_fingerprint_hash(abuse_context)
+            if (
+                self._trial_store is not None
+                and self._trial_claims is not None
+            ):
+                await self._assert_registration_allowed(
+                    fingerprint_hash=fingerprint_hash,
+                    context=abuse_context,
+                )
+
         user = await self._repository.create_user(
             email=command.email,
             hashed_password=hash_password(command.password),
+            fingerprint_hash=fingerprint_hash,
         )
+        if fingerprint_hash is not None:
+            # Explicit Postgres persistence (create_user also sets the column).
+            user.fingerprint_hash = fingerprint_hash
         if not user.referral_code:
             # Best-effort: repository may already assign a code.
             user.referral_code = generate_referral_code()
@@ -156,15 +219,113 @@ class AuthService:
             if refreshed is not None:
                 user = refreshed
 
-        return _to_view(user), _issue_tokens(user.id)
+        return _to_view(user), self._issue_tokens(user.id)
 
-    async def login(self, command: LoginCommand) -> tuple[AuthUserView, AuthTokens]:
+    async def login(
+        self,
+        command: LoginCommand,
+        *,
+        abuse_context: SignupAbuseContext | None = None,
+    ) -> tuple[AuthUserView, AuthTokens]:
         user = await self._repository.get_by_email(command.email)
         if user is None or not verify_password(command.password, user.hashed_password):
             raise AuthCredentialsError("Invalid email or password.")
         if user.is_banned:
             raise AuthCredentialsError("User is banned for abuse.")
-        return _to_view(user), _issue_tokens(user.id)
+
+        if abuse_context is not None:
+            fingerprint_hash = self._compute_fingerprint_hash(abuse_context)
+            if fingerprint_hash is not None:
+                updated = await self._repository.update_fingerprint_hash(
+                    user.id,
+                    fingerprint_hash=fingerprint_hash,
+                )
+                if updated is not None:
+                    user = updated
+
+        return _to_view(user), self._issue_tokens(user.id)
+
+    async def _assert_registration_allowed(
+        self,
+        *,
+        fingerprint_hash: str | None,
+        context: SignupAbuseContext,
+    ) -> None:
+        """Hard-block registration when device or /24 subnet already exceeded limits.
+
+        Checks durable Postgres (``users.fingerprint_hash``, ``signup_trial_claims``)
+        plus Redis counters. Fail-closed when the security store is unavailable.
+        """
+
+        assert self._trial_store is not None
+        assert self._trial_claims is not None
+
+        subnet = ipv4_subnet_24(context.client_ip)
+
+        try:
+            if fingerprint_hash is not None:
+                if await self._repository.exists_fingerprint_hash(
+                    fingerprint_hash=fingerprint_hash
+                ):
+                    raise AuthRegistrationBlockedError()
+                if await self._trial_claims.has_fingerprint(
+                    fingerprint_hash=fingerprint_hash
+                ):
+                    raise AuthRegistrationBlockedError()
+                if await self._trial_claims.has_granted_trial(
+                    fingerprint_hash=fingerprint_hash
+                ):
+                    raise AuthRegistrationBlockedError()
+                if await self._trial_store.is_fingerprint_exhausted(
+                    fingerprint_hash=fingerprint_hash
+                ):
+                    raise AuthRegistrationBlockedError()
+
+            if subnet is not None:
+                redis_count = await self._trial_store.get_subnet_registrations(
+                    subnet=subnet
+                )
+                pg_count = await self._trial_claims.count_accounts_for_subnet(
+                    subnet=subnet
+                )
+                if (
+                    redis_count >= self._subnet_max_accounts
+                    or pg_count >= self._subnet_max_accounts
+                ):
+                    raise AuthRegistrationBlockedError()
+        except AuthRegistrationBlockedError:
+            raise
+        except SignupTrialStoreUnavailableError as exc:
+            logger.warning(
+                "Signup trial store unavailable during registration hard-block; deny"
+            )
+            raise AuthRegistrationBlockedError() from exc
+
+    async def refresh(self, refresh_token: str) -> tuple[AuthUserView, AuthTokens]:
+        """Rotate a refresh token (RTR) and return the authenticated user + new pair."""
+
+        try:
+            tokens = await self._token_rotation.rotate(refresh_token)
+        except TokenFamilyRevokedError as exc:
+            raise AuthTokenFamilyRevokedError(str(exc)) from exc
+        except InvalidRefreshTokenError as exc:
+            raise AuthRefreshError(str(exc)) from exc
+        except TokenRotationStoreError as exc:
+            raise AuthTokenStoreError(str(exc)) from exc
+
+        payload = decode_and_validate_token(tokens.access_token, expected_type="access")
+        subject = str(payload.get("sub") or "").strip()
+        try:
+            user_id = UUID(subject)
+        except ValueError as exc:
+            raise AuthRefreshError("Rotated token subject is invalid.") from exc
+
+        user = await self._repository.get_by_id(user_id)
+        if user is None:
+            raise AuthNotFoundError("User not found.")
+        if user.is_banned:
+            raise AuthCredentialsError("User is banned for abuse.")
+        return _to_view(user), tokens
 
     async def get_profile(self, user_id: UUID) -> AuthUserView:
         user = await self._repository.get_by_id(user_id)
@@ -188,13 +349,22 @@ class AuthService:
         assert self._coin_wallet is not None
 
         device_fp = context.device_fingerprint.strip()
-        fingerprint_hash: str | None = None
-        if device_fp:
-            fingerprint_hash = compute_device_fingerprint_hash(
-                device_fingerprint=device_fp,
-                user_agent=context.user_agent,
-                accept_language=context.accept_language,
-            )
+        fingerprint_hash = self._compute_fingerprint_hash(context)
+
+        # Keep Postgres profile in sync even if create_user omitted the column.
+        if fingerprint_hash is not None and user.fingerprint_hash != fingerprint_hash:
+            try:
+                updated = await self._repository.update_fingerprint_hash(
+                    user.id,
+                    fingerprint_hash=fingerprint_hash,
+                )
+                if updated is not None:
+                    user.fingerprint_hash = updated.fingerprint_hash
+            except Exception:
+                logger.exception(
+                    "Failed to persist fingerprint_hash for user %s",
+                    user.id,
+                )
 
         subnet = ipv4_subnet_24(context.client_ip)
         subnet_count = 0
@@ -214,6 +384,17 @@ class AuthService:
                 if not fingerprint_exhausted:
                     fingerprint_exhausted = await self._trial_claims.has_granted_trial(
                         fingerprint_hash=fingerprint_hash
+                    )
+                if not fingerprint_exhausted:
+                    fingerprint_exhausted = await self._trial_claims.has_fingerprint(
+                        fingerprint_hash=fingerprint_hash
+                    )
+                if not fingerprint_exhausted:
+                    fingerprint_exhausted = (
+                        await self._repository.exists_fingerprint_hash(
+                            fingerprint_hash=fingerprint_hash,
+                            exclude_user_id=user.id,
+                        )
                     )
             is_proxy = await self._proxy_detector.is_proxy_or_vpn(ip=context.client_ip)
         except SignupTrialStoreUnavailableError:

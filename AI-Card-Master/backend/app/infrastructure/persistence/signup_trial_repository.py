@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.signup_trial import TrialDenialReason
@@ -27,6 +27,28 @@ class SignupTrialClaimRepository:
             .limit(1)
         )
         return result is not None
+
+    async def has_fingerprint(self, *, fingerprint_hash: str) -> bool:
+        normalized = (fingerprint_hash or "").strip()
+        if not normalized:
+            return False
+        result = await self._session.scalar(
+            select(SignupTrialClaim.id)
+            .where(SignupTrialClaim.fingerprint_hash == normalized[:64])
+            .limit(1)
+        )
+        return result is not None
+
+    async def count_accounts_for_subnet(self, *, subnet: str) -> int:
+        normalized = (subnet or "").strip()
+        if not normalized:
+            return 0
+        result = await self._session.scalar(
+            select(func.count(func.distinct(SignupTrialClaim.user_id))).where(
+                SignupTrialClaim.ip_subnet == normalized
+            )
+        )
+        return int(result or 0)
 
     async def record_claim(
         self,

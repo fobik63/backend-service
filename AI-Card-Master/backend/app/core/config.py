@@ -114,8 +114,8 @@ class Settings(BaseSettings):
     cors_allow_headers: str = Field(
         default=(
             "Authorization,Content-Type,Accept,Origin,X-Request-Id,"
-            "X-Visitor-Id,Idempotency-Key,X-Idempotency-Key,X-API-Key,"
-            "X-Webhook-Token,X-Webhook-Signature"
+            "X-Visitor-Id,X-Device-Fingerprint,Idempotency-Key,"
+            "X-Idempotency-Key,X-API-Key,X-Webhook-Token,X-Webhook-Signature"
         ),
         alias="CORS_ALLOW_HEADERS",
     )
@@ -669,9 +669,39 @@ class Settings(BaseSettings):
         alias="ENABLE_THREE_D",
         description="Register /api/v1/3d HTTP+WS routers and 3D Celery workers/beat.",
     )
-    three_d_provider: Literal["mock", "meshy", "tripo", "runpod"] = Field(
+    three_d_provider: Literal["mock", "meshy", "tripo", "tripo3d", "runpod"] = Field(
         default="mock",
         alias="THREE_D_PROVIDER",
+    )
+    meshy_api_key: SecretStr | None = Field(
+        default=None,
+        alias="MESHY_API_KEY",
+        description="Bearer token for Meshy text/image-to-3D API. Missing → mock fallback.",
+    )
+    meshy_base_url: str = Field(
+        default="https://api.meshy.ai/v2",
+        alias="MESHY_BASE_URL",
+        description="Meshy API root (default v2 text-to-3d base).",
+    )
+    meshy_timeout_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        alias="MESHY_TIMEOUT_SECONDS",
+    )
+    tripo3d_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("TRIPO3D_API_KEY", "TRIPO_API_KEY"),
+        description="Bearer token for Tripo3D OpenAPI. Missing → mock fallback.",
+    )
+    tripo3d_base_url: str = Field(
+        default="https://api.tripo3d.ai/v2/openapi",
+        alias="TRIPO3D_BASE_URL",
+        description="Tripo3D OpenAPI root (task create/status).",
+    )
+    tripo3d_timeout_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        alias="TRIPO3D_TIMEOUT_SECONDS",
     )
     three_d_mock_duration_seconds: float = Field(
         default=2.0,

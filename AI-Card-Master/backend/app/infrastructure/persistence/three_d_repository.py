@@ -198,6 +198,7 @@ class ThreeDRepository:
                 amount,
                 service_type="three_d",
                 reference_id=row.id,
+                idempotency_key=row.idempotency_key,
                 commit=False,
             )
         except BillingNotFoundError as exc:

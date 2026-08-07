@@ -40,6 +40,11 @@ class SignupTrialStorePort(Protocol):
 
         ...
 
+    async def get_subnet_registrations(self, *, subnet: str) -> int:
+        """Return the current /24 (or /64) registration counter without mutating it."""
+
+        ...
+
     async def increment_subnet_registrations(
         self,
         *,
@@ -56,6 +61,16 @@ class SignupTrialClaimRepositoryPort(Protocol):
 
     async def has_granted_trial(self, *, fingerprint_hash: str) -> bool:
         """Return True when any prior row granted a trial for this hash."""
+
+        ...
+
+    async def has_fingerprint(self, *, fingerprint_hash: str) -> bool:
+        """Return True when any claim row exists for this device fingerprint."""
+
+        ...
+
+    async def count_accounts_for_subnet(self, *, subnet: str) -> int:
+        """Count distinct registered accounts previously seen on this subnet."""
 
         ...
 

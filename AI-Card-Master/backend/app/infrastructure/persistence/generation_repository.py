@@ -113,9 +113,24 @@ class GenerationRepository:
                 raise LookupError("Generation user was not found.")
             if settings.generation_charge_coins and generation_cost > 0:
                 # Single write-path: BillingService.in_transaction (audit R1).
-                await BillingService(self._session).debit_coins_in_transaction(
-                    user_id=user_id, amount=generation_cost
+                # Durable idempotency_records row shares this ACID unit of work.
+                mutation = await BillingService(
+                    self._session
+                ).debit_coins_idempotent_in_transaction(
+                    user_id=user_id,
+                    amount=generation_cost,
+                    idempotency_key=idempotency_key,
+                    response_body={"source": "generation_job"},
                 )
+                if mutation.already_processed and idempotency_key:
+                    existing = await self._session.scalar(
+                        select(GenerationJob).where(
+                            GenerationJob.user_id == user_id,
+                            GenerationJob.idempotency_key == idempotency_key,
+                        )
+                    )
+                    if existing is not None:
+                        return existing, False
                 await self._session.refresh(user)
 
             now = datetime.now(UTC)

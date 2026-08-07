@@ -28,6 +28,8 @@ CIRCUIT_TRIP_HTTP_CODES: frozenset[int] = frozenset({429, 500, 502, 503})
 CIRCUIT_ANTHROPIC = "anthropic"
 CIRCUIT_CLAUDE_VISION = "claude_vision"
 CIRCUIT_STABLE_DIFFUSION = "stable_diffusion"
+CIRCUIT_MESHY = "meshy"
+CIRCUIT_TRIPO3D = "tripo3d"
 
 
 @dataclass(frozen=True, slots=True)

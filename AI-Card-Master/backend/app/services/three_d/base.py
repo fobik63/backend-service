@@ -15,6 +15,19 @@ class BaseThreeDEngine(ABC):
     interface so application/use-case code never depends on a vendor SDK.
     """
 
+    async def ensure_available(self) -> None:
+        """Fail fast when the provider circuit is OPEN (override in adapters).
+
+        Default is a no-op so mock / local engines stay available.
+        """
+
+        return None
+
+    async def aclose(self) -> None:
+        """Release owned HTTP clients / background tasks (default: no-op)."""
+
+        return None
+
     @abstractmethod
     async def create_generation_task(
         self,

@@ -86,6 +86,16 @@ class RedisSignupTrialStore:
         except RedisError:
             self._raise_unavailable("fingerprint mark")
 
+    async def get_subnet_registrations(self, *, subnet: str) -> int:
+        key = self._subnet_key(subnet)
+        try:
+            value = await get_security_redis_client().get(key)
+            if value is None:
+                return 0
+            return int(value)
+        except (RedisError, TypeError, ValueError):
+            self._raise_unavailable("subnet lookup")
+
     async def increment_subnet_registrations(
         self,
         *,

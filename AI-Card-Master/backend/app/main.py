@@ -12,19 +12,21 @@ Image upload lives in app.api.images (same path: POST /api/v1/images/upload).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, HTTPException, Request, Response, status
+from fastapi import FastAPI, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
-
+from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.api import (
     ab_tests_router,
     account_router,
@@ -117,6 +119,7 @@ class ReadinessResponse(BaseModel):
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[1]
 _OPENAPI_EXPORT_PATH = _BACKEND_ROOT / "docs" / "openapi.json"
+_ALEMBIC_INI_PATH = _BACKEND_ROOT / "alembic.ini"
 
 
 def export_openapi_schema(application: FastAPI, destination: Path) -> Path:
@@ -131,11 +134,127 @@ def export_openapi_schema(application: FastAPI, destination: Path) -> Path:
     return destination
 
 
+def _is_database_connection_error(exc: BaseException) -> bool:
+    """Return True when the failure is a DB connectivity / DNS / timeout issue."""
+
+    if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
+        return True
+    if isinstance(exc, (OperationalError, InterfaceError, DBAPIError)):
+        return True
+
+    message = str(exc).lower()
+    markers = (
+        "could not connect",
+        "connection refused",
+        "connection reset",
+        "connect call failed",
+        "name or service not known",
+        "temporary failure in name resolution",
+        "timeout expired",
+        "server closed the connection",
+        "network is unreachable",
+        "actively refused",
+        "cannot connect to server",
+        "connection is closed",
+        "no route to host",
+    )
+    return any(marker in message for marker in markers)
+
+
+def _load_alembic_upgrade_api() -> tuple[object, type]:
+    """Import ``alembic.command`` / ``Config`` from the installed distribution.
+
+    The backend keeps migrations under a local package named ``alembic/``, which
+    shadows the PyPI package on ``sys.path``. Temporarily prefer site-packages
+    so ``command.upgrade`` resolves correctly.
+    """
+
+    import importlib
+    import sys
+
+    backend_root = _BACKEND_ROOT.resolve()
+    local_migrations = (backend_root / "alembic").resolve()
+
+    def _is_local_migrations_module(module: object) -> bool:
+        paths = getattr(module, "__path__", None)
+        if paths:
+            for entry in paths:
+                try:
+                    if Path(entry).resolve() == local_migrations:
+                        return True
+                except OSError:
+                    continue
+        file_name = getattr(module, "__file__", None)
+        if not file_name:
+            return False
+        try:
+            return local_migrations in Path(file_name).resolve().parents or (
+                Path(file_name).resolve().parent == local_migrations
+            )
+        except OSError:
+            return False
+
+    for module_name in list(sys.modules):
+        if module_name == "alembic" or module_name.startswith("alembic."):
+            module = sys.modules.get(module_name)
+            if module is None or _is_local_migrations_module(module):
+                del sys.modules[module_name]
+
+    original_sys_path = list(sys.path)
+    filtered_path: list[str] = []
+    for entry in original_sys_path:
+        if entry in ("", "."):
+            continue
+        try:
+            if Path(entry).resolve() == backend_root:
+                continue
+        except OSError:
+            pass
+        filtered_path.append(entry)
+
+    sys.path[:] = filtered_path
+    try:
+        command_module = importlib.import_module("alembic.command")
+        config_module = importlib.import_module("alembic.config")
+    finally:
+        sys.path[:] = original_sys_path
+
+    return command_module, config_module.Config
+
+
+def apply_alembic_migrations() -> None:
+    """Apply pending Alembic migrations to ``head``.
+
+    Connection errors are logged and swallowed so the API can still boot in
+    local/dev environments where Postgres is intentionally offline. Schema
+    migration failures with a reachable database are re-raised.
+    """
+
+    if not _ALEMBIC_INI_PATH.is_file():
+        logger.error("Alembic config not found at %s", _ALEMBIC_INI_PATH)
+        raise FileNotFoundError(f"Missing Alembic config: {_ALEMBIC_INI_PATH}")
+
+    command, config_cls = _load_alembic_upgrade_api()
+    alembic_cfg = config_cls(str(_ALEMBIC_INI_PATH))
+    try:
+        command.upgrade(alembic_cfg, "head")
+    except Exception as exc:
+        if _is_database_connection_error(exc):
+            logger.warning(
+                "Auto-migrate skipped: database is unreachable (%s)",
+                exc,
+            )
+            return
+        logger.exception("Auto-migrate failed while applying Alembic upgrades")
+        raise
+    logger.info("Alembic migrations applied successfully (head)")
+
+
 @asynccontextmanager
-async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
+async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
     """Initialize and validate runtime resources.
 
-    For now we only ensure the upload directory exists and is writable.
+    Ensures the upload directory exists and auto-applies Alembic migrations.
     """
 
     try:
@@ -145,12 +264,29 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
         logger.exception("Startup failed: upload directory is not available")
         raise RuntimeError("Upload storage initialization failed") from startup_error
 
+    # Run in a worker thread: alembic/env.py uses asyncio.run() for async engines.
+    await asyncio.to_thread(apply_alembic_migrations)
+
+    runtime_settings = get_settings()
+    if runtime_settings.app_env == "development":
+        try:
+            path = export_openapi_schema(application, _OPENAPI_EXPORT_PATH)
+            logger.info("OpenAPI schema exported to %s", path)
+        except OSError:
+            logger.exception("Failed to export OpenAPI schema on startup")
+
     try:
         yield
     finally:
         await close_ai_engine()
         await close_marketplace_text_service()
         await close_infographic_service()
+        try:
+            from app.services.three_d.factory import close_three_d_engine
+
+            await close_three_d_engine()
+        except Exception:
+            logger.exception("Failed to close 3D engine on shutdown")
         await close_security_redis_client()
         await close_redis_client()
         await close_s3_storage()
@@ -176,21 +312,18 @@ app = FastAPI(
 )
 
 
-@app.on_event("startup")
-async def export_openapi_on_startup() -> None:
-    """Persist ``docs/openapi.json`` automatically when ``APP_ENV=development``."""
-
-    if settings.app_env != "development":
-        return
-    try:
-        path = export_openapi_schema(app, _OPENAPI_EXPORT_PATH)
-        logger.info("OpenAPI schema exported to %s", path)
-    except OSError:
-        logger.exception("Failed to export OpenAPI schema on startup")
-
 # Cascading slowapi rate limits (Redis). Must be attached before middleware.
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+
+
+def _is_routing_not_found(exc: StarletteHTTPException) -> bool:
+    """True for Starlette/FastAPI unmatched-route 404s (not business NotFound)."""
+
+    detail = exc.detail
+    if detail in {"Not Found", "not found"}:
+        return True
+    return isinstance(detail, str) and detail.strip().lower() == "not found"
 
 
 # CORS: allow only explicitly configured frontend origins (ALLOWED_ORIGINS).
@@ -261,9 +394,27 @@ if settings.enable_three_d:
     app.include_router(three_d_ws_router)
 
 
-@app.exception_handler(HTTPException)
-async def http_exception_handler(_: Request, exc: HTTPException) -> JSONResponse:
-    """Return consistent JSON for business and validation HTTP errors."""
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(
+    request: Request, exc: StarletteHTTPException
+) -> JSONResponse:
+    """Return consistent JSON for business and validation HTTP errors.
+
+    Unmatched routes raise Starlette ``HTTPException(404, detail='Not Found')``;
+    those are shaped as the stable Resource Not Found envelope (with path).
+    Intentional business 404s keep ``success`` / ``detail``.
+    """
+
+    if exc.status_code == status.HTTP_404_NOT_FOUND and _is_routing_not_found(exc):
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "error": "Resource Not Found",
+                "code": 404,
+                "path": request.url.path,
+            },
+            headers=exc.headers,
+        )
 
     return JSONResponse(
         status_code=exc.status_code,

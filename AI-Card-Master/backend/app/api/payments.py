@@ -165,6 +165,20 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
 
+    family_id = str(payload.get("family_id") or "").strip()
+    if family_id:
+        from app.services.auth import (
+            FAMILY_REUSE_DETAIL,
+            get_refresh_token_rotation_service,
+        )
+
+        if await get_refresh_token_rotation_service().is_family_revoked(family_id):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=FAMILY_REUSE_DETAIL,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
     subject = str(payload.get("sub") or "").strip()
     if not subject:
         raise HTTPException(

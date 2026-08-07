@@ -14,6 +14,8 @@ from app.infrastructure.persistence.signup_trial_repository import (
 from app.infrastructure.security.proxy_detector import AsyncProxyDetector
 from app.infrastructure.security.silent_ban_store import RedisSilentBanStore
 from app.infrastructure.security.signup_trial_store import RedisSignupTrialStore
+from app.infrastructure.security.token_family_store import RedisTokenFamilyStore
+from app.services.auth import RefreshTokenRotationService
 
 
 def build_auth_service(session: AsyncSession) -> AuthService:
@@ -29,6 +31,7 @@ def build_auth_service(session: AsyncSession) -> AuthService:
             timeout_seconds=settings.signup_trial_proxy_timeout_seconds,
         ),
         silent_ban_store=RedisSilentBanStore(),
+        token_rotation=RefreshTokenRotationService(store=RedisTokenFamilyStore()),
         trial_coins=settings.signup_trial_coins,
         subnet_max_accounts=settings.signup_trial_subnet_max_accounts,
         subnet_ttl_seconds=settings.signup_trial_subnet_ttl_seconds,

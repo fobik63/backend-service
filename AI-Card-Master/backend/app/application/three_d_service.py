@@ -36,6 +36,7 @@ from app.domain.three_d import (
 from app.services.billing_service import BillingValidationError
 from app.services.three_d.base import BaseThreeDEngine
 from app.services.three_d.dto import ThreeDTaskLifecycleStatus, ThreeDTaskStatusDTO
+from app.services.three_d.errors import ThreeDServiceUnavailableError
 from app.services.three_d.fixtures import MOCK_FIXTURE_BASE
 
 logger = logging.getLogger(__name__)
@@ -132,6 +133,11 @@ class ThreeDService:
     @property
     def delivery_mode(self) -> str:
         return self._delivery_mode
+
+    async def ensure_engine_available(self) -> None:
+        """Raise ``ThreeDServiceUnavailableError`` when 3D providers are circuit-open."""
+
+        await self._engine.ensure_available()
 
     def resolve_generation_cost(
         self,
@@ -425,6 +431,13 @@ class ThreeDService:
                 "status": failed.status.value,
                 "error": str(exc),
             }
+        except ThreeDServiceUnavailableError as exc:
+            failed = await self._fail(task_id, str(exc))
+            return {
+                "task_id": str(failed.id),
+                "status": failed.status.value,
+                "error": failed.error_message,
+            }
         except Exception as exc:
             logger.exception("3D process_generation_task failed task_id=%s", task_id)
             failed = await self._fail(task_id, str(exc) or "3D generation failed.")
@@ -499,6 +512,7 @@ class ThreeDService:
                 "mock",
                 "meshy",
                 "tripo",
+                "tripo3d",
                 "runpod",
             }:
                 raise ThreeDValidationError("Unknown 3D webhook provider.")

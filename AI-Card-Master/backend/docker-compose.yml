@@ -2,7 +2,8 @@
 # Usage:
 #   cp .env.example .env   # fill secrets (POSTGRES_PASSWORD is required)
 #   docker compose up -d --build
-#   docker compose exec api alembic upgrade head
+# Migrations: docker/entrypoint.sh waits for Postgres/Redis then runs
+#   `alembic upgrade head` before the process CMD (also auto-applied in app lifespan).
 #
 # Scaled launch (Nginx edge + replicas + rollback tags):
 #   bash deploy/release.sh

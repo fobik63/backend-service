@@ -9,9 +9,10 @@ import pytest
 
 from app.application.auth_service import (
     AuthDisposableEmailError,
+    AuthRegistrationBlockedError,
     AuthService,
 )
-from app.domain.auth import RegisterCommand
+from app.domain.auth import LoginCommand, RegisterCommand
 from app.domain.disposable_email import is_disposable_email
 from app.domain.referral import generate_referral_code
 from app.domain.signup_trial import (
@@ -130,7 +131,13 @@ class _Repo:
     async def get_by_id(self, user_id: UUID) -> User | None:
         return self.by_id.get(user_id)
 
-    async def create_user(self, *, email: str, hashed_password: str) -> User:
+    async def create_user(
+        self,
+        *,
+        email: str,
+        hashed_password: str,
+        fingerprint_hash: str | None = None,
+    ) -> User:
         user = User(
             id=uuid4(),
             email=email,
@@ -139,11 +146,37 @@ class _Repo:
             ai_coins=0,
             referral_code=generate_referral_code(),
             is_flagged=False,
+            fingerprint_hash=(fingerprint_hash or None),
             created_at=datetime.now(UTC),
         )
         self.by_id[user.id] = user
         self.by_email[email] = user
         return user
+
+    async def update_fingerprint_hash(
+        self,
+        user_id: UUID,
+        *,
+        fingerprint_hash: str,
+    ) -> User | None:
+        user = self.by_id.get(user_id)
+        if user is None:
+            return None
+        user.fingerprint_hash = fingerprint_hash[:64]
+        return user
+
+    async def exists_fingerprint_hash(
+        self,
+        *,
+        fingerprint_hash: str,
+        exclude_user_id: UUID | None = None,
+    ) -> bool:
+        for uid, user in self.by_id.items():
+            if exclude_user_id is not None and uid == exclude_user_id:
+                continue
+            if user.fingerprint_hash == fingerprint_hash:
+                return True
+        return False
 
     async def flag_user(self, user_id: UUID, *, reason: str) -> User | None:
         user = self.by_id.get(user_id)
@@ -199,6 +232,9 @@ class _TrialStore:
         self.exhausted.add(fingerprint_hash)
         self.seen.discard(fingerprint_hash)
 
+    async def get_subnet_registrations(self, *, subnet: str) -> int:
+        return self.subnets.get(subnet, 0)
+
     async def increment_subnet_registrations(
         self,
         *,
@@ -218,6 +254,17 @@ class _TrialClaims:
             r["fingerprint_hash"] == fingerprint_hash and r["trial_granted"]
             for r in self.rows
         )
+
+    async def has_fingerprint(self, *, fingerprint_hash: str) -> bool:
+        return any(r["fingerprint_hash"] == fingerprint_hash for r in self.rows)
+
+    async def count_accounts_for_subnet(self, *, subnet: str) -> int:
+        users = {
+            r["user_id"]
+            for r in self.rows
+            if r.get("ip_subnet") == subnet and r.get("user_id") is not None
+        }
+        return len(users)
 
     async def record_claim(self, **kwargs) -> None:
         self.rows.append(kwargs)
@@ -300,12 +347,14 @@ async def test_register_grants_trial_when_clean() -> None:
     assert claims.rows[-1]["trial_granted"] is True
     user = next(iter(repo.by_id.values()))
     assert user.is_flagged is False
+    assert user.fingerprint_hash is not None
+    assert len(user.fingerprint_hash) == 64
     assert silent_ban.flagged_ips == set()
 
 
 @pytest.mark.asyncio
-async def test_register_denies_trial_on_exhausted_fingerprint() -> None:
-    service, repo, wallet, store, claims, silent_ban = _build_service()
+async def test_register_hard_blocks_exhausted_fingerprint() -> None:
+    service, repo, wallet, store, claims, _silent_ban = _build_service()
     fp_hash = compute_device_fingerprint_hash(
         device_fingerprint="fp-device-abc",
         user_agent="Mozilla/5.0 Test",
@@ -313,36 +362,80 @@ async def test_register_denies_trial_on_exhausted_fingerprint() -> None:
     )
     store.exhausted.add(fp_hash)
 
-    view, _ = await service.register(
-        RegisterCommand(email="second@example.com", password="SecurePass1!"),
-        abuse_context=_ctx(),
-    )
-    assert view.ai_coins == 0
+    with pytest.raises(AuthRegistrationBlockedError, match="устройства или сети"):
+        await service.register(
+            RegisterCommand(email="second@example.com", password="SecurePass1!"),
+            abuse_context=_ctx(),
+        )
+    assert repo.by_id == {}
     assert wallet.credits == []
-    assert claims.rows[-1]["denial_reason"] == TrialDenialReason.FINGERPRINT_EXHAUSTED
-    user = next(iter(repo.by_id.values()))
-    assert user.is_flagged is True
-    assert user.flag_reason == "fingerprint_duplicate"
-    assert "203.0.113.10" in silent_ban.flagged_ips
+    assert claims.rows == []
 
 
 @pytest.mark.asyncio
-async def test_register_denies_trial_on_subnet_overflow() -> None:
-    store = _TrialStore()
-    store.subnets["203.0.113.0/24"] = 3  # next incr → 4 > 3
-    service, repo, wallet, _store, claims, silent_ban = _build_service(store=store)
-
-    view, _ = await service.register(
-        RegisterCommand(email="fourth@example.com", password="SecurePass1!"),
-        abuse_context=_ctx(client_ip="203.0.113.55"),
+async def test_register_hard_blocks_fingerprint_already_on_user() -> None:
+    service, repo, wallet, _store, claims, _silent_ban = _build_service()
+    fp_hash = compute_device_fingerprint_hash(
+        device_fingerprint="fp-device-abc",
+        user_agent="Mozilla/5.0 Test",
+        accept_language="ru-RU,ru;q=0.9",
     )
-    assert view.ai_coins == 0
+    await repo.create_user(
+        email="first@example.com",
+        hashed_password="x",
+        fingerprint_hash=fp_hash,
+    )
+
+    with pytest.raises(AuthRegistrationBlockedError):
+        await service.register(
+            RegisterCommand(email="second@example.com", password="SecurePass1!"),
+            abuse_context=_ctx(),
+        )
+    assert "second@example.com" not in repo.by_email
     assert wallet.credits == []
-    assert claims.rows[-1]["denial_reason"] == TrialDenialReason.SUBNET_LIMIT
-    user = next(iter(repo.by_id.values()))
-    assert user.is_flagged is True
-    assert user.flag_reason == "subnet_duplicate"
-    assert "203.0.113.55" in silent_ban.flagged_ips
+    assert claims.rows == []
+
+
+@pytest.mark.asyncio
+async def test_register_hard_blocks_fingerprint_in_trial_claims() -> None:
+    service, repo, wallet, _store, claims, _silent_ban = _build_service()
+    fp_hash = compute_device_fingerprint_hash(
+        device_fingerprint="fp-device-abc",
+        user_agent="Mozilla/5.0 Test",
+        accept_language="ru-RU,ru;q=0.9",
+    )
+    claims.rows.append(
+        {
+            "user_id": uuid4(),
+            "fingerprint_hash": fp_hash,
+            "trial_granted": False,
+            "ip_subnet": "203.0.113.0/24",
+        }
+    )
+
+    with pytest.raises(AuthRegistrationBlockedError):
+        await service.register(
+            RegisterCommand(email="second@example.com", password="SecurePass1!"),
+            abuse_context=_ctx(),
+        )
+    assert repo.by_id == {}
+    assert wallet.credits == []
+
+
+@pytest.mark.asyncio
+async def test_register_hard_blocks_subnet_overflow() -> None:
+    store = _TrialStore()
+    store.subnets["203.0.113.0/24"] = 3
+    service, repo, wallet, _store, claims, _silent_ban = _build_service(store=store)
+
+    with pytest.raises(AuthRegistrationBlockedError):
+        await service.register(
+            RegisterCommand(email="fourth@example.com", password="SecurePass1!"),
+            abuse_context=_ctx(client_ip="203.0.113.55"),
+        )
+    assert repo.by_id == {}
+    assert wallet.credits == []
+    assert claims.rows == []
 
 
 @pytest.mark.asyncio
@@ -356,6 +449,7 @@ async def test_register_denies_trial_on_proxy() -> None:
     assert wallet.credits == []
     assert claims.rows[-1]["denial_reason"] == TrialDenialReason.PROXY_OR_VPN
     user = next(iter(repo.by_id.values()))
+    assert user.fingerprint_hash is not None
     assert user.is_flagged is False
     assert silent_ban.flagged_ips == set()
 
@@ -371,5 +465,29 @@ async def test_register_denies_trial_without_device_fingerprint() -> None:
     assert wallet.credits == []
     assert claims.rows[-1]["denial_reason"] == TrialDenialReason.MISSING_DEVICE_FINGERPRINT
     user = next(iter(repo.by_id.values()))
+    assert user.fingerprint_hash is None
     assert user.is_flagged is False
     assert silent_ban.flagged_ips == set()
+
+
+@pytest.mark.asyncio
+async def test_login_persists_fingerprint_hash() -> None:
+    service, repo, _wallet, _store, _claims, _silent_ban = _build_service()
+    await service.register(
+        RegisterCommand(email="login@example.com", password="SecurePass1!"),
+        abuse_context=_ctx(device_fingerprint=""),
+    )
+    user_before = repo.by_email["login@example.com"]
+    assert user_before.fingerprint_hash is None
+
+    await service.login(
+        LoginCommand(email="login@example.com", password="SecurePass1!"),
+        abuse_context=_ctx(device_fingerprint="fp-after-login"),
+    )
+    user_after = repo.by_email["login@example.com"]
+    expected = compute_device_fingerprint_hash(
+        device_fingerprint="fp-after-login",
+        user_agent="Mozilla/5.0 Test",
+        accept_language="ru-RU,ru;q=0.9",
+    )
+    assert user_after.fingerprint_hash == expected

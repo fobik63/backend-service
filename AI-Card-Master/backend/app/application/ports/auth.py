@@ -13,7 +13,33 @@ class AuthRepositoryPort(Protocol):
 
     async def get_by_id(self, user_id: UUID) -> User | None: ...
 
-    async def create_user(self, *, email: str, hashed_password: str) -> User: ...
+    async def create_user(
+        self,
+        *,
+        email: str,
+        hashed_password: str,
+        fingerprint_hash: str | None = None,
+    ) -> User: ...
+
+    async def update_fingerprint_hash(
+        self,
+        user_id: UUID,
+        *,
+        fingerprint_hash: str,
+    ) -> User | None:
+        """Persist SHA-256 device fingerprint on the user profile."""
+
+        ...
+
+    async def exists_fingerprint_hash(
+        self,
+        *,
+        fingerprint_hash: str,
+        exclude_user_id: UUID | None = None,
+    ) -> bool:
+        """True when another user row already stores this device fingerprint."""
+
+        ...
 
     async def flag_user(self, user_id: UUID, *, reason: str) -> User | None:
         """Silently flag an abuser account (no hard ban / no client-visible block)."""

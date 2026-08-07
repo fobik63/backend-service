@@ -162,6 +162,8 @@ def test_cors_methods_and_headers_are_explicit() -> None:
     assert "*" not in settings.cors_allow_headers_list
     assert "GET" in settings.cors_allow_methods_list
     assert "Authorization" in settings.cors_allow_headers_list
+    assert "X-Device-Fingerprint" in settings.cors_allow_headers_list
+    assert "Idempotency-Key" in settings.cors_allow_headers_list
 
 
 def test_production_rejects_wildcard_cors_origin() -> None:

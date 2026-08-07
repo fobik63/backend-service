@@ -1,4 +1,4 @@
-"""Auth API: register, login, and current-user profile."""
+"""Auth API: register, login, refresh, and current-user profile."""
 
 from __future__ import annotations
 
@@ -15,7 +15,11 @@ from app.application.auth_service import (
     AuthCredentialsError,
     AuthDisposableEmailError,
     AuthNotFoundError,
+    AuthRefreshError,
+    AuthRegistrationBlockedError,
     AuthService,
+    AuthTokenFamilyRevokedError,
+    AuthTokenStoreError,
 )
 from app.core.rate_limit import auth_bruteforce_limit
 from app.domain.auth import LoginCommand, RegisterCommand
@@ -39,6 +43,10 @@ class RegisterRequest(StrictAPIModel):
 class LoginRequest(StrictAPIModel):
     email: str = Field(..., min_length=3, max_length=320)
     password: str = Field(..., min_length=1, max_length=128)
+
+
+class RefreshRequest(StrictAPIModel):
+    refresh_token: str = Field(..., min_length=20, max_length=4096)
 
 
 class TokenResponse(StrictAPIModel):
@@ -89,8 +97,8 @@ def _session_response(view, tokens) -> AuthSessionResponse:
     )
 
 
-def _signup_abuse_context(request: Request) -> SignupAbuseContext:
-    """Collect IP / UA / Accept-Language / X-Device-Fingerprint for trial gates."""
+def _device_abuse_context(request: Request) -> SignupAbuseContext:
+    """Collect IP / UA / Accept-Language / X-Device-Fingerprint for anti-abuse."""
 
     client_ip = getattr(request.state, "client_ip", None) or (
         request.client.host if request.client is not None else "unknown"
@@ -128,7 +136,7 @@ async def register(
         command = RegisterCommand(email=payload.email, password=payload.password)
         view, tokens = await auth.register(
             command,
-            abuse_context=_signup_abuse_context(request),
+            abuse_context=_device_abuse_context(request),
         )
     except (ValueError, ValidationError) as exc:
         raise HTTPException(
@@ -138,6 +146,11 @@ async def register(
     except AuthDisposableEmailError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except AuthRegistrationBlockedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
             detail=str(exc),
         ) from exc
     except AuthConflictError as exc:
@@ -161,7 +174,10 @@ async def login(
 ) -> AuthSessionResponse:
     try:
         command = LoginCommand(email=payload.email, password=payload.password)
-        view, tokens = await auth.login(command)
+        view, tokens = await auth.login(
+            command,
+            abuse_context=_device_abuse_context(request),
+        )
     except (ValueError, ValidationError) as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -172,6 +188,45 @@ async def login(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(exc),
             headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+    return _session_response(view, tokens)
+
+
+@router.post(
+    "/refresh",
+    response_model=AuthSessionResponse,
+    summary="Rotate refresh token (RTR) and obtain a new JWT pair",
+)
+@auth_bruteforce_limit
+async def refresh(
+    payload: RefreshRequest,
+    request: Request,
+    auth: AuthService = Depends(get_auth_service),
+) -> AuthSessionResponse:
+    try:
+        view, tokens = await auth.refresh(payload.refresh_token)
+    except AuthTokenFamilyRevokedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+    except (AuthRefreshError, AuthNotFoundError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+    except AuthCredentialsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+    except AuthTokenStoreError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
         ) from exc
     return _session_response(view, tokens)
 

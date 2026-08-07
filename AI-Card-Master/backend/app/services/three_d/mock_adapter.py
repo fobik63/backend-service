@@ -159,6 +159,31 @@ class MockThreeDEngineAdapter(BaseThreeDEngine):
                 pass
         return True
 
+    async def aclose(self) -> None:
+        """Cancel in-flight simulator tasks and drop in-memory state."""
+
+        async with self._lock:
+            runners = [
+                state.runner
+                for state in self._tasks.values()
+                if state.runner is not None and not state.runner.done()
+            ]
+            for state in self._tasks.values():
+                if state.status not in {
+                    ThreeDTaskLifecycleStatus.COMPLETED,
+                    ThreeDTaskLifecycleStatus.FAILED,
+                }:
+                    state.cancelled = True
+                    state.status = ThreeDTaskLifecycleStatus.FAILED
+                    state.error_message = "Engine shut down."
+                    state.stage = None
+            self._tasks.clear()
+
+        for runner in runners:
+            runner.cancel()
+        if runners:
+            await asyncio.gather(*runners, return_exceptions=True)
+
     async def wait_until_settled(
         self,
         provider_task_id: str,

@@ -28,6 +28,7 @@ from app.models import generation as _generation  # noqa: F401
 from app.models import smart_variant as _smart_variant  # noqa: F401
 from app.models import generation_error_log as _generation_error_log  # noqa: F401
 from app.models import generation_job as _generation_job  # noqa: F401
+from app.models import idempotency_record as _idempotency_record  # noqa: F401
 from app.models import marketplace_export as _marketplace_export  # noqa: F401
 from app.models import payment as _payment  # noqa: F401
 from app.models import pain_analysis as _pain_analysis  # noqa: F401

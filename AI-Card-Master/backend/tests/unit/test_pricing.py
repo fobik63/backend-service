@@ -134,11 +134,44 @@ async def test_hold_commit_and_refund_flow() -> None:
         def __init__(self, session: object) -> None:
             self._session = session
 
-        async def debit_coins_in_transaction(self, *, user_id, amount):
+        async def lookup_idempotency(self, *, user_id, idempotency_key):
+            return None
+
+        async def debit_coins_idempotent_in_transaction(
+            self,
+            *,
+            user_id,
+            amount,
+            idempotency_key=None,
+            response_body=None,
+            response_code=200,
+            operation="debit",
+        ):
             if balances[user_id] < amount:
                 raise BillingValidationError("Insufficient AI-coin balance.")
             balances[user_id] -= amount
-            return SimpleNamespace(ai_coins=balances[user_id])
+            user = SimpleNamespace(ai_coins=balances[user_id])
+            body = {
+                "operation": operation,
+                "amount": amount,
+                "new_balance": balances[user_id],
+                **(dict(response_body) if response_body else {}),
+            }
+            from app.services.billing_service import IdempotentCoinMutationResult
+
+            return IdempotentCoinMutationResult(
+                user=user,
+                already_processed=False,
+                response_code=response_code,
+                response_body=body,
+                idempotency_key=idempotency_key,
+            )
+
+        async def debit_coins_in_transaction(self, *, user_id, amount):
+            result = await self.debit_coins_idempotent_in_transaction(
+                user_id=user_id, amount=amount
+            )
+            return result.user
 
         async def refund_coins_in_transaction(self, *, user_id, amount):
             balances[user_id] += amount

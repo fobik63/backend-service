@@ -40,7 +40,13 @@ class InMemoryAuthRepository:
     async def get_by_id(self, user_id: UUID) -> User | None:
         return self.by_id.get(user_id)
 
-    async def create_user(self, *, email: str, hashed_password: str) -> User:
+    async def create_user(
+        self,
+        *,
+        email: str,
+        hashed_password: str,
+        fingerprint_hash: str | None = None,
+    ) -> User:
         user = User(
             id=uuid4(),
             email=email.strip().lower(),
@@ -52,11 +58,37 @@ class InMemoryAuthRepository:
             is_banned=False,
             is_flagged=False,
             daily_bonus_streak=0,
+            fingerprint_hash=(fingerprint_hash or None),
             created_at=datetime.now(UTC),
         )
         self.by_id[user.id] = user
         self.by_email[user.email] = user
         return user
+
+    async def update_fingerprint_hash(
+        self,
+        user_id: UUID,
+        *,
+        fingerprint_hash: str,
+    ) -> User | None:
+        user = self.by_id.get(user_id)
+        if user is None:
+            return None
+        user.fingerprint_hash = fingerprint_hash[:64]
+        return user
+
+    async def exists_fingerprint_hash(
+        self,
+        *,
+        fingerprint_hash: str,
+        exclude_user_id: UUID | None = None,
+    ) -> bool:
+        for uid, user in self.by_id.items():
+            if exclude_user_id is not None and uid == exclude_user_id:
+                continue
+            if user.fingerprint_hash == fingerprint_hash:
+                return True
+        return False
 
     async def flag_user(self, user_id: UUID, *, reason: str) -> User | None:
         user = self.by_id.get(user_id)
@@ -114,6 +146,11 @@ def lifecycle_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setattr(settings, "dead_mans_switch_enabled", False)
     monkeypatch.setattr(settings, "cloudflare_enabled", False)
     monkeypatch.setattr(settings, "cloudflare_enforce_edge", False)
+    monkeypatch.setattr(settings, "slowapi_enabled", False)
+
+    from app.core.rate_limit import limiter
+
+    monkeypatch.setattr(limiter, "enabled", False)
 
     async def _skip_behavioral(*_args: Any, **_kwargs: Any) -> None:
         return None

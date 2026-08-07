@@ -82,6 +82,7 @@ THREE_D_MODEL_COEFFICIENTS: Mapping[str, Decimal] = {
     "mock": Decimal("1.00"),
     "meshy": Decimal("1.00"),
     "tripo": Decimal("1.05"),
+    "tripo3d": Decimal("1.05"),
     "rodin": Decimal("1.10"),
     "csmlib": Decimal("1.10"),
     "premium": Decimal("1.25"),
@@ -401,9 +402,16 @@ class BillingService:
         *,
         service_type: str | None = None,
         reference_id: UUID | None = None,
+        idempotency_key: str | None = None,
         commit: bool = True,
     ) -> UUID:
-        """Freeze ``amount`` coins; return ``transaction_id`` (coin_holds.id)."""
+        """Freeze ``amount`` coins; return ``transaction_id`` (coin_holds.id).
+
+        When ``idempotency_key`` is set, Redis then Postgres
+        ``idempotency_records`` are checked; a hit returns the prior
+        ``transaction_id`` without a second freeze. On miss the ledger row
+        is written in the same ACID transaction as the debit.
+        """
 
         from app.models.coin_hold import CoinHold
         from app.services.billing_service import (
@@ -413,6 +421,21 @@ class BillingService:
 
         if amount < 0:
             raise BillingValidationError("Hold amount must be non-negative.")
+
+        cleaned_key = idempotency_key.strip() if idempotency_key else None
+        wallet = self._wallet_service()
+        if cleaned_key:
+            replay = await wallet.lookup_idempotency(
+                user_id=user_id,
+                idempotency_key=cleaned_key,
+            )
+            if replay is not None:
+                prior = replay.response_body.get("transaction_id")
+                if isinstance(prior, str) and prior:
+                    return UUID(prior)
+                raise BillingValidationError(
+                    "Idempotent hold replay is missing transaction_id."
+                )
 
         hold = CoinHold(
             id=uuid4(),
@@ -424,16 +447,36 @@ class BillingService:
         )
         self._session.add(hold)
 
-        if amount > 0:
-            try:
-                await self._wallet_service().debit_coins_in_transaction(
-                    user_id=user_id,
-                    amount=amount,
-                )
-            except BillingNotFoundError:
-                raise
-            except BillingValidationError:
-                raise
+        try:
+            mutation = await wallet.debit_coins_idempotent_in_transaction(
+                user_id=user_id,
+                amount=amount,
+                idempotency_key=cleaned_key,
+                response_body={
+                    "operation": "hold",
+                    "transaction_id": str(hold.id),
+                    "service_type": hold.service_type,
+                    "reference_id": str(reference_id) if reference_id else None,
+                },
+                response_code=200,
+                operation="hold",
+            )
+        except BillingNotFoundError:
+            raise
+        except BillingValidationError:
+            raise
+
+        if mutation.already_processed:
+            self._session.delete(hold)
+            await self._session.flush()
+            prior = mutation.response_body.get("transaction_id")
+            if isinstance(prior, str) and prior:
+                if commit:
+                    await self._session.commit()
+                return UUID(prior)
+            raise BillingValidationError(
+                "Idempotent hold replay is missing transaction_id."
+            )
 
         await self._session.flush()
         if commit:

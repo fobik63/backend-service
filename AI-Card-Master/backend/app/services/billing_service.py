@@ -5,28 +5,42 @@ Rules:
 - On successful payment: set subscription_status to the purchased tariff,
   shift subscription_ends_at forward by tariff duration, add coins to balance.
 - Webhook processing is idempotent via payment status + yookassa_payment_id.
+- Coin debit / freeze: Redis hot path + Postgres ``idempotency_records``
+  durable ledger in the same ACID transaction as the balance mutation.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import Any, Mapping
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.domain.winback import compute_discounted_amount
+from app.infrastructure.idempotency_store import (
+    STATUS_COMPLETED,
+    get_idempotency_record,
+    store_completed_response,
+)
+from app.infrastructure.redis import RedisUnavailableError
 from app.models.enums import PaymentStatus, TariffCode
+from app.models.idempotency_record import IdempotencyRecord
 from app.models.payment import Payment
 from app.models.user import User
 from app.services.tariffs import TariffPlan, get_tariff_plan
 
 
 logger = logging.getLogger(__name__)
+
+_BILLING_IDEMPOTENCY_SCOPE_PREFIX = "billing:"
 
 
 def expected_tariff_amount(
@@ -89,6 +103,23 @@ class DailyBonusResult:
     next_available_at: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class IdempotentCoinMutationResult:
+    """Outcome of an idempotent debit / freeze against the durable ledger."""
+
+    user: User
+    already_processed: bool
+    response_code: int
+    response_body: dict[str, Any]
+    idempotency_key: str | None = None
+
+
+def billing_idempotency_scope(user_id: UUID) -> str:
+    """Redis scope isolating financial idempotency keys per user."""
+
+    return f"{_BILLING_IDEMPOTENCY_SCOPE_PREFIX}{user_id}"
+
+
 def compute_subscription_end(
     *,
     current_ends_at: datetime | None,
@@ -139,6 +170,162 @@ class BillingService:
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    async def lookup_idempotency(
+        self,
+        *,
+        user_id: UUID,
+        idempotency_key: str,
+    ) -> IdempotentCoinMutationResult | None:
+        """Resolve ``X-Idempotency-Key``: Redis first, Postgres on miss.
+
+        Returns a replay result when the key was already committed for this
+        user; ``None`` when the caller must perform the mutation.
+        """
+
+        cleaned = idempotency_key.strip()
+        if not cleaned:
+            raise BillingValidationError("Idempotency key must be non-empty.")
+
+        redis_hit = await self._lookup_idempotency_redis(
+            user_id=user_id,
+            idempotency_key=cleaned,
+        )
+        if redis_hit is not None:
+            return redis_hit
+
+        pg_hit = await self._lookup_idempotency_postgres(
+            user_id=user_id,
+            idempotency_key=cleaned,
+        )
+        if pg_hit is not None:
+            await self._cache_idempotency_redis(
+                user_id=user_id,
+                idempotency_key=cleaned,
+                response_code=pg_hit.response_code,
+                response_body=pg_hit.response_body,
+            )
+        return pg_hit
+
+    async def _lookup_idempotency_redis(
+        self,
+        *,
+        user_id: UUID,
+        idempotency_key: str,
+    ) -> IdempotentCoinMutationResult | None:
+        try:
+            record = await get_idempotency_record(
+                scope=billing_idempotency_scope(user_id),
+                idempotency_key=idempotency_key,
+            )
+        except RedisUnavailableError:
+            logger.warning(
+                "Billing idempotency Redis unavailable; falling back to Postgres",
+                exc_info=True,
+            )
+            return None
+
+        if record is None or record.get("status") != STATUS_COMPLETED:
+            return None
+
+        body_raw = record.get("body")
+        body: dict[str, Any]
+        if isinstance(body_raw, str):
+            try:
+                parsed = json.loads(body_raw)
+                body = parsed if isinstance(parsed, dict) else {"raw": body_raw}
+            except (TypeError, ValueError):
+                body = {"raw": body_raw}
+        elif isinstance(body_raw, dict):
+            body = dict(body_raw)
+        else:
+            body = {}
+
+        user = await self._session.get(User, user_id, with_for_update=True)
+        if user is None:
+            raise BillingNotFoundError(f"User {user_id} not found.")
+        return IdempotentCoinMutationResult(
+            user=user,
+            already_processed=True,
+            response_code=int(record.get("status_code") or 200),
+            response_body=body,
+            idempotency_key=idempotency_key,
+        )
+
+    async def _lookup_idempotency_postgres(
+        self,
+        *,
+        user_id: UUID,
+        idempotency_key: str,
+    ) -> IdempotentCoinMutationResult | None:
+        row = await self._session.get(IdempotencyRecord, idempotency_key)
+        if row is None:
+            return None
+        if row.user_id != user_id:
+            raise BillingValidationError(
+                "Idempotency key belongs to another user."
+            )
+        user = await self._session.get(User, user_id, with_for_update=True)
+        if user is None:
+            raise BillingNotFoundError(f"User {user_id} not found.")
+        body = row.response_body if isinstance(row.response_body, dict) else {}
+        return IdempotentCoinMutationResult(
+            user=user,
+            already_processed=True,
+            response_code=int(row.response_code),
+            response_body=dict(body),
+            idempotency_key=idempotency_key,
+        )
+
+    async def _persist_idempotency_in_transaction(
+        self,
+        *,
+        user_id: UUID,
+        idempotency_key: str,
+        response_code: int,
+        response_body: Mapping[str, Any],
+    ) -> None:
+        """Insert durable ledger row in the caller's open unit of work."""
+
+        self._session.add(
+            IdempotencyRecord(
+                idempotency_key=idempotency_key,
+                user_id=user_id,
+                response_code=int(response_code),
+                response_body=dict(response_body),
+            )
+        )
+        await self._session.flush()
+
+    async def _cache_idempotency_redis(
+        self,
+        *,
+        user_id: UUID,
+        idempotency_key: str,
+        response_code: int,
+        response_body: Mapping[str, Any],
+    ) -> None:
+        """Best-effort hot-path cache; never fails the ACID commit."""
+
+        settings = get_settings()
+        try:
+            await store_completed_response(
+                scope=billing_idempotency_scope(user_id),
+                idempotency_key=idempotency_key,
+                status_code=response_code,
+                body=json.dumps(
+                    dict(response_body),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+                media_type="application/json",
+                ttl_seconds=settings.idempotency_response_ttl_seconds,
+            )
+        except RedisUnavailableError:
+            logger.warning(
+                "Could not cache billing idempotency in Redis (durable Postgres ok)",
+                exc_info=True,
+            )
 
     async def create_pending_payment(
         self,
@@ -388,26 +575,125 @@ class BillingService:
         )
 
     async def debit_coins_in_transaction(
-        self, *, user_id: UUID, amount: int
+        self,
+        *,
+        user_id: UUID,
+        amount: int,
+        idempotency_key: str | None = None,
+        response_body: Mapping[str, Any] | None = None,
+        response_code: int = 200,
     ) -> User:
         """Debit ``amount`` AI-coins without committing (unit-of-work safe).
 
         Single write-path for all coin debits (audit R1). Repositories and
         feature services must call this instead of mutating ``User.ai_coins``.
+
+        When ``idempotency_key`` (``X-Idempotency-Key``) is set, Redis is
+        checked first and Postgres ``idempotency_records`` on miss. A hit
+        returns the locked user without a second debit. A miss writes the
+        ledger row in the same flush as the balance change.
         """
+
+        result = await self.debit_coins_idempotent_in_transaction(
+            user_id=user_id,
+            amount=amount,
+            idempotency_key=idempotency_key,
+            response_body=response_body,
+            response_code=response_code,
+        )
+        return result.user
+
+    async def debit_coins_idempotent_in_transaction(
+        self,
+        *,
+        user_id: UUID,
+        amount: int,
+        idempotency_key: str | None = None,
+        response_body: Mapping[str, Any] | None = None,
+        response_code: int = 200,
+        operation: str = "debit",
+    ) -> IdempotentCoinMutationResult:
+        """Idempotent debit with Redis → Postgres double-check + ACID ledger."""
 
         if amount < 0:
             raise BillingValidationError("Debit amount must be non-negative.")
+
+        cleaned_key = idempotency_key.strip() if idempotency_key else None
+        if cleaned_key:
+            replay = await self.lookup_idempotency(
+                user_id=user_id,
+                idempotency_key=cleaned_key,
+            )
+            if replay is not None:
+                return replay
+
         user = await self._session.get(User, user_id, with_for_update=True)
         if user is None:
             raise BillingNotFoundError(f"User {user_id} not found.")
-        if amount == 0:
-            return user
-        if int(user.ai_coins) < amount:
-            raise BillingValidationError("Insufficient AI-coin balance.")
-        user.ai_coins = int(user.ai_coins) - amount
-        await self._session.flush()
-        return user
+
+        # Re-check Postgres under the user row lock (same-user races).
+        if cleaned_key:
+            locked_replay = await self._lookup_idempotency_postgres(
+                user_id=user_id,
+                idempotency_key=cleaned_key,
+            )
+            if locked_replay is not None:
+                return locked_replay
+
+        if amount > 0:
+            if int(user.ai_coins) < amount:
+                raise BillingValidationError("Insufficient AI-coin balance.")
+            user.ai_coins = int(user.ai_coins) - amount
+
+        body: dict[str, Any] = {
+            "operation": operation,
+            "user_id": str(user_id),
+            "amount": int(amount),
+            "new_balance": int(user.ai_coins),
+        }
+        if response_body:
+            body.update(dict(response_body))
+
+        if cleaned_key:
+            try:
+                async with self._session.begin_nested():
+                    await self._persist_idempotency_in_transaction(
+                        user_id=user_id,
+                        idempotency_key=cleaned_key,
+                        response_code=response_code,
+                        response_body=body,
+                    )
+            except IntegrityError:
+                # Concurrent insert won; undo in-session debit and replay.
+                if amount > 0:
+                    user.ai_coins = int(user.ai_coins) + amount
+                race_replay = await self._lookup_idempotency_postgres(
+                    user_id=user_id,
+                    idempotency_key=cleaned_key,
+                )
+                if race_replay is not None:
+                    return race_replay
+                raise BillingValidationError(
+                    "Idempotency key conflict could not be resolved."
+                ) from None
+        else:
+            await self._session.flush()
+
+        if cleaned_key:
+            await self._cache_idempotency_redis(
+                user_id=user_id,
+                idempotency_key=cleaned_key,
+                response_code=response_code,
+                response_body=body,
+            )
+
+        return IdempotentCoinMutationResult(
+            user=user,
+            already_processed=False,
+            response_code=int(response_code),
+            response_body=body,
+            idempotency_key=cleaned_key,
+        )
 
     async def refund_coins_in_transaction(
         self, *, user_id: UUID, amount: int

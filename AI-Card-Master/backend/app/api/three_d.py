@@ -40,6 +40,10 @@ from app.infrastructure.three_d_factory import build_three_d_service
 from app.models.database import get_db_session
 from app.models.user import User
 from app.services.billing_service import BillingValidationError
+from app.services.three_d.errors import (
+    THREE_D_UNAVAILABLE_MESSAGE,
+    ThreeDServiceUnavailableError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -320,6 +324,7 @@ async def _enqueue_generation(
     model: str | None = None,
 ) -> tuple[ThreeDTaskView, str | None, bool]:
     try:
+        await service.ensure_engine_available()
         task, replay = await service.create_task(
             user_id=current_user.id,
             prompt=prompt,
@@ -332,6 +337,11 @@ async def _enqueue_generation(
             mode=mode,
             model=model,
         )
+    except ThreeDServiceUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc) or THREE_D_UNAVAILABLE_MESSAGE,
+        ) from exc
     except ThreeDValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
