@@ -40,7 +40,7 @@ class GovernorAction(StrEnum):
     REJECT = "reject"
 
 
-# Routine text workloads that may run on Ollama when enabled.
+# Routine text workloads that may run on Ollama when enabled (C6 expanded).
 _LOCAL_ELIGIBLE: frozenset[ReasoningTaskKind] = frozenset(
     {
         ReasoningTaskKind.PAIN_ANALYSIS,
@@ -49,6 +49,9 @@ _LOCAL_ELIGIBLE: frozenset[ReasoningTaskKind] = frozenset(
         ReasoningTaskKind.AI_STRATEGY,
         ReasoningTaskKind.TEXT_CLASSIFICATION,
         ReasoningTaskKind.SEMANTIC_COMPRESSION,
+        # JSON-schema text fixes — local pre-filter / Haiku, not Opus.
+        ReasoningTaskKind.ZERO_HALLUCINATION,
+        ReasoningTaskKind.EXPORT_FAIL_SAFE_FIX,
     }
 )
 
@@ -59,8 +62,6 @@ _VISION_LOCKED: frozenset[ReasoningTaskKind] = frozenset(
         ReasoningTaskKind.VISUAL_AUDIT,
         ReasoningTaskKind.COMPETITOR_AUDIT,
         ReasoningTaskKind.CLAUDE_REASONING,
-        ReasoningTaskKind.ZERO_HALLUCINATION,
-        ReasoningTaskKind.EXPORT_FAIL_SAFE_FIX,
     }
 )
 
@@ -148,7 +149,10 @@ def decide_governor(
     soft = policy.soft_input_token_limit
     hard = policy.hard_input_token_limit
     tokens = request.estimated_input_tokens
-    tier = tier_for_task(request.task_kind)
+    tier = tier_for_task(
+        request.task_kind,
+        has_vision=request.has_vision,
+    )
     local_ok = is_local_eligible(
         request.task_kind,
         has_vision=request.has_vision,

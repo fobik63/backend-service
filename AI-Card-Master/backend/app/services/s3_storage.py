@@ -6,11 +6,13 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 import boto3
 from botocore.client import BaseClient
 from botocore.config import Config
+from boto3.s3.transfer import TransferConfig
 
 from app.core.config import Settings, get_settings
 
@@ -113,6 +115,72 @@ class SelectelS3Storage:
             self._bucket,
             object_key,
             len(data),
+        )
+        return S3UploadResult(
+            bucket=self._bucket,
+            object_key=object_key,
+            etag=etag,
+            presigned_url=presigned_url,
+        )
+
+    async def upload_file(
+        self,
+        *,
+        object_key: str,
+        file_path: str | Path,
+        content_type: str,
+        presign: bool = True,
+    ) -> S3UploadResult:
+        """Multipart-upload a local file without loading the whole payload into RAM."""
+
+        if not object_key.strip():
+            raise S3StorageError("object_key must not be empty.")
+        path = Path(file_path)
+        if not path.is_file():
+            raise S3StorageError(f"Upload path is not a file: {path}")
+        size = path.stat().st_size
+        if size <= 0:
+            raise S3StorageError("Cannot upload empty file.")
+
+        transfer_config = TransferConfig(
+            multipart_threshold=8 * 1024 * 1024,
+            multipart_chunksize=8 * 1024 * 1024,
+            max_concurrency=4,
+            use_threads=True,
+        )
+
+        def _upload() -> dict[str, Any]:
+            self._client.upload_file(
+                Filename=str(path),
+                Bucket=self._bucket,
+                Key=object_key,
+                ExtraArgs={"ContentType": content_type},
+                Config=transfer_config,
+            )
+            return self._client.head_object(Bucket=self._bucket, Key=object_key)
+
+        try:
+            head = await asyncio.to_thread(_upload)
+        except Exception as exc:
+            raise S3StorageError(
+                f"S3 multipart upload failed for key '{object_key}': {exc}"
+            ) from exc
+
+        etag = head.get("ETag")
+        if isinstance(etag, str):
+            etag = etag.strip('"')
+        else:
+            etag = None
+
+        presigned_url = ""
+        if presign:
+            presigned_url = await self.generate_presigned_url(object_key=object_key)
+
+        logger.info(
+            "Uploaded file s3://%s/%s (%s bytes, multipart-capable)",
+            self._bucket,
+            object_key,
+            size,
         )
         return S3UploadResult(
             bucket=self._bucket,

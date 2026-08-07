@@ -1,4 +1,4 @@
-"""Async Redis client used as an expendable cache and circuit-breaker store."""
+"""Async Redis clients: expendable cache vs non-evictable security store."""
 
 from __future__ import annotations
 
@@ -19,27 +19,43 @@ class RedisUnavailableError(RuntimeError):
 
 
 _redis_client: Redis | None = None
+_security_redis_client: Redis | None = None
+
+
+def _build_client(url: str) -> Redis:
+    return Redis.from_url(
+        url,
+        encoding="utf-8",
+        decode_responses=True,
+        health_check_interval=30,
+        socket_connect_timeout=2,
+        socket_timeout=3,
+        retry_on_timeout=True,
+    )
 
 
 def get_redis_client() -> Redis:
-    """Return the process-local lazy async Redis client."""
+    """Return the process-local lazy async Redis client (cache / broker-adjacent)."""
 
     global _redis_client
     if _redis_client is None:
-        _redis_client = Redis.from_url(
-            get_settings().redis_url,
-            encoding="utf-8",
-            decode_responses=True,
-            health_check_interval=30,
-            socket_connect_timeout=2,
-            socket_timeout=3,
-            retry_on_timeout=True,
-        )
+        _redis_client = _build_client(get_settings().redis_url)
     return _redis_client
 
 
+def get_security_redis_client() -> Redis:
+    """Return Redis for rate limits / bans / CAPTCHA (noeviction instance in prod)."""
+
+    global _security_redis_client
+    if _security_redis_client is None:
+        _security_redis_client = _build_client(
+            get_settings().effective_redis_security_url
+        )
+    return _security_redis_client
+
+
 async def close_redis_client() -> None:
-    """Close the process-local Redis connection pool."""
+    """Close the process-local cache Redis connection pool."""
 
     global _redis_client
     if _redis_client is not None:
@@ -47,19 +63,32 @@ async def close_redis_client() -> None:
         _redis_client = None
 
 
+async def close_security_redis_client() -> None:
+    """Close the process-local security Redis connection pool."""
+
+    global _security_redis_client
+    if _security_redis_client is not None:
+        await _security_redis_client.aclose()
+        _security_redis_client = None
+
+
 async def redis_healthcheck() -> bool:
     """Return Redis availability without raising into a health endpoint."""
 
     try:
-        return bool(await get_redis_client().ping())
+        cache_ok = bool(await get_redis_client().ping())
+        security_ok = bool(await get_security_redis_client().ping())
+        return cache_ok and security_ok
     except RedisError:
         logger.warning("Redis health check failed", exc_info=True)
         return False
 
 
 async def cache_json(key: str, payload: dict[str, Any], ttl_seconds: int) -> None:
-    """Store compact JSON with a TTL."""
+    """Store compact JSON with a mandatory TTL (volatile-lru safe)."""
 
+    if ttl_seconds <= 0:
+        raise ValueError("cache_json requires a positive ttl_seconds.")
     try:
         encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         await get_redis_client().set(key, encoded, ex=ttl_seconds)

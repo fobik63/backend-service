@@ -56,6 +56,8 @@ OZON_REQUIRED_PRODUCT_KEYS: frozenset[str] = frozenset(
 CIRCUIT_BREAKER_THRESHOLD = 5
 # Hard ceiling for one Celery stock-parser worker task (OOM / soft-timeout guard).
 STOCK_PARSER_DEFAULT_CHUNK_SIZE = 100
+# Keyset page size when scanning active SKUs for nightly dispatch (audit Q2).
+STOCK_PARSER_DEFAULT_KEYSET_BATCH_SIZE = 300
 # Synthetic warehouse when a marketplace returns no per-warehouse stocks.
 STOCK_SNAPSHOT_FALLBACK_WAREHOUSE_ID = "_"
 

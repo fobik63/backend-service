@@ -126,8 +126,8 @@ def test_normalize_export_fix_payload() -> None:
     assert suggestion.model_name == "claude-opus-4-7"
 
 
-def test_export_fail_safe_fix_routes_to_opus() -> None:
-    assert tier_for_task(ReasoningTaskKind.EXPORT_FAIL_SAFE_FIX) is ReasoningTier.DEEP
+def test_export_fail_safe_fix_routes_to_haiku() -> None:
+    assert tier_for_task(ReasoningTaskKind.EXPORT_FAIL_SAFE_FIX) is ReasoningTier.SIMPLE
 
 
 class FakeExportRepository:

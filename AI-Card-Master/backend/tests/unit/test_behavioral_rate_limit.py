@@ -241,6 +241,35 @@ def test_captcha_required_json_via_test_client() -> None:
     assert response.headers.get("retry-after") == "120"
 
 
+@pytest.mark.asyncio
+async def test_assert_generation_propagates_redis_unavailable() -> None:
+    class BoomStore(FakeStore):
+        async def increment_generation_counter(
+            self,
+            *,
+            subject_key: str,
+            window_seconds: int,
+        ) -> int:
+            from app.infrastructure.redis import RedisUnavailableError
+
+            raise RedisUnavailableError("down")
+
+    service = BehavioralRateLimitService(
+        BoomStore(),
+        FakeVerifier(),
+        limit_per_window=8,
+        window_seconds=60,
+        captcha_block_ttl_seconds=300,
+    )
+    from app.infrastructure.redis import RedisUnavailableError
+
+    with pytest.raises(RedisUnavailableError):
+        await service.assert_generation_allowed(
+            visitor_id="visitorFingerprint1",
+            user_id=uuid4(),
+        )
+
+
 def test_verify_captcha_route_path_constant() -> None:
     """Endpoint path from plan §35 (wired in app.api.captcha + main)."""
 

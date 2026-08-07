@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -14,7 +13,8 @@ from app.application.winback_service import WinbackService
 from app.core.config import get_settings
 from app.infrastructure.celery_app import celery_app
 from app.infrastructure.persistence.winback_repository import WinbackRepository
-from app.models.database import SessionLocal, engine
+from app.models.database import SessionLocal
+from app.workers.async_runtime import run_worker_async
 from app.services.telegram_user_notify import TelegramUserNotifier
 
 logger = logging.getLogger(__name__)
@@ -34,15 +34,9 @@ class WinbackTask(Task):
 
 
 def _run_async(factory: Callable[[], Awaitable[T]]) -> T:
-    """Celery sync boundary around async win-back use cases."""
+    """Celery sync boundary; shared pools close on worker_process_shutdown."""
 
-    async def _execute() -> T:
-        try:
-            return await factory()
-        finally:
-            await engine.dispose()
-
-    return asyncio.run(_execute())
+    return run_worker_async(factory)
 
 
 def _build_service(session: Any) -> WinbackService:

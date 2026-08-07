@@ -186,12 +186,17 @@ class WinbackRepository:
     async def credit_free_generations(self, *, user_id: UUID, coins: int) -> int:
         """Add AI-coins and return the new balance."""
 
-        user = await self._session.get(User, user_id, with_for_update=True)
-        if user is None:
-            raise ValueError(f"User {user_id} not found.")
         if coins <= 0:
             raise ValueError("coins must be positive.")
-        user.ai_coins = int(user.ai_coins) + int(coins)
+        from app.services.billing_service import BillingNotFoundError, BillingService
+
+        try:
+            # Single write-path: BillingService.in_transaction (audit R1).
+            user = await BillingService(self._session).credit_coins_in_transaction(
+                user_id=user_id, amount=int(coins)
+            )
+        except BillingNotFoundError as exc:
+            raise ValueError(f"User {user_id} not found.") from exc
         await self._session.commit()
         await self._session.refresh(user)
         return int(user.ai_coins)

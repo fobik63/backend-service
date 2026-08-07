@@ -71,12 +71,46 @@ def test_deep_vision_tasks_stay_on_opus() -> None:
         ReasoningTaskKind.VISUAL_AUDIT,
         ReasoningTaskKind.COMPETITOR_AUDIT,
         ReasoningTaskKind.CLAUDE_REASONING,
-        ReasoningTaskKind.ZERO_HALLUCINATION,
-        ReasoningTaskKind.EXPORT_FAIL_SAFE_FIX,
+        ReasoningTaskKind.EYE_OF_GOD,
     )
     for kind in deep:
         assert tier_for_task(kind) is ReasoningTier.DEEP
+        assert tier_for_task(kind, has_vision=True) is ReasoningTier.DEEP
 
+
+def test_text_only_vision_tasks_downgrade_to_haiku() -> None:
+    for kind in (
+        ReasoningTaskKind.COMPETITOR_AUDIT,
+        ReasoningTaskKind.CLAUDE_REASONING,
+        ReasoningTaskKind.EYE_OF_GOD,
+        ReasoningTaskKind.VISUAL_AUDIT,
+    ):
+        assert tier_for_task(kind, has_vision=False) is ReasoningTier.SIMPLE
+        assert (
+            model_for_task(
+                kind,
+                simple_model="claude-3-5-haiku-20241022",
+                deep_model="claude-opus-4-7",
+                has_vision=False,
+            )
+            == "claude-3-5-haiku-20241022"
+        )
+
+
+def test_zero_hallucination_and_export_use_simple_tier() -> None:
+    for kind in (
+        ReasoningTaskKind.ZERO_HALLUCINATION,
+        ReasoningTaskKind.EXPORT_FAIL_SAFE_FIX,
+    ):
+        assert tier_for_task(kind) is ReasoningTier.SIMPLE
+        assert (
+            model_for_task(
+                kind,
+                simple_model="claude-3-5-haiku-20241022",
+                deep_model="claude-opus-4-7",
+            )
+            == "claude-3-5-haiku-20241022"
+        )
 
 def test_router_matches_settings_models() -> None:
     router = SmartReasoningRouter(
@@ -158,7 +192,7 @@ async def test_messages_json_cache_hit_skips_upstream() -> None:
         analytics_cache_ttl_seconds=86400,
         analytics_task_kind="pain_analysis",
     )
-    client._post_with_retry = AsyncMock()  # type: ignore[method-assign]
+    client._messages_create_with_retry = AsyncMock()  # type: ignore[method-assign]
     client._record_usage = AsyncMock()  # type: ignore[method-assign]
 
     try:
@@ -175,7 +209,7 @@ async def test_messages_json_cache_hit_skips_upstream() -> None:
         assert parsed == {"ok": True, "score": 1}
         assert in_tok == 0
         assert out_tok == 0
-        client._post_with_retry.assert_not_awaited()
+        client._messages_create_with_retry.assert_not_awaited()
         cache.set.assert_not_awaited()
     finally:
         with patch.object(client._sdk, "close", new=AsyncMock()):
@@ -187,13 +221,16 @@ async def test_haiku_payload_omits_adaptive_thinking() -> None:
     settings = _settings()
     captured: dict[str, Any] = {}
 
-    async def _capture(*, endpoint: str, headers: dict[str, Any], payload: dict[str, Any]):
-        captured["payload"] = payload
+    async def _capture(
+        *,
+        create_kwargs: dict[str, Any],
+        extra_headers: dict[str, str] | None = None,
+    ):
+        captured["payload"] = create_kwargs
+        captured["extra_headers"] = extra_headers
         response = MagicMock()
-        response.json.return_value = {
-            "content": [{"type": "text", "text": '{"result":"ok"}'}],
-            "usage": {"input_tokens": 3, "output_tokens": 2},
-        }
+        response.content = [MagicMock(type="text", text='{"result":"ok"}')]
+        response.usage = MagicMock(input_tokens=3, output_tokens=2)
         return response
 
     client = Claude47VisionClient(
@@ -201,7 +238,7 @@ async def test_haiku_payload_omits_adaptive_thinking() -> None:
         model_name="claude-3-5-haiku-20241022",
         analytics_cache=None,
     )
-    client._post_with_retry = _capture  # type: ignore[method-assign]
+    client._messages_create_with_retry = _capture  # type: ignore[method-assign]
     client._record_usage = AsyncMock()  # type: ignore[method-assign]
 
     try:
@@ -222,6 +259,10 @@ async def test_haiku_payload_omits_adaptive_thinking() -> None:
         assert "thinking" not in body
         assert "output_config" not in body
         assert "temperature" in body
+        system = body["system"]
+        assert isinstance(system, list)
+        assert system[0]["cache_control"] == {"type": "ephemeral"}
+        assert "Respond with a single JSON object" in system[0]["text"]
     finally:
         with patch.object(client._sdk, "close", new=AsyncMock()):
             await client.aclose()
@@ -232,13 +273,16 @@ async def test_opus_payload_keeps_adaptive_thinking() -> None:
     settings = _settings()
     captured: dict[str, Any] = {}
 
-    async def _capture(*, endpoint: str, headers: dict[str, Any], payload: dict[str, Any]):
-        captured["payload"] = payload
+    async def _capture(
+        *,
+        create_kwargs: dict[str, Any],
+        extra_headers: dict[str, str] | None = None,
+    ):
+        captured["payload"] = create_kwargs
+        captured["extra_headers"] = extra_headers
         response = MagicMock()
-        response.json.return_value = {
-            "content": [{"type": "text", "text": '{"result":"deep"}'}],
-            "usage": {"input_tokens": 11, "output_tokens": 7},
-        }
+        response.content = [MagicMock(type="text", text='{"result":"deep"}')]
+        response.usage = MagicMock(input_tokens=11, output_tokens=7)
         return response
 
     client = Claude47VisionClient(
@@ -246,7 +290,7 @@ async def test_opus_payload_keeps_adaptive_thinking() -> None:
         model_name="claude-opus-4-7",
         analytics_cache=None,
     )
-    client._post_with_retry = _capture  # type: ignore[method-assign]
+    client._messages_create_with_retry = _capture  # type: ignore[method-assign]
     client._record_usage = AsyncMock()  # type: ignore[method-assign]
 
     try:
@@ -264,6 +308,10 @@ async def test_opus_payload_keeps_adaptive_thinking() -> None:
         assert body["thinking"] == {"type": "adaptive"}
         assert "output_config" in body
         assert "temperature" not in body
+        system = body["system"]
+        assert isinstance(system, list)
+        assert system[0]["type"] == "text"
+        assert system[0]["cache_control"] == {"type": "ephemeral"}
     finally:
         with patch.object(client._sdk, "close", new=AsyncMock()):
             await client.aclose()

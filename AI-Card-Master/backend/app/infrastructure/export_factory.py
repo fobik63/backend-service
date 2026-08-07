@@ -70,8 +70,10 @@ def _build_claude_fix_suggester(
     *,
     require_claude_client: bool,
 ) -> Any | None:
+    from app.infrastructure.claude.facades import wrap_claude_for_domain
+
     task = ReasoningTaskKind.EXPORT_FAIL_SAFE_FIX
-    return load_claude_client(
+    client = load_claude_client(
         settings,
         require=require_claude_client,
         model_name=resolve_claude_model(task, settings),
@@ -79,3 +81,4 @@ def _build_claude_fix_suggester(
         analytics_cache_ttl_seconds=settings.claude_analytics_cache_ttl_seconds,
         analytics_task_kind=task.value,
     )
+    return wrap_claude_for_domain(client, domain="export_fix")

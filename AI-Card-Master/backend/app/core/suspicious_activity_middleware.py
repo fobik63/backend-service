@@ -23,6 +23,7 @@ from app.core.input_sanitization import scan_text_for_threats
 from app.infrastructure.cloudflare import get_cloudflare_client
 from app.infrastructure.security.rate_limiter import (
     RateLimitDecision,
+    SecurityControlUnavailableError,
     block_api_key,
     block_ip,
     claim_ban_alert_slot,
@@ -35,6 +36,7 @@ from app.infrastructure.security.rate_limiter import (
     record_request_for_rps,
     record_threat_event,
     append_blocked_threat,
+    should_fail_closed_on_redis,
 )
 from app.services.telegram_alerts import notify_security_ban
 
@@ -71,16 +73,23 @@ class SuspiciousActivityMiddleware(BaseHTTPMiddleware):
         if api_key_fp is not None:
             request.state.api_key_fingerprint = api_key_fp
 
-        if await is_ip_blocked(client_ip):
-            return _deny(
-                status.HTTP_403_FORBIDDEN,
-                "Access temporarily blocked due to suspicious activity.",
-            )
-        if api_key_fp is not None and await is_api_key_blocked(api_key_fp):
-            return _deny(
-                status.HTTP_403_FORBIDDEN,
-                "API key temporarily blocked due to suspicious activity.",
-            )
+        fail_closed = should_fail_closed_on_redis(path)
+        try:
+            if await is_ip_blocked(client_ip, fail_closed=fail_closed):
+                return _deny(
+                    status.HTTP_403_FORBIDDEN,
+                    "Access temporarily blocked due to suspicious activity.",
+                )
+            if api_key_fp is not None and await is_api_key_blocked(
+                api_key_fp,
+                fail_closed=fail_closed,
+            ):
+                return _deny(
+                    status.HTTP_403_FORBIDDEN,
+                    "API key temporarily blocked due to suspicious activity.",
+                )
+        except SecurityControlUnavailableError as exc:
+            return _security_unavailable(exc)
 
         await record_request_for_rps()
 
@@ -88,8 +97,11 @@ class SuspiciousActivityMiddleware(BaseHTTPMiddleware):
             ip=client_ip,
             limit=settings.security_rate_limit_per_minute,
             window_seconds=60,
+            path=path,
         )
         if not ip_rate.allowed:
+            if ip_rate.redis_unavailable:
+                return _security_unavailable_from_decision(ip_rate)
             return await _handle_rate_limit_breach(
                 request=request,
                 client_ip=client_ip,
@@ -105,8 +117,11 @@ class SuspiciousActivityMiddleware(BaseHTTPMiddleware):
                 api_key_fingerprint=api_key_fp,
                 limit=settings.security_api_key_rate_limit_per_minute,
                 window_seconds=60,
+                path=path,
             )
             if not key_rate.allowed:
+                if key_rate.redis_unavailable:
+                    return _security_unavailable_from_decision(key_rate)
                 return await _handle_rate_limit_breach(
                     request=request,
                     client_ip=client_ip,
@@ -336,4 +351,20 @@ def _deny(
         status_code=status_code,
         content={"success": False, "detail": detail},
         headers=headers,
+    )
+
+
+def _security_unavailable(exc: SecurityControlUnavailableError) -> JSONResponse:
+    return _deny(
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+        exc.message,
+        headers={"Retry-After": str(exc.retry_after_seconds)},
+    )
+
+
+def _security_unavailable_from_decision(rate: RateLimitDecision) -> JSONResponse:
+    return _deny(
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+        "Security controls temporarily unavailable.",
+        headers={"Retry-After": str(max(rate.retry_after_seconds, 1))},
     )

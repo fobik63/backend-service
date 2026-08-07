@@ -10,6 +10,7 @@ from app.application.oracle_service import OracleService
 from app.core.config import get_settings
 from app.domain.oracle import OracleGapConfig
 from app.domain.smart_reasoning import ReasoningTaskKind
+from app.infrastructure.claude.facades import wrap_claude_for_domain
 from app.infrastructure.claude_client_loader import load_claude_client
 from app.infrastructure.claude_stage_cache import RedisClaudeStageCache
 from app.infrastructure.persistence.oracle_repository import OracleRepository
@@ -55,6 +56,6 @@ def build_oracle_service(
         model_name=model_name,
         redis_stage_ttl_seconds=settings.claude_47_stage_cache_ttl_seconds,
         default_gap_config=gap_config,
-        enrichment=client,
+        enrichment=wrap_claude_for_domain(client, domain="oracle") or enrichment,
         stage_cache=RedisClaudeStageCache(),
     )

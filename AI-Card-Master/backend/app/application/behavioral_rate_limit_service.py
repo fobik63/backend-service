@@ -83,8 +83,9 @@ class BehavioralRateLimitService:
         """Record a generation attempt; raise ``CaptchaRequiredError`` on anomaly.
 
         Runs even when the user still has AI coins — credits do not bypass abuse
-        controls. Fail-open when the feature is disabled or no subject can be
-        resolved (should not happen for authenticated generation routes).
+        controls. When the feature is disabled or no subject can be resolved the
+        check is skipped. Redis failures from the store propagate as
+        ``RedisUnavailableError`` (fail-closed → HTTP 503 upstream).
         """
 
         if not self._enabled:

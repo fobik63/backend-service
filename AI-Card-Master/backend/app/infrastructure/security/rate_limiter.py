@@ -4,6 +4,9 @@ Great Wall (plan §61): dual buckets — per client IP and per API key / bearer
 token fingerprint — plus auto-ban helpers used by SuspiciousActivityMiddleware.
 
 Security & Status (plan §62): global JSON blocked-threat ring + RPS second buckets.
+
+RedisError policy: fail-closed for protected / non-health paths (HTTP 503 +
+Retry-After upstream). Fail-open is reserved for public read-only healthchecks.
 """
 
 from __future__ import annotations
@@ -26,7 +29,7 @@ from app.domain.security_status import (
     BlockedThreatEvent,
     RequestsPerSecondMetrics,
 )
-from app.infrastructure.redis import get_redis_client
+from app.infrastructure.redis import get_security_redis_client
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +42,41 @@ _API_KEY_AUTH_RE = re.compile(
 GLOBAL_THREAT_LOG_KEY = "security:threat_log:global"
 RPS_BUCKET_PREFIX = "security:rps:"
 _THREAT_LOG_MAX = 50
+REDIS_UNAVAILABLE_RETRY_AFTER_SECONDS = 5
+REDIS_UNAVAILABLE_REASON = "redis_unavailable"
+
+PUBLIC_HEALTHCHECK_PATHS = frozenset(
+    {
+        "/",
+        "/health",
+        "/health/live",
+        "/health/ready",
+    }
+)
+
+# Auth-sensitive surfaces that must never fail-open on Redis outages.
+_PROTECTED_PATH_MARKERS = (
+    "/login",
+    "/payments",
+    "/admin",
+    "/generations",
+    "/bulk-generations",
+    "/smart-variants",
+)
+
+
+class SecurityControlUnavailableError(Exception):
+    """Security Redis is down on a fail-closed path; map to HTTP 503 upstream."""
+
+    def __init__(
+        self,
+        message: str = "Security controls temporarily unavailable.",
+        *,
+        retry_after_seconds: int = REDIS_UNAVAILABLE_RETRY_AFTER_SECONDS,
+    ) -> None:
+        self.message = message
+        self.retry_after_seconds = max(int(retry_after_seconds), 1)
+        super().__init__(message)
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +86,49 @@ class RateLimitDecision:
     retry_after_seconds: int = 0
     reason: str | None = None
     bucket: str | None = None
+
+    @property
+    def redis_unavailable(self) -> bool:
+        return self.reason == REDIS_UNAVAILABLE_REASON
+
+
+def is_public_healthcheck_path(path: str) -> bool:
+    """True for public read-only liveness/readiness probes only."""
+
+    normalized = (path or "").strip()
+    if not normalized:
+        return False
+    if normalized in PUBLIC_HEALTHCHECK_PATHS:
+        return True
+    # Accept optional trailing slash variants except bare "/".
+    if normalized != "/" and normalized.rstrip("/") in PUBLIC_HEALTHCHECK_PATHS:
+        return True
+    return False
+
+
+def is_protected_security_path(path: str) -> bool:
+    """Login, payments, admin, and generation-enqueue style routes."""
+
+    lowered = (path or "").lower()
+    return any(marker in lowered for marker in _PROTECTED_PATH_MARKERS)
+
+
+def should_fail_closed_on_redis(path: str | None) -> bool:
+    """Fail-open only for public healthchecks; all other paths fail-closed."""
+
+    if path is None:
+        return True
+    return not is_public_healthcheck_path(path)
+
+
+def _redis_unavailable_decision(*, bucket: str | None) -> RateLimitDecision:
+    return RateLimitDecision(
+        allowed=False,
+        remaining=0,
+        retry_after_seconds=REDIS_UNAVAILABLE_RETRY_AFTER_SECONDS,
+        reason=REDIS_UNAVAILABLE_REASON,
+        bucket=bucket,
+    )
 
 
 def fingerprint_api_key(raw_key: str) -> str:
@@ -81,29 +162,48 @@ def extract_api_key_credential(request: Request) -> str | None:
     return None
 
 
-async def is_ip_blocked(ip: str) -> bool:
-    """Return True when the IP has an active temporary block."""
+async def is_ip_blocked(ip: str, *, fail_closed: bool = True) -> bool:
+    """Return True when the IP has an active temporary block.
+
+    On RedisError: raise ``SecurityControlUnavailableError`` when ``fail_closed``
+    (default — protected paths). Fail-open (return False) only for healthchecks.
+    """
 
     try:
-        return bool(await get_redis_client().exists(f"security:ip_block:{ip}"))
+        return bool(await get_security_redis_client().exists(f"security:ip_block:{ip}"))
     except RedisError:
         logger.warning("Redis unavailable for IP block lookup", exc_info=True)
+        if fail_closed:
+            raise SecurityControlUnavailableError(
+                "IP block check unavailable.",
+            ) from None
         return False
 
 
-async def is_api_key_blocked(api_key_fingerprint: str) -> bool:
-    """Return True when the API-key fingerprint has an active temporary block."""
+async def is_api_key_blocked(
+    api_key_fingerprint: str,
+    *,
+    fail_closed: bool = True,
+) -> bool:
+    """Return True when the API-key fingerprint has an active temporary block.
+
+    On RedisError: fail-closed by default (raise); fail-open only for healthchecks.
+    """
 
     if not api_key_fingerprint:
         return False
     try:
         return bool(
-            await get_redis_client().exists(
+            await get_security_redis_client().exists(
                 f"security:apikey_block:{api_key_fingerprint}"
             )
         )
     except RedisError:
         logger.warning("Redis unavailable for API-key block lookup", exc_info=True)
+        if fail_closed:
+            raise SecurityControlUnavailableError(
+                "API-key block check unavailable.",
+            ) from None
         return False
 
 
@@ -113,7 +213,7 @@ async def block_ip(ip: str, *, ttl_seconds: int, reason: str) -> None:
     if ttl_seconds <= 0:
         return
     try:
-        await get_redis_client().set(
+        await get_security_redis_client().set(
             f"security:ip_block:{ip}",
             reason[:200],
             ex=ttl_seconds,
@@ -133,7 +233,7 @@ async def block_api_key(
     if ttl_seconds <= 0 or not api_key_fingerprint:
         return
     try:
-        await get_redis_client().set(
+        await get_security_redis_client().set(
             f"security:apikey_block:{api_key_fingerprint}",
             reason[:200],
             ex=ttl_seconds,
@@ -148,7 +248,7 @@ async def claim_ban_alert_slot(subject: str, *, ttl_seconds: int) -> bool:
     if ttl_seconds <= 0 or not subject:
         return False
     try:
-        created = await get_redis_client().set(
+        created = await get_security_redis_client().set(
             f"security:ban_alert:{subject}",
             "1",
             nx=True,
@@ -165,7 +265,7 @@ async def record_threat_event(ip: str, *, category: str, path: str) -> int:
 
     key = f"security:threat_score:{ip}"
     try:
-        client = get_redis_client()
+        client = get_security_redis_client()
         score = int(await client.incr(key))
         await client.expire(key, 3600)
         await client.lpush(
@@ -208,7 +308,7 @@ async def append_blocked_threat(
         "timestamp": event.timestamp.isoformat(),
     }
     try:
-        client = get_redis_client()
+        client = get_security_redis_client()
         await client.lpush(GLOBAL_THREAT_LOG_KEY, json.dumps(payload, ensure_ascii=False))
         await client.ltrim(GLOBAL_THREAT_LOG_KEY, 0, _THREAT_LOG_MAX - 1)
         await client.expire(GLOBAL_THREAT_LOG_KEY, 86400)
@@ -290,7 +390,7 @@ async def list_blocked_threats(*, limit: int = 50) -> list[BlockedThreatEvent]:
 
     capped = max(1, min(int(limit), _THREAT_LOG_MAX))
     try:
-        raw_items = await get_redis_client().lrange(GLOBAL_THREAT_LOG_KEY, 0, capped - 1)
+        raw_items = await get_security_redis_client().lrange(GLOBAL_THREAT_LOG_KEY, 0, capped - 1)
     except RedisError:
         logger.warning("Redis unavailable for blocked-threat read", exc_info=True)
         return []
@@ -310,7 +410,7 @@ class RedisRpsMeter:
     async def record_request(self) -> None:
         bucket = f"{RPS_BUCKET_PREFIX}{int(time.time())}"
         try:
-            client = get_redis_client()
+            client = get_security_redis_client()
             await client.incr(bucket)
             await client.expire(bucket, 10)
         except RedisError:
@@ -321,7 +421,7 @@ class RedisRpsMeter:
         now = int(time.time())
         keys = [f"{RPS_BUCKET_PREFIX}{now - offset}" for offset in range(window)]
         try:
-            client = get_redis_client()
+            client = get_security_redis_client()
             values = await client.mget(keys)
         except RedisError:
             logger.warning("Redis unavailable for RPS read", exc_info=True)
@@ -357,15 +457,21 @@ async def check_rate_limit_bucket(
     bucket: str,
     limit: int,
     window_seconds: int,
+    fail_closed: bool = True,
 ) -> RateLimitDecision:
-    """Sliding fixed-window counter for an arbitrary Redis bucket. Fail-open."""
+    """Sliding fixed-window counter for an arbitrary Redis bucket.
+
+    ``fail_closed=True`` (default): RedisError → deny with reason
+    ``redis_unavailable`` (map to HTTP 503 + Retry-After upstream).
+    ``fail_closed=False``: RedisError → allow (healthcheck-only degraded mode).
+    """
 
     if limit <= 0 or window_seconds <= 0 or not bucket:
         return RateLimitDecision(allowed=True, remaining=0, bucket=bucket or None)
 
     key = f"security:rate:{bucket}:{window_seconds}"
     try:
-        client = get_redis_client()
+        client = get_security_redis_client()
         count = int(await client.incr(key))
         if count == 1:
             await client.expire(key, window_seconds)
@@ -381,7 +487,18 @@ async def check_rate_limit_bucket(
             )
         return RateLimitDecision(allowed=True, remaining=remaining, bucket=bucket)
     except RedisError:
-        logger.warning("Redis unavailable for rate limiting; allowing request")
+        if fail_closed:
+            logger.warning(
+                "Redis unavailable for rate limiting; fail-closed bucket=%s",
+                bucket,
+                exc_info=True,
+            )
+            return _redis_unavailable_decision(bucket=bucket)
+        logger.warning(
+            "Redis unavailable for rate limiting; fail-open bucket=%s",
+            bucket,
+            exc_info=True,
+        )
         return RateLimitDecision(allowed=True, remaining=limit, bucket=bucket)
 
 
@@ -390,13 +507,17 @@ async def check_rate_limit(
     ip: str,
     limit: int,
     window_seconds: int,
+    fail_closed: bool = True,
+    path: str | None = None,
 ) -> RateLimitDecision:
     """Fixed-window counter per IP (backward-compatible wrapper)."""
 
+    closed = fail_closed if path is None else should_fail_closed_on_redis(path)
     return await check_rate_limit_bucket(
         bucket=f"ip:{ip}",
         limit=limit,
         window_seconds=window_seconds,
+        fail_closed=closed,
     )
 
 
@@ -405,11 +526,15 @@ async def check_api_key_rate_limit(
     api_key_fingerprint: str,
     limit: int,
     window_seconds: int,
+    fail_closed: bool = True,
+    path: str | None = None,
 ) -> RateLimitDecision:
     """Fixed-window counter per API-key / bearer fingerprint."""
 
+    closed = fail_closed if path is None else should_fail_closed_on_redis(path)
     return await check_rate_limit_bucket(
         bucket=f"apikey:{api_key_fingerprint}",
         limit=limit,
         window_seconds=window_seconds,
+        fail_closed=closed,
     )

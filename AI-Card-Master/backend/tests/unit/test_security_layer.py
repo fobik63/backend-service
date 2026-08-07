@@ -139,10 +139,10 @@ def _patch_great_wall_deps(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]
         "threat_score": 1,
     }
 
-    async def _never_blocked(_: str) -> bool:
+    async def _never_blocked(_: str, **__: object) -> bool:
         return False
 
-    async def _key_never_blocked(_: str) -> bool:
+    async def _key_never_blocked(_: str, **__: object) -> bool:
         return False
 
     async def _allow_rate(**_: object) -> RateLimitDecision:
@@ -319,3 +319,100 @@ def test_rate_limit_auto_ban_and_telegram(monkeypatch: pytest.MonkeyPatch) -> No
     assert state["bans"]
     assert state["telegram"]
     assert state["cloudflare"]
+
+
+def test_rate_limit_redis_unavailable_returns_503(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_great_wall_deps(monkeypatch)
+
+    async def _unavailable(**_: object) -> RateLimitDecision:
+        return RateLimitDecision(
+            allowed=False,
+            remaining=0,
+            retry_after_seconds=5,
+            reason="redis_unavailable",
+            bucket="ip:test",
+        )
+
+    monkeypatch.setattr(
+        "app.core.suspicious_activity_middleware.check_rate_limit",
+        _unavailable,
+    )
+    monkeypatch.setattr(
+        "app.core.suspicious_activity_middleware.get_settings",
+        lambda: type(
+            "S",
+            (),
+            {
+                "security_suspicious_middleware_enabled": True,
+                "security_rate_limit_per_minute": 120,
+                "security_api_key_rate_limit_per_minute": 300,
+                "security_rate_limit_auto_ban_enabled": True,
+                "security_telegram_ban_alerts_enabled": True,
+                "security_xss_protection_enabled": True,
+                "security_auto_block_threat_score": 5,
+                "security_ip_block_ttl_seconds": 3600,
+                "cloudflare_trust_headers": True,
+                "cloudflare_auto_ban_enabled": False,
+                "trusted_proxy_cidrs": "",
+            },
+        )(),
+    )
+
+    app = FastAPI()
+    app.add_middleware(SuspiciousActivityMiddleware)
+
+    @app.post("/api/v1/payments/create")
+    async def pay() -> dict[str, bool]:
+        return {"ok": True}
+
+    client = TestClient(app)
+    response = client.post("/api/v1/payments/create")
+    assert response.status_code == 503
+    assert response.headers.get("Retry-After") == "5"
+    assert response.json()["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_check_rate_limit_bucket_fail_closed_on_redis_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from redis.exceptions import RedisError
+
+    from app.infrastructure.security import rate_limiter as rl
+
+    class _Boom:
+        async def incr(self, *_: object, **__: object) -> int:
+            raise RedisError("down")
+
+    monkeypatch.setattr(rl, "get_security_redis_client", lambda: _Boom())
+    decision = await rl.check_rate_limit_bucket(
+        bucket="ip:1.2.3.4",
+        limit=10,
+        window_seconds=60,
+        fail_closed=True,
+    )
+    assert decision.allowed is False
+    assert decision.redis_unavailable is True
+    assert decision.retry_after_seconds >= 1
+
+    open_decision = await rl.check_rate_limit_bucket(
+        bucket="ip:1.2.3.4",
+        limit=10,
+        window_seconds=60,
+        fail_closed=False,
+    )
+    assert open_decision.allowed is True
+
+
+def test_path_helpers_classify_health_and_protected() -> None:
+    from app.infrastructure.security.rate_limiter import (
+        is_protected_security_path,
+        is_public_healthcheck_path,
+        should_fail_closed_on_redis,
+    )
+
+    assert is_public_healthcheck_path("/health/ready") is True
+    assert should_fail_closed_on_redis("/health/ready") is False
+    assert is_protected_security_path("/api/v1/admin/stats") is True
+    assert is_protected_security_path("/api/v1/generations") is True
+    assert should_fail_closed_on_redis("/api/v1/payments") is True

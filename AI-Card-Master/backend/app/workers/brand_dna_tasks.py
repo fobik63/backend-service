@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
@@ -12,7 +11,8 @@ from celery import Task
 
 from app.infrastructure.brand_dna_factory import build_brand_dna_service
 from app.infrastructure.celery_app import celery_app
-from app.models.database import SessionLocal, engine
+from app.models.database import SessionLocal
+from app.workers.async_runtime import run_worker_async
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -31,15 +31,9 @@ class BrandDNATask(Task):
 
 
 def _run_async(factory: Callable[[], Awaitable[T]]) -> T:
-    """Celery sync boundary around async BrandDNA use cases."""
+    """Celery sync boundary; shared pools close on worker_process_shutdown."""
 
-    async def _execute() -> T:
-        try:
-            return await factory()
-        finally:
-            await engine.dispose()
-
-    return asyncio.run(_execute())
+    return run_worker_async(factory)
 
 
 @celery_app.task(

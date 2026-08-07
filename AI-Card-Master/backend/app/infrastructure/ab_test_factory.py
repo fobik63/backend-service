@@ -13,6 +13,7 @@ from app.core.credential_crypto import CredentialCryptoError, decrypt_credential
 from app.domain.ab_test import AbTestConfig
 from app.domain.export import MarketplacePlatform
 from app.domain.smart_reasoning import ReasoningTaskKind
+from app.infrastructure.claude.facades import wrap_claude_for_domain
 from app.infrastructure.claude_client_loader import load_claude_client
 from app.infrastructure.claude_stage_cache import RedisClaudeStageCache
 from app.infrastructure.marketplaces.ads_clients import build_marketplace_ads_client
@@ -109,7 +110,8 @@ def build_ab_test_service(
         model_name=model_name,
         redis_stage_ttl_seconds=settings.claude_47_stage_cache_ttl_seconds,
         default_config=config,
-        hypothesis_generator=client,
+        hypothesis_generator=wrap_claude_for_domain(client, domain="ab_test")
+        or hypothesis_generator,
         ads_client_factory=ads_factory,
         credentials=ExportAdsCredentialsAdapter(
             db_session,

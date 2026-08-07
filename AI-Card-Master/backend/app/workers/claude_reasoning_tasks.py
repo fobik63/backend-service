@@ -17,7 +17,8 @@ from app.infrastructure.claude_reasoning_factory import build_claude_reasoning_s
 from app.infrastructure.persistence.claude_reasoning_repository import (
     ClaudeReasoningRepository,
 )
-from app.models.database import SessionLocal, engine
+from app.models.database import SessionLocal
+from app.workers.async_runtime import run_worker_async
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -36,15 +37,9 @@ class ClaudeReasoningTask(Task):
 
 
 def _run_async(factory: Callable[[], Awaitable[T]]) -> T:
-    """Celery sync boundary around async Claude use cases."""
+    """Celery sync boundary; shared pools close on worker_process_shutdown."""
 
-    async def _execute() -> T:
-        try:
-            return await factory()
-        finally:
-            await engine.dispose()
-
-    return asyncio.run(_execute())
+    return run_worker_async(factory)
 
 
 @celery_app.task(

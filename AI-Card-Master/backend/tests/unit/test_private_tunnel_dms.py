@@ -107,7 +107,7 @@ async def test_record_auth_failure_triggers_at_threshold(
     )
 
     monkeypatch.setattr(
-        "app.services.dead_mans_switch.get_redis_client",
+        "app.services.dead_mans_switch.get_security_redis_client",
         lambda: _FakeRedis(),
     )
 

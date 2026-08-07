@@ -275,7 +275,7 @@ async def test_status_polling_falls_back_to_db_when_redis_is_lost(
         def __init__(self, _session: object) -> None:
             pass
 
-        async def get_job_for_user(self, job_id: object, user_id: object) -> object:
+        async def get_detail_for_user(self, job_id: object, user_id: object) -> object:
             assert job_id == task_id
             assert user_id == user.id
             return job
@@ -337,6 +337,7 @@ async def test_generation_history_returns_thumbnail_and_expires_old_archive(
             warning=None,
             created_at=now - timedelta(hours=2),
             completed_at=now - timedelta(hours=1),
+            slides=[],
         ),
         SimpleNamespace(
             id=expired_id,
@@ -351,14 +352,18 @@ async def test_generation_history_returns_thumbnail_and_expires_old_archive(
             warning=None,
             created_at=now - timedelta(days=2),
             completed_at=now - timedelta(hours=25),
+            slides=[],
         ),
+    )
+    summaries = tuple(
+        SimpleNamespace(job=job, slide_count=5) for job in jobs
     )
 
     class Repository:
         def __init__(self, _session: object) -> None:
             pass
 
-        async def list_generation_history_for_user(
+        async def list_summary_for_user(
             self,
             *,
             user_id: object,
@@ -368,7 +373,7 @@ async def test_generation_history_returns_thumbnail_and_expires_old_archive(
             assert user_id == user.id
             assert limit == 50
             assert offset == 0
-            return jobs
+            return summaries
 
     class Storage:
         async def generate_presigned_url(self, *, object_key: str) -> str:
@@ -392,6 +397,7 @@ async def test_generation_history_returns_thumbnail_and_expires_old_archive(
     )
 
     assert [item.task_id for item in response] == [fresh_id, expired_id]
+    assert response[0].slide_count == 5
     assert response[0].thumbnail_url == "https://storage.test/previews/fresh.jpg"
     assert response[0].archive_status == "available"
     assert response[0].archive_url == "https://storage.test/archives/fresh.zip"

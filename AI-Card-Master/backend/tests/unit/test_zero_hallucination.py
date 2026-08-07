@@ -58,7 +58,7 @@ def _contradiction(
 
 
 def test_zero_hallucination_routes_to_deep_opus() -> None:
-    assert tier_for_task(ReasoningTaskKind.ZERO_HALLUCINATION) is ReasoningTier.DEEP
+    assert tier_for_task(ReasoningTaskKind.ZERO_HALLUCINATION) is ReasoningTier.SIMPLE
 
 
 def test_hard_contradiction_marks_anomaly_and_caps_reliability() -> None:

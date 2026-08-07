@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 from uuid import UUID
@@ -126,6 +127,11 @@ class ProviderSubmission(DomainModel):
     external_job_id: str = Field(min_length=1, max_length=512)
     reply_ref: str = Field(min_length=1, max_length=1024)
     initial_status: str = Field(default="created", min_length=1, max_length=64)
+    # Optional provider invoice fields (Midjourney credits / USD). When set,
+    # cost analytics prefers these over the flat settings estimate (C4).
+    provider_cost_usd: Decimal | None = None
+    provider_credits: float | None = Field(default=None, ge=0)
+    cost_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class ProviderWebhookEvent(DomainModel):

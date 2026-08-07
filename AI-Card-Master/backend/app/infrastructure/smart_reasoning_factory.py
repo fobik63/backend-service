@@ -25,11 +25,15 @@ def get_smart_reasoning_router() -> SmartReasoningRouter:
 def resolve_claude_model(
     kind: ReasoningTaskKind,
     settings: Settings | None = None,
+    *,
+    has_vision: bool = True,
 ) -> str:
     """Resolve Claude/local model id for a factory / worker composition root.
 
     LOCAL-tier kinds require ``ollama_model``; callers that only want Anthropic
     should pass SIMPLE/DEEP kinds (existing factories unchanged).
+
+    ``has_vision=False`` downgrades Vision DEEP kinds to Haiku (cost audit C1).
     """
 
     cfg = settings or get_settings()
@@ -39,11 +43,11 @@ def resolve_claude_model(
         deep_model=cfg.claude_47_model,
         local_model=local,
     )
-    if router.tier_for(kind).value == "local" and not local:
+    if router.tier_for(kind, has_vision=has_vision).value == "local" and not local:
         # Fall back to Haiku when Ollama is off so factories stay safe.
         return cfg.claude_35_haiku_model
     try:
-        return router.model_for(kind)
+        return router.model_for(kind, has_vision=has_vision)
     except ValueError:
         return cfg.claude_35_haiku_model
 

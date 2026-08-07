@@ -33,6 +33,16 @@
       "image": "redis:7-alpine",
       "persistence": ["redisdata"],
       "ports_public": false,
+      "maxmemory_policy": "volatile-lru",
+      "health": "redis-cli ping"
+    },
+    {
+      "name": "redis-security",
+      "role": "security_store",
+      "image": "redis:7-alpine",
+      "persistence": ["redissecuritydata"],
+      "ports_public": false,
+      "maxmemory_policy": "noeviction",
       "health": "redis-cli ping"
     },
     {
@@ -40,7 +50,7 @@
       "role": "application",
       "image": "ai-card-master-backend:${IMAGE_TAG}",
       "replicas_env": "API_REPLICAS",
-      "depends_on": ["postgres", "redis"],
+      "depends_on": ["postgres", "redis", "redis-security"],
       "health": "/health/live"
     },
     {
@@ -48,14 +58,14 @@
       "role": "async_worker",
       "image": "ai-card-master-backend:${IMAGE_TAG}",
       "replicas_env": "WORKER_REPLICAS",
-      "depends_on": ["postgres", "redis"]
+      "depends_on": ["postgres", "redis", "redis-security"]
     },
     {
       "name": "beat",
       "role": "scheduler",
       "image": "ai-card-master-backend:${IMAGE_TAG}",
       "replicas": 1,
-      "depends_on": ["redis"]
+      "depends_on": ["redis", "redis-security"]
     },
     {
       "name": "nginx",
@@ -89,13 +99,14 @@
       "optional": true
     }
   ],
-  "volumes": ["pgdata", "redisdata", "uploads"],
+  "volumes": ["pgdata", "redisdata", "redissecuritydata", "uploads"],
   "required_env_production": [
     "POSTGRES_PASSWORD",
     "JWT_SECRET_KEY",
     "ADMIN_PANEL_TOKEN_SECRET",
     "DATABASE_URL",
-    "REDIS_URL"
+    "REDIS_URL",
+    "REDIS_SECURITY_URL"
   ],
   "recommended_env_production": [
     "BACKUP_S3_ENDPOINT_URL",

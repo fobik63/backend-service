@@ -13,6 +13,7 @@ from app.application.eye_of_god_bridge_service import (
 from app.core.config import get_settings
 from app.domain.eye_of_god import SalesSpikeConfig
 from app.domain.smart_reasoning import ReasoningTaskKind
+from app.infrastructure.claude.facades import wrap_claude_for_domain
 from app.infrastructure.claude_client_loader import load_claude_client
 from app.infrastructure.claude_stage_cache import RedisClaudeStageCache
 from app.infrastructure.eye_of_god.sku_image_fetcher import SkuCardImageFetcher
@@ -51,6 +52,7 @@ def build_eye_of_god_bridge_service(
         analytics_cache_ttl_seconds=settings.claude_analytics_cache_ttl_seconds,
         analytics_task_kind=task.value,
     )
+    vision_port = wrap_claude_for_domain(client, domain="eye_of_god")
 
     image_fetcher = images or SkuCardImageFetcher(
         timeout_seconds=settings.eye_of_god_image_timeout_seconds,
@@ -73,7 +75,7 @@ def build_eye_of_god_bridge_service(
         model_name=model_name,
         prefer_hour_utc=settings.stock_parser_beat_hour_utc,
         lookback_days=settings.eye_of_god_lookback_days,
-        vision=client,
+        vision=vision_port if vision_port is not None else vision,
         images=image_fetcher,
         trigger=CeleryEyeOfGodTrigger() if enqueue_trigger else None,
         max_images=settings.eye_of_god_max_images,

@@ -9,6 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.application.cost_analytics_service import CostAnalyticsService
 from app.core.config import Settings, get_settings
 from app.domain.cost_analytics import CostAlertPolicy
+from app.infrastructure.cost_alert_cooldown import (
+    NoopCostAlertCooldown,
+    RedisCostAlertCooldown,
+)
 from app.infrastructure.persistence.cost_analytics_repository import (
     CostAnalyticsRepository,
     FailOpenCostAnalyticsRepository,
@@ -58,12 +62,18 @@ def build_cost_analytics_service(
         notifier = TelegramCostAlertNotifier()
     else:
         notifier = NoopCostAlertNotifier()
+    cooldown: RedisCostAlertCooldown | NoopCostAlertCooldown
+    if cfg.cost_alert_cooldown_seconds > 0:
+        cooldown = RedisCostAlertCooldown()
+    else:
+        cooldown = NoopCostAlertCooldown()
     return CostAnalyticsService(
         repository=repo,
         alert_notifier=notifier,
         alert_policy=build_cost_alert_policy(cfg),
         generation_sale_price_usd=sale_price,
         alert_cooldown_seconds=cfg.cost_alert_cooldown_seconds,
+        alert_cooldown=cooldown,
     )
 
 

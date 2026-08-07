@@ -120,6 +120,7 @@ def validate_production_env(
         not in {
             "DATABASE_URL",
             "REDIS_URL",
+            "REDIS_SECURITY_URL",
         }
     ]
     for key in host_required:

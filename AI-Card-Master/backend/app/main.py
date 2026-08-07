@@ -62,7 +62,7 @@ from app.core.input_sanitization_middleware import InputSanitizationMiddleware
 from app.core.logging_config import configure_logging
 from app.core.request_context_middleware import RequestContextMiddleware
 from app.core.suspicious_activity_middleware import SuspiciousActivityMiddleware
-from app.infrastructure.redis import close_redis_client, redis_healthcheck
+from app.infrastructure.redis import close_redis_client, close_security_redis_client, redis_healthcheck
 from app.models.database import SessionLocal, engine
 from app.services.ai_engine import close_ai_engine
 from app.services.infographic_service import close_infographic_service
@@ -122,6 +122,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
         await close_ai_engine()
         await close_marketplace_text_service()
         await close_infographic_service()
+        await close_security_redis_client()
         await close_redis_client()
         await close_s3_storage()
         await engine.dispose()

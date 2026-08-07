@@ -32,6 +32,7 @@ import random
 import socket
 from collections.abc import Mapping
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Any, Final, Literal
 from urllib.parse import urlparse
@@ -1039,7 +1040,7 @@ class MidjourneyService:
         image_b64 = base64.b64encode(product_image).decode("ascii")
 
         async with self._semaphore:
-            job_id = await self._submit_imagine(
+            job_id, _usage = await self._submit_imagine(
                 prompt=prompt,
                 image_base64=image_b64,
                 mime_type=mime_type,
@@ -1089,7 +1090,7 @@ class MidjourneyService:
         mime_type, _extension = _detect_image_mime_type(product_image)
         encoded = base64.b64encode(product_image).decode("ascii")
         async with self._semaphore:
-            job_id = await self._submit_imagine(
+            job_id, usage = await self._submit_imagine(
                 prompt=merged_prompt,
                 image_base64=encoded,
                 mime_type=mime_type,
@@ -1102,6 +1103,9 @@ class MidjourneyService:
             external_job_id=job_id,
             reply_ref=reply_ref,
             initial_status="created",
+            provider_cost_usd=usage.get("cost_usd"),
+            provider_credits=usage.get("credits"),
+            cost_metadata=dict(usage.get("metadata") or {}),
         )
 
     def verify_webhook(
@@ -1284,8 +1288,8 @@ class MidjourneyService:
         profile: MidjourneyTariffProfile,
         reply_url: str | None = None,
         reply_ref: str | None = None,
-    ) -> str:
-        """Submit Imagine job and return upstream job id."""
+    ) -> tuple[str, dict[str, Any]]:
+        """Submit Imagine job and return (upstream job id, optional usage)."""
 
         payload: dict[str, Any] = {
             "prompt": prompt,
@@ -1336,7 +1340,8 @@ class MidjourneyService:
                 job_id = self._extract_job_id(response)
                 if not job_id:
                     raise AIEngineUpstreamError("Midjourney Imagine response has no job id.")
-                return job_id
+                usage = _extract_provider_usage(response)
+                return job_id, usage
 
             except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as exc:
                 last_error = exc
@@ -1531,6 +1536,75 @@ def _nested_string(payload: dict[str, Any], keys: tuple[str, ...]) -> str | None
     if isinstance(value, (str, int)) and str(value).strip():
         return str(value).strip()
     return None
+
+
+def _extract_provider_usage(response: httpx.Response) -> dict[str, Any]:
+    """Pull optional Midjourney credits / cost fields from submit response (C4)."""
+
+    try:
+        payload = response.json()
+    except ValueError:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+
+    cost_raw = _nested_value(
+        payload,
+        (
+            "cost_usd",
+            "costUsd",
+            "cost",
+            "price_usd",
+            "priceUsd",
+            "amount_usd",
+            "amountUsd",
+        ),
+    )
+    credits_raw = _nested_value(
+        payload,
+        (
+            "credits",
+            "credit",
+            "credits_used",
+            "creditsUsed",
+            "credit_cost",
+            "creditCost",
+            "usage_credits",
+            "usageCredits",
+        ),
+    )
+
+    cost_usd: Decimal | None = None
+    if isinstance(cost_raw, (int, float, str, Decimal)):
+        try:
+            parsed = Decimal(str(cost_raw).strip())
+            if parsed >= 0:
+                cost_usd = parsed
+        except (InvalidOperation, ValueError):
+            cost_usd = None
+
+    credits: float | None = None
+    if isinstance(credits_raw, (int, float, str)):
+        try:
+            parsed_credits = float(credits_raw)
+            if parsed_credits >= 0:
+                credits = parsed_credits
+        except (TypeError, ValueError):
+            credits = None
+
+    if cost_usd is None and credits is None:
+        return {}
+
+    metadata: dict[str, Any] = {"estimated": True}
+    if cost_usd is not None:
+        metadata["provider_cost_usd"] = str(cost_usd)
+    if credits is not None:
+        metadata["provider_credits"] = credits
+    return {
+        "cost_usd": cost_usd,
+        "credits": credits,
+        "metadata": metadata,
+    }
 
 
 def _normalise_progress(value: Any, status_value: str) -> int:

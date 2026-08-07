@@ -10,6 +10,7 @@ from app.application.ai_strategy_service import StrategyService
 from app.core.config import get_settings
 from app.domain.ai_strategy import StrategyCompareConfig
 from app.domain.smart_reasoning import ReasoningTaskKind
+from app.infrastructure.claude.facades import wrap_claude_for_domain
 from app.infrastructure.claude_client_loader import load_claude_client
 from app.infrastructure.claude_stage_cache import RedisClaudeStageCache
 from app.infrastructure.persistence.ai_strategy_repository import AiStrategyRepository
@@ -53,6 +54,6 @@ def build_ai_strategy_service(
         model_name=model_name,
         redis_stage_ttl_seconds=settings.claude_47_stage_cache_ttl_seconds,
         default_compare_config=compare_config,
-        planning=client,
+        planning=wrap_claude_for_domain(client, domain="strategy") or planning,
         stage_cache=RedisClaudeStageCache(),
     )

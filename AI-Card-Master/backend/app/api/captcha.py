@@ -20,9 +20,12 @@ from app.domain.behavioral_rate_limit import (
 from app.infrastructure.behavioral_rate_limit_factory import (
     build_behavioral_rate_limit_service,
 )
+from app.infrastructure.redis import RedisUnavailableError
 from app.models.user import User
 
 router = APIRouter(tags=["security"])
+
+_SECURITY_REDIS_RETRY_AFTER = "5"
 
 
 class StrictAPIModel(BaseModel):
@@ -75,6 +78,21 @@ def captcha_required_http_exception(exc: CaptchaRequiredError) -> HTTPException:
     )
 
 
+def security_store_unavailable_http_exception(
+    exc: RedisUnavailableError,
+) -> HTTPException:
+    """Fail-closed when behavioral Redis is down during generation enqueue."""
+
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail={
+            "code": "SECURITY_CONTROLS_UNAVAILABLE",
+            "message": "Security controls temporarily unavailable. Retry shortly.",
+        },
+        headers={"Retry-After": _SECURITY_REDIS_RETRY_AFTER},
+    )
+
+
 async def enforce_generation_behavioral_limit(
     current_user: Annotated[User, Depends(get_current_user)],
     service: Annotated[
@@ -100,6 +118,8 @@ async def enforce_generation_behavioral_limit(
         )
     except CaptchaRequiredError as exc:
         raise captcha_required_http_exception(exc) from exc
+    except RedisUnavailableError as exc:
+        raise security_store_unavailable_http_exception(exc) from exc
 
 
 @router.post(
@@ -158,6 +178,8 @@ async def verify_captcha(
                 "error_codes": list(exc.error_codes),
             },
         ) from exc
+    except RedisUnavailableError as exc:
+        raise security_store_unavailable_http_exception(exc) from exc
 
     return VerifyCaptchaResponse(
         success=True,
@@ -171,6 +193,7 @@ __all__ = [
     "router",
     "enforce_generation_behavioral_limit",
     "captcha_required_http_exception",
+    "security_store_unavailable_http_exception",
     "VerifyCaptchaRequest",
     "VerifyCaptchaResponse",
 ]

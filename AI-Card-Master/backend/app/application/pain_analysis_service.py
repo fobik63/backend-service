@@ -26,6 +26,7 @@ from app.domain.pain_analysis import (
 )
 from app.domain.semantic_filter import estimate_text_tokens
 from app.domain.smart_reasoning import ReasoningTaskKind
+from app.domain.text_task_classifier import TextTaskComplexity
 from app.domain.token_governor import GovernorAction, GovernorRequest
 
 logger = logging.getLogger(__name__)
@@ -163,7 +164,7 @@ class PainAnalysisService:
             total_in = 0
             total_out = 0
 
-            use_local = self._should_use_local(request)
+            use_local = await self._should_use_local(request)
             analyzer = self._pick_analyzer(use_local=use_local)
 
             # Pass 2: filter + ANALYZING (or filter-only) in one write.
@@ -235,20 +236,19 @@ class PainAnalysisService:
             )
             raise PainAnalysisError(str(exc)) from exc
 
-    def _should_use_local(self, request: PainAnalysisRequest) -> bool:
+    async def _should_use_local(self, request: PainAnalysisRequest) -> bool:
         if self._local_llm is None or not self._local_llm.available:
             return False
         if self._token_governor is None:
             return False
-        estimated = estimate_text_tokens(
-            "\n".join(
-                [
-                    request.product_name,
-                    request.product_specs,
-                    *request.raw_negative_reviews,
-                ]
-            )
+        text_blob = "\n".join(
+            [
+                request.product_name,
+                request.product_specs,
+                *request.raw_negative_reviews,
+            ]
         )
+        estimated = estimate_text_tokens(text_blob)
         decision = self._token_governor.authorize(
             GovernorRequest(
                 task_kind=ReasoningTaskKind.PAIN_ANALYSIS,
@@ -256,7 +256,31 @@ class PainAnalysisService:
                 has_vision=False,
             )
         )
-        return decision.action is GovernorAction.USE_LOCAL
+        if decision.action is not GovernorAction.USE_LOCAL:
+            return False
+
+        # C6: local classifier gates borderline text before Claude escalation.
+        try:
+            classification = await self._local_llm.classify_text_task(
+                kind=ReasoningTaskKind.PAIN_ANALYSIS,
+                text_blob=text_blob,
+                item_count=len(request.raw_negative_reviews),
+                has_vision=False,
+            )
+        except Exception:
+            logger.info(
+                "Pain local classifier failed; keeping governor USE_LOCAL",
+                exc_info=True,
+            )
+            return True
+
+        if classification.complexity is TextTaskComplexity.NEEDS_CLAUDE:
+            logger.info(
+                "Local classifier escalated pain analysis to Claude reason=%s",
+                classification.reason,
+            )
+            return False
+        return True
 
     def _pick_analyzer(
         self, *, use_local: bool

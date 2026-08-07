@@ -80,3 +80,11 @@ async def record_api_usage_cost(
             await CostAnalyticsRepository(session).record_event(event)
     except Exception:
         logger.warning("Failed to persist API usage cost event", exc_info=True)
+        try:
+            from app.infrastructure.observability.metrics import (
+                inc_cost_persist_failure,
+            )
+
+            inc_cost_persist_failure(provider=provider, operation=operation)
+        except Exception:
+            logger.debug("cost_persist_failures counter unavailable", exc_info=True)

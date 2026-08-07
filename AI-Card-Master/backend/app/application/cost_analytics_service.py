@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
+from app.application.ports.cost_alert_cooldown import CostAlertCooldownPort
 from app.application.ports.cost_analytics import (
     CostAlertNotifierPort,
     CostAnalyticsRepositoryPort,
@@ -22,6 +23,14 @@ from app.domain.cost_analytics import (
 )
 
 
+class _AlwaysAllowCooldown:
+    """Fallback when no distributed cooldown port is injected."""
+
+    async def claim(self, *, kind: str, ttl_seconds: float) -> bool:
+        _ = kind, ttl_seconds
+        return True
+
+
 class CostAnalyticsService:
     """Orchestrates cost recording, rollup-backed analytics, and budget alerts."""
 
@@ -33,13 +42,16 @@ class CostAnalyticsService:
         alert_policy: CostAlertPolicy,
         generation_sale_price_usd: Decimal | None = None,
         alert_cooldown_seconds: float = 3600.0,
+        alert_cooldown: CostAlertCooldownPort | None = None,
     ) -> None:
         self._repository = repository
         self._notifier = alert_notifier
         self._policy = alert_policy
         self._sale_price = generation_sale_price_usd
         self._alert_cooldown_seconds = max(0.0, alert_cooldown_seconds)
-        self._last_alert_sent: dict[str, float] = {}
+        self._alert_cooldown: CostAlertCooldownPort = (
+            alert_cooldown if alert_cooldown is not None else _AlwaysAllowCooldown()
+        )
 
     async def record_external_call(self, event: CostEventRecord) -> None:
         """Persist one external API call (fail-open at adapter layer)."""
@@ -120,22 +132,18 @@ class CostAnalyticsService:
         )
 
     async def _maybe_notify(self, alerts: tuple) -> None:
-        import time
-
-        now_mono = time.monotonic()
         for alert in alerts:
             if not alert.triggered:
                 continue
             key = alert.kind.value
-            last = self._last_alert_sent.get(key)
-            if (
-                last is not None
-                and self._alert_cooldown_seconds > 0
-                and (now_mono - last) < self._alert_cooldown_seconds
-            ):
-                continue
+            if self._alert_cooldown_seconds > 0:
+                claimed = await self._alert_cooldown.claim(
+                    kind=key,
+                    ttl_seconds=self._alert_cooldown_seconds,
+                )
+                if not claimed:
+                    continue
             await self._notifier.notify(format_alert_telegram(alert))
-            self._last_alert_sent[key] = now_mono
 
 
 def utc_day(value: datetime | None = None) -> date:

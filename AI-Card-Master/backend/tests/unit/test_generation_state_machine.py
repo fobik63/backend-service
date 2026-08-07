@@ -7,7 +7,6 @@ from uuid import UUID, uuid4
 import pytest
 from PIL import Image, ImageDraw
 
-import app.application.generation_service as generation_module
 from app.application.generation_service import GenerationApplicationService
 from app.domain.generation import (
     AttemptWorkItem,
@@ -305,6 +304,28 @@ class FaceFixProvider:
         return image
 
 
+class _NoopProviderHealth:
+    async def note_success(self, provider_name: str) -> None:
+        return None
+
+    async def note_failure(self, provider_name: str) -> None:
+        return None
+
+
+class _TestAIEngine:
+    def __init__(self, face_fix: FaceFixProvider | None = None) -> None:
+        self._face_fix = face_fix or FaceFixProvider()
+        self._provider_health = _NoopProviderHealth()
+
+    @property
+    def face_fix(self) -> FaceFixProvider:
+        return self._face_fix
+
+    @property
+    def provider_health(self) -> _NoopProviderHealth:
+        return self._provider_health
+
+
 def _work() -> GenerationWorkItem:
     job_id = uuid4()
     return GenerationWorkItem(
@@ -327,12 +348,9 @@ def _work() -> GenerationWorkItem:
 
 
 @pytest.fixture(autouse=True)
-def _disable_real_circuit_breaker(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _noop(_: str) -> None:
-        return None
-
-    monkeypatch.setattr(generation_module, "note_provider_failure", _noop)
-    monkeypatch.setattr(generation_module, "note_provider_success", _noop)
+def _disable_real_circuit_breaker() -> None:
+    # Provider health is injected via AIEnginePort; no module-level monkeypatch.
+    return None
 
 
 @pytest.mark.asyncio
@@ -349,6 +367,7 @@ async def test_submit_uses_spare_provider_without_polling() -> None:
         storage=storage,
         async_providers=(primary, secondary),
         immediate_provider=immediate,
+        ai_engine=_TestAIEngine(),
     )
 
     await service.submit_job(work.id)
@@ -374,6 +393,7 @@ async def test_provider_pool_falls_back_to_stable_diffusion() -> None:
             AsyncProvider("secondary", fail_submit=True),
         ),
         immediate_provider=immediate,
+        ai_engine=_TestAIEngine(),
     )
 
     await service.submit_job(work.id)
@@ -386,9 +406,7 @@ async def test_provider_pool_falls_back_to_stable_diffusion() -> None:
 
 
 @pytest.mark.asyncio
-async def test_hd_face_fix_runs_post_processing_before_store(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_hd_face_fix_runs_post_processing_before_store() -> None:
     work = _work().model_copy(
         update={"post_processing_mode": GenerationPostProcessingMode.HD_FACE_FIX}
     )
@@ -396,7 +414,6 @@ async def test_hd_face_fix_runs_post_processing_before_store(
     storage = FakeStorage()
     storage.objects[work.input_object_key] = _png((255, 255, 255), product=True)
     face_fix = FaceFixProvider()
-    monkeypatch.setattr(generation_module, "get_face_fix_engine", lambda: face_fix)
     service = GenerationApplicationService(
         repository=repository,
         storage=storage,
@@ -405,6 +422,7 @@ async def test_hd_face_fix_runs_post_processing_before_store(
             AsyncProvider("secondary", fail_submit=True),
         ),
         immediate_provider=ImmediateProvider(),
+        ai_engine=_TestAIEngine(face_fix=face_fix),
     )
 
     await service.submit_job(work.id)
@@ -425,6 +443,7 @@ async def test_duplicate_webhook_does_not_download_or_store_twice() -> None:
         storage=storage,
         async_providers=(provider,),
         immediate_provider=ImmediateProvider(),
+        ai_engine=_TestAIEngine(),
     )
     await service.submit_job(work.id)
     attempt = next(iter(repository.attempts.values()))
@@ -478,6 +497,7 @@ async def test_finalize_generates_marketplace_text_from_completed_images() -> No
         async_providers=(),
         immediate_provider=ImmediateProvider(),
         text_provider=text_provider,
+        ai_engine=_TestAIEngine(),
     )
 
     await service.finalize_job(work.id)

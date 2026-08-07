@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
@@ -12,21 +11,23 @@ from celery import Task
 
 from app.application.generation_service import GenerationApplicationService
 from app.core.config import get_settings
+from app.infrastructure.ai_engine_facade import (
+    build_default_ai_engine,
+    build_default_image_pipeline,
+)
 from app.infrastructure.celery_app import celery_app
 from app.infrastructure.persistence.generation_repository import GenerationRepository
-from app.infrastructure.redis import close_redis_client
-from app.models.database import SessionLocal, engine
+from app.models.database import SessionLocal
 from app.services.ai_engine import (
-    close_ai_engine,
     get_healthy_async_midjourney_providers,
     get_stable_diffusion_adapter,
 )
 from app.services.marketplace_text import (
     MarketplaceTextConfigurationError,
-    close_marketplace_text_service,
     get_marketplace_text_service,
 )
 from app.services.s3_storage import get_s3_storage
+from app.workers.async_runtime import run_worker_async
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -45,18 +46,9 @@ class DurableGenerationTask(Task):
 
 
 def _run_async(factory: Callable[[], Awaitable[T]]) -> T:
-    """Celery's required sync boundary around fully asynchronous use cases."""
+    """Celery sync boundary; shared pools close on worker_process_shutdown."""
 
-    async def _execute() -> T:
-        try:
-            return await factory()
-        finally:
-            await close_ai_engine()
-            await close_marketplace_text_service()
-            await close_redis_client()
-            await engine.dispose()
-
-    return asyncio.run(_execute())
+    return run_worker_async(factory)
 
 
 async def _build_service(
@@ -89,6 +81,8 @@ async def _build_service(
         text_provider=text_provider,
         brand_dna_claude_context_loader=_load_brand_dna_claude_context,
         on_generation_completed=_on_generation_completed,
+        ai_engine=build_default_ai_engine(),
+        image_pipeline=build_default_image_pipeline(),
     )
 
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from typing import TypeVar
@@ -15,7 +14,8 @@ from app.infrastructure.celery_app import celery_app
 from app.infrastructure.persistence.source_retention_repository import (
     SourceRetentionRepository,
 )
-from app.models.database import SessionLocal, engine
+from app.models.database import SessionLocal
+from app.workers.async_runtime import run_worker_async
 from app.services.s3_storage import (
     S3StorageConfigurationError,
     get_s3_storage,
@@ -38,15 +38,9 @@ class SourceRetentionTask(Task):
 
 
 def _run_async(factory: Callable[[], Awaitable[T]]) -> T:
-    """Celery sync boundary around async retention use cases."""
+    """Celery sync boundary; shared pools close on worker_process_shutdown."""
 
-    async def _execute() -> T:
-        try:
-            return await factory()
-        finally:
-            await engine.dispose()
-
-    return asyncio.run(_execute())
+    return run_worker_async(factory)
 
 
 @celery_app.task(

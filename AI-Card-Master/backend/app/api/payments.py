@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -15,28 +14,27 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.payment_service import PaymentApplicationService
+from app.application.winback_service import WinbackService
 from app.core.config import get_settings
 from app.core.security import InvalidTokenError, decode_and_validate_token
+from app.infrastructure.generation_history_cache import (
+    get_cached_tariffs,
+    set_cached_tariffs,
+)
+from app.infrastructure.payment_factory import build_payment_application_service
 from app.infrastructure.persistence.winback_repository import WinbackRepository
 from app.infrastructure.persistence.workspace_repository import WorkspaceRepository
 from app.models.database import get_db_session
 from app.models.enums import TariffCode
 from app.models.user import User
-from app.application.winback_service import WinbackService
 from app.services.billing_service import (
     BillingError,
     BillingNotFoundError,
-    BillingResult,
     BillingService,
     BillingValidationError,
     DailyBonusResult,
-    describe_tariff,
 )
-from app.infrastructure.generation_history_cache import (
-    get_cached_tariffs,
-    set_cached_tariffs,
-)
-from app.services.tariffs import get_tariff_plan, list_tariff_plans
 from app.services.telegram_user_notify import TelegramUserNotifier
 from app.services.yookassa_service import (
     YooKassaConfigurationError,
@@ -122,9 +120,26 @@ class DailyBonusClaimResponse(BaseModel):
 async def get_billing_service(
     db_session: AsyncSession = Depends(get_db_session),
 ) -> BillingService:
-    """Request-scoped billing service."""
+    """Request-scoped billing service (kept for admin / legacy callers)."""
 
     return BillingService(db_session)
+
+
+async def get_payment_application_service(
+    db_session: AsyncSession = Depends(get_db_session),
+) -> PaymentApplicationService:
+    """Request-scoped payments façade for HTTP routers (audit A2).
+
+    YooKassa is resolved lazily so catalog/balance endpoints work without
+    payment credentials configured.
+    """
+
+    yookassa: YooKassaService | None
+    try:
+        yookassa = get_yookassa_service()
+    except YooKassaConfigurationError:
+        yookassa = None
+    return build_payment_application_service(db_session, yookassa=yookassa)
 
 
 async def get_current_user(
@@ -238,7 +253,9 @@ async def get_yookassa_dependency() -> YooKassaService:
 
 
 @router.get("/tariffs", response_model=list[TariffResponse])
-async def list_tariffs() -> list[TariffResponse]:
+async def list_tariffs(
+    payments: PaymentApplicationService = Depends(get_payment_application_service),
+) -> list[TariffResponse]:
     """Return the commercial tariff grid (Старт / Про / Полугодовой / Годовая)."""
 
     cached = await get_cached_tariffs()
@@ -251,7 +268,7 @@ async def list_tariffs() -> list[TariffResponse]:
         except (ValueError, TypeError):
             logger.debug("Tariffs cache payload invalid", exc_info=True)
 
-    response = [TariffResponse(**describe_tariff(plan)) for plan in list_tariff_plans()]
+    response = [TariffResponse(**item) for item in payments.list_tariffs()]
     await set_cached_tariffs([item.model_dump(mode="json") for item in response])
     return response
 
@@ -259,38 +276,32 @@ async def list_tariffs() -> list[TariffResponse]:
 @router.get("/balance", response_model=BalanceResponse)
 async def get_balance(
     current_user: User = Depends(require_billing_access),
+    payments: PaymentApplicationService = Depends(get_payment_application_service),
 ) -> BalanceResponse:
     """Return AI-coin balance and daily bonus availability for the cabinet."""
 
-    now = datetime.now(UTC)
-    last_claimed_at = current_user.daily_bonus_claimed_at
-    if last_claimed_at is not None and last_claimed_at.tzinfo is None:
-        last_claimed_at = last_claimed_at.replace(tzinfo=UTC)
-    daily_bonus_available = (
-        last_claimed_at is None or last_claimed_at.astimezone(UTC).date() < now.date()
-    )
-    next_available_at = datetime(now.year, now.month, now.day, tzinfo=UTC) + timedelta(days=1)
+    snap = payments.balance_snapshot(current_user)
     return BalanceResponse(
-        ai_coins=current_user.ai_coins,
-        daily_bonus_available=daily_bonus_available,
-        daily_bonus_streak=current_user.daily_bonus_streak,
-        daily_bonus_coins=get_settings().daily_bonus_coins,
-        last_daily_bonus_claimed_at=last_claimed_at.isoformat()
-        if last_claimed_at is not None
+        ai_coins=snap.ai_coins,
+        daily_bonus_available=snap.daily_bonus_available,
+        daily_bonus_streak=snap.daily_bonus_streak,
+        daily_bonus_coins=snap.daily_bonus_coins,
+        last_daily_bonus_claimed_at=snap.last_daily_bonus_claimed_at.isoformat()
+        if snap.last_daily_bonus_claimed_at is not None
         else None,
-        next_daily_bonus_available_at=next_available_at.isoformat(),
+        next_daily_bonus_available_at=snap.next_daily_bonus_available_at.isoformat(),
     )
 
 
 @router.post("/daily-bonus/claim", response_model=DailyBonusClaimResponse)
 async def claim_daily_bonus(
     current_user: User = Depends(require_billing_access),
-    billing: BillingService = Depends(get_billing_service),
+    payments: PaymentApplicationService = Depends(get_payment_application_service),
 ) -> DailyBonusClaimResponse:
     """Claim today's free AI-coin retention bonus exactly once."""
 
     try:
-        result: DailyBonusResult = await billing.claim_daily_bonus(current_user.id)
+        result: DailyBonusResult = await payments.claim_daily_bonus(current_user.id)
     except BillingNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -322,36 +333,16 @@ async def claim_daily_bonus(
 async def create_payment(
     payload: CreatePaymentRequest,
     current_user: User = Depends(require_billing_access),
-    billing: BillingService = Depends(get_billing_service),
-    yookassa: YooKassaService = Depends(get_yookassa_dependency),
-    winback: WinbackService = Depends(get_winback_service_for_payments),
+    payments: PaymentApplicationService = Depends(get_payment_application_service),
 ) -> CreatePaymentResponse:
     """Create a YooKassa payment and persist a pending local payment row."""
 
-    plan = get_tariff_plan(payload.tariff_code)
-    amount_rub, discount_percent, _offer_id = await winback.resolve_checkout_amount(
-        user_id=current_user.id,
-        catalog_price_rub=plan.price_rub,
-    )
-
     try:
-        created = await yookassa.create_tariff_payment(
-            user_id=str(current_user.id),
+        checkout = await payments.create_checkout(
+            user=current_user,
             tariff_code=payload.tariff_code,
-            customer_email=current_user.email,
-            amount_rub_override=amount_rub if discount_percent is not None else None,
-            discount_percent=discount_percent,
         )
-        payment = await billing.create_pending_payment(
-            user_id=current_user.id,
-            tariff_code=payload.tariff_code,
-            yookassa_payment_id=created.payment_id,
-            amount_rub=created.amount_rub,
-            confirmation_url=created.confirmation_url,
-            description=created.description or None,
-            currency=created.currency,
-            discount_percent=discount_percent,
-        )
+        payment = checkout.payment
     except YooKassaConfigurationError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -394,9 +385,7 @@ async def create_payment(
 @router.post("/webhook", response_model=WebhookAckResponse)
 async def yookassa_webhook(
     payload: dict[str, Any],
-    billing: BillingService = Depends(get_billing_service),
-    yookassa: YooKassaService = Depends(get_yookassa_dependency),
-    winback: WinbackService = Depends(get_winback_service_for_payments),
+    payments: PaymentApplicationService = Depends(get_payment_application_service),
 ) -> WebhookAckResponse:
     """Receive asynchronous YooKassa notifications about payment status.
 
@@ -404,112 +393,52 @@ async def yookassa_webhook(
     we re-fetch the payment from YooKassa API and only then apply billing.
     """
 
-    event = str(payload.get("event") or "").strip()
-    obj = payload.get("object")
-    if not isinstance(obj, dict):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Webhook payload missing payment object.",
-        )
-
-    yookassa_payment_id = str(obj.get("id") or "").strip()
-    if not yookassa_payment_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Webhook payment id is missing.",
-        )
-
-    raw_payload = json.dumps(payload, ensure_ascii=False)
-
-    if event == "payment.canceled":
-        await billing.mark_payment_canceled(
-            yookassa_payment_id=yookassa_payment_id,
-            raw_payload=raw_payload,
-        )
-        return WebhookAckResponse(detail="Payment marked as canceled.")
-
-    if event != "payment.succeeded":
-        return WebhookAckResponse(detail=f"Ignored event '{event or 'unknown'}'.")
-
     try:
-        verified = await yookassa.get_payment(yookassa_payment_id)
+        result = await payments.process_yookassa_webhook(payload)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
     except YooKassaConfigurationError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
         ) from exc
     except (YooKassaUpstreamError, YooKassaError) as exc:
-        logger.exception("Failed to verify YooKassa payment %s", yookassa_payment_id)
+        logger.exception("Failed to verify YooKassa payment webhook")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"YooKassa verification failed: {exc}",
         ) from exc
-
-    if str(verified.get("status") or "").lower() != "succeeded":
-        return WebhookAckResponse(
-            detail=(
-                f"Upstream payment status is '{verified.get('status')}', "
-                "billing was not applied."
-            )
-        )
-
-    amount_block = verified.get("amount") or {}
-    try:
-        expected_amount = Decimal(str(amount_block.get("value")))
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid amount in verified YooKassa payment.",
-        ) from exc
-
-    try:
-        result: BillingResult = await billing.apply_successful_payment(
-            yookassa_payment_id=yookassa_payment_id,
-            expected_amount=expected_amount,
-            raw_payload=raw_payload,
-        )
     except BillingNotFoundError as exc:
-        # Payment may arrive before local create finishes — ask YooKassa to retry.
-        logger.warning("Webhook for unknown payment %s: %s", yookassa_payment_id, exc)
+        logger.warning("Webhook for unknown payment: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(exc),
         ) from exc
     except BillingValidationError as exc:
-        logger.exception("Billing validation failed for %s", yookassa_payment_id)
+        logger.exception("Billing validation failed for webhook")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         ) from exc
     except BillingError as exc:
-        logger.exception("Billing failed for %s", yookassa_payment_id)
+        logger.exception("Billing failed for webhook")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(exc),
         ) from exc
+    except Exception as exc:
+        # Invalid Decimal / unexpected payload shape from verified amount.
+        if "amount" in str(exc).lower() or isinstance(exc, (TypeError, ArithmeticError)):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid amount in verified YooKassa payment.",
+            ) from exc
+        raise
 
-    if not result.already_processed:
-        payment = await billing.get_payment_by_yookassa_id(yookassa_payment_id)
-        catalog_price = get_tariff_plan(result.tariff_code).price_rub
-        if payment is not None and payment.amount_rub != catalog_price:
-            _amount, _percent, offer_id = await winback.resolve_checkout_amount(
-                user_id=result.user_id,
-                catalog_price_rub=catalog_price,
-            )
-            await winback.redeem_discount_after_payment(
-                user_id=result.user_id,
-                offer_id=offer_id,
-            )
-
-    detail = (
-        "Payment already processed."
-        if result.already_processed
-        else (
-            f"Tariff '{result.tariff_code.value}' applied; "
-            f"+{result.coins_credited} AI-coins; balance={result.new_balance}."
-        )
-    )
     return WebhookAckResponse(
-        detail=detail,
+        detail=result.detail,
         already_processed=result.already_processed,
     )

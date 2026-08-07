@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.application.pain_analysis_service import PainAnalysisService
 from app.core.config import get_settings
 from app.domain.smart_reasoning import ReasoningTaskKind
+from app.infrastructure.claude.facades import wrap_claude_for_domain
 from app.infrastructure.claude_client_loader import load_claude_client
 from app.infrastructure.claude_stage_cache import RedisClaudeStageCache
 from app.infrastructure.persistence.pain_analysis_repository import (
@@ -45,13 +46,15 @@ def build_pain_analysis_service(
         analytics_cache_ttl_seconds=settings.claude_analytics_cache_ttl_seconds,
         analytics_task_kind=task.value,
     )
+    # A3: inject domain façade, not the god-client, into the use case.
+    facade = wrap_claude_for_domain(client, domain="pain_analysis")
     local_llm = load_ollama_client(settings)
 
     return PainAnalysisService(
         PainAnalysisRepository(db_session),
         model_name=model_name,
         redis_stage_ttl_seconds=settings.claude_47_stage_cache_ttl_seconds,
-        analyzer=client,
+        analyzer=facade if facade is not None else analyzer,
         stage_cache=RedisClaudeStageCache(),
         token_governor=build_token_governor(settings),
         local_llm=local_llm,

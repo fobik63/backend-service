@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from celery import Celery
 from celery.schedules import crontab
-from celery.signals import task_failure
+from celery.signals import task_failure, worker_process_shutdown
 
 from app.core.config import get_settings
 
@@ -149,6 +149,18 @@ celery_app.conf.update(
     },
 )
 
+# --- Worker lifecycle: close shared pools once per process, not per task ---
+
+
+@worker_process_shutdown.connect
+def _shutdown_worker_shared_resources(**_kwargs: object) -> None:
+    """Dispose Postgres/Redis/AI clients when the worker child process exits."""
+
+    from app.workers.async_runtime import shutdown_worker_resources
+
+    shutdown_worker_resources()
+
+
 # --- Operator alerts: Celery task failures → Telegram with file:line ---
 
 
@@ -193,3 +205,21 @@ def _notify_celery_task_failure(
 
 
 __all__ = ["celery_app"]
+
+
+def _install_beat_leadership_hook() -> None:
+    """Acquire Redis leadership lock when the Beat process boots (audit R3)."""
+
+    try:
+        from celery.signals import beat_init
+    except ImportError:
+        return
+
+    @beat_init.connect
+    def _on_beat_init(**_kwargs: object) -> None:
+        from app.infrastructure.celery_beat_lock import ensure_single_beat_or_exit
+
+        ensure_single_beat_or_exit()
+
+
+_install_beat_leadership_hook()

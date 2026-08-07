@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.captcha import enforce_generation_behavioral_limit
 from app.api.payments import get_current_user
+from app.application.generation_cabinet_service import GenerationCabinetService
 from app.core.config import get_settings
 from app.domain.brand_dna import (
     apply_brand_dna_to_prompt,
@@ -72,6 +73,14 @@ from app.services.series_generator import SeriesTask, build_series_tasks_cached
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/generations", tags=["generations"])
+
+
+def get_generation_cabinet_service(
+    db_session: AsyncSession = Depends(get_db_session),
+) -> GenerationCabinetService:
+    """HTTP façade over the generation repository (audit A2)."""
+
+    return GenerationCabinetService(GenerationRepository(db_session))
 
 
 async def _slide_tasks_with_brand_lora(
@@ -204,6 +213,7 @@ class GenerationHistoryItemResponse(StrictAPIModel):
     status: GenerationJobStatus
     progress: int
     product_category: str | None = None
+    slide_count: int = Field(default=0, ge=0)
     thumbnail_url: str | None = None
     thumbnail_mime_type: str | None = None
     thumbnail_size_bytes: int | None = Field(default=None, ge=1, le=100 * 1024)
@@ -379,9 +389,10 @@ async def create_model_generation(
     engine_mode = _effective_engine_mode(payload.engine_mode, payload.post_processing_mode)
     _ensure_generation_options_allowed(engine_mode, payload.post_processing_mode, current_user)
     repository = GenerationRepository(db_session)
+    cabinet = GenerationCabinetService(repository)
     if idempotency_key:
         idempotency_key = idempotency_key.strip()
-        existing = await repository.find_idempotent_job(
+        existing = await cabinet.find_idempotent_job(
             user_id=current_user.id,
             idempotency_key=idempotency_key,
         )
@@ -416,7 +427,7 @@ async def create_model_generation(
         slide_tasks=(task,),
     )
     try:
-        job, created = await repository.create_job(
+        job, created = await cabinet.create_job(
             user_id=current_user.id,
             idempotency_key=idempotency_key,
             subscription_status=current_user.subscription_status.value,
@@ -475,9 +486,10 @@ async def create_generation(
     engine_mode = _effective_engine_mode(form.engine_mode, form.post_processing_mode)
     _ensure_generation_options_allowed(engine_mode, form.post_processing_mode, current_user)
     repository = GenerationRepository(db_session)
+    cabinet = GenerationCabinetService(repository)
     if idempotency_key:
         idempotency_key = idempotency_key.strip()
-        existing = await repository.find_idempotent_job(
+        existing = await cabinet.find_idempotent_job(
             user_id=current_user.id,
             idempotency_key=idempotency_key,
         )
@@ -521,7 +533,7 @@ async def create_generation(
             user_id=current_user.id,
             slide_tasks=await build_series_tasks_cached(form.product_category),
         )
-        job, created = await repository.create_job(
+        job, created = await cabinet.create_job(
             user_id=current_user.id,
             idempotency_key=idempotency_key,
             subscription_status=current_user.subscription_status.value,
@@ -603,7 +615,8 @@ async def list_generation_history(
             logger.debug("Generation history cache payload invalid", exc_info=True)
 
     repository = GenerationRepository(db_session)
-    jobs = await repository.list_generation_history_for_user(
+    cabinet = GenerationCabinetService(repository)
+    summaries = await cabinet.list_summary_for_user(
         user_id=current_user.id,
         limit=limit,
         offset=offset,
@@ -616,12 +629,24 @@ async def list_generation_history(
 
     now = datetime.now(UTC)
     response: list[GenerationHistoryItemResponse] = []
-    for job in jobs:
+    for summary in summaries:
+        job = summary.job
         thumbnail_url: str | None = None
-        if storage is not None and job.thumbnail_object_key:
+        thumbnail_key = job.thumbnail_object_key
+        thumbnail_mime = job.thumbnail_mime_type
+        thumbnail_size = job.thumbnail_size_bytes
+        # Prefer denormalized job thumbnail; fall back to cover slide object key.
+        if not thumbnail_key and job.slides:
+            cover = next(
+                (slide for slide in job.slides if slide.slide_key == "cover"),
+                job.slides[0],
+            )
+            thumbnail_key = cover.result_object_key
+            thumbnail_mime = thumbnail_mime or cover.result_mime_type
+        if storage is not None and thumbnail_key:
             try:
                 thumbnail_url = await storage.generate_presigned_url(
-                    object_key=job.thumbnail_object_key
+                    object_key=thumbnail_key
                 )
             except S3StorageError:
                 logger.warning(
@@ -651,9 +676,10 @@ async def list_generation_history(
                 status=GenerationJobStatus(job.status),
                 progress=job.progress,
                 product_category=job.product_category,
+                slide_count=summary.slide_count,
                 thumbnail_url=thumbnail_url,
-                thumbnail_mime_type=job.thumbnail_mime_type,
-                thumbnail_size_bytes=job.thumbnail_size_bytes,
+                thumbnail_mime_type=thumbnail_mime,
+                thumbnail_size_bytes=thumbnail_size,
                 archive_status=archive_status,
                 archive_url=archive_url,
                 archive_expires_at=archive_expires_at.isoformat()
@@ -693,7 +719,8 @@ async def get_generation_status(
         logger.debug("Generation status cache miss/failure", exc_info=True)
 
     repository = GenerationRepository(db_session)
-    job = await repository.get_job_for_user(task_id, current_user.id)
+    cabinet = GenerationCabinetService(repository)
+    job = await cabinet.get_detail_for_user(task_id, current_user.id)
     if job is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

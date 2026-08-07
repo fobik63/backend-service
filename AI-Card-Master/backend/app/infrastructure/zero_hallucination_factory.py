@@ -35,8 +35,10 @@ def _build_claude_checker(
     *,
     require_claude_client: bool,
 ) -> Any | None:
+    from app.infrastructure.claude.facades import wrap_claude_for_domain
+
     task = ReasoningTaskKind.ZERO_HALLUCINATION
-    return load_claude_client(
+    client = load_claude_client(
         settings,
         require=require_claude_client,
         model_name=resolve_claude_model(task, settings),
@@ -44,3 +46,4 @@ def _build_claude_checker(
         analytics_cache_ttl_seconds=settings.claude_analytics_cache_ttl_seconds,
         analytics_task_kind=task.value,
     )
+    return wrap_claude_for_domain(client, domain="zero_hallucination")

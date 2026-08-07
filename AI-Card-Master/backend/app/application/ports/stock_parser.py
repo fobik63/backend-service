@@ -78,9 +78,13 @@ class StockParserPersistencePort(Protocol):
         """Lookup SKU by marketplace + article."""
 
     async def list_active_sku_items(
-        self, *, marketplace: ParserMarketplace | None = None
+        self,
+        *,
+        marketplace: ParserMarketplace | None = None,
+        after_id: UUID | None = None,
+        limit: int = 500,
     ) -> list[SkuItemView]:
-        """Return tracked SKUs for nightly parser Beat jobs."""
+        """Return tracked SKUs for nightly parser Beat jobs (keyset page)."""
 
     async def ensure_stock_snapshot_partition(
         self, *, captured_at: datetime

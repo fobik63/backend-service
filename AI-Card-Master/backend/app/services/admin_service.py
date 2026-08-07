@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -11,7 +11,7 @@ from uuid import UUID
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.api_usage_cost import ApiUsageCost
+from app.infrastructure.persistence.cost_analytics_repository import CostAnalyticsRepository
 from app.models.enums import PaymentStatus, SubscriptionStatus
 from app.models.generation import Generation
 from app.models.generation_error_log import GenerationErrorLog
@@ -207,15 +207,32 @@ class AdminService:
         )
 
     async def get_api_cost_statistics(self) -> AdminApiCostStatistics:
-        """Return spend totals for Midjourney and Claude 4.7 monitoring."""
+        """Return spend totals for Midjourney and Claude via daily rollups (Q1).
 
-        total_events = await self._count(ApiUsageCost.id)
-        total_cost = await self._sum_cost()
-        midjourney_cost = await self._sum_cost(ApiUsageCost.provider == "midjourney")
-        claude_cost = await self._sum_cost(ApiUsageCost.provider == "anthropic")
+        Reads ``api_cost_daily_rollups`` instead of scanning the raw
+        ``api_usage_costs`` event table.
+        """
+
+        repo = CostAnalyticsRepository(self._db_session)
+        # Wide window covers all historical rollup rows without seq-scanning events.
+        day_from = date(2020, 1, 1)
+        day_to = datetime.now(UTC).date()
+        totals = await repo.sum_rollups(day_from=day_from, day_to=day_to)
+        by_provider = await repo.sum_rollups_by_provider(
+            day_from=day_from,
+            day_to=day_to,
+        )
+        midjourney_cost, _mj_events = by_provider.get(
+            "midjourney",
+            (Decimal("0"), 0),
+        )
+        claude_cost, _claude_events = by_provider.get(
+            "anthropic",
+            (Decimal("0"), 0),
+        )
         return AdminApiCostStatistics(
-            events_total=total_events,
-            total_cost_usd=total_cost,
+            events_total=totals.events_count,
+            total_cost_usd=totals.cost_usd,
             midjourney_cost_usd=midjourney_cost,
             claude_47_cost_usd=claude_cost,
         )
@@ -246,7 +263,12 @@ class AdminService:
         if amount <= 0:
             raise AdminValidationError("Credit amount must be greater than zero.")
         user = await self._get_user_for_update(user_id=user_id, email=email)
-        user.ai_coins += amount
+        # Single write-path: BillingService.in_transaction (audit R1).
+        from app.services.billing_service import BillingService
+
+        await BillingService(self._db_session).credit_coins_in_transaction(
+            user_id=user.id, amount=amount
+        )
         await self._db_session.commit()
         await self._db_session.refresh(user)
         return self._to_admin_user_view(user)
@@ -383,13 +405,6 @@ class AdminService:
             stmt = stmt.where(*conditions)
         result = await self._db_session.scalar(stmt)
         return int(result or 0)
-
-    async def _sum_cost(self, *conditions: Any) -> Decimal:
-        stmt = select(func.coalesce(func.sum(ApiUsageCost.total_cost_usd), 0))
-        if conditions:
-            stmt = stmt.where(*conditions)
-        result = await self._db_session.scalar(stmt)
-        return Decimal(str(result or "0"))
 
     @staticmethod
     def _to_admin_user_view(user: User) -> AdminUserView:

@@ -387,13 +387,88 @@ class BillingService:
             already_processed=False,
         )
 
+    async def debit_coins_in_transaction(
+        self, *, user_id: UUID, amount: int
+    ) -> User:
+        """Debit ``amount`` AI-coins without committing (unit-of-work safe).
+
+        Single write-path for all coin debits (audit R1). Repositories and
+        feature services must call this instead of mutating ``User.ai_coins``.
+        """
+
+        if amount < 0:
+            raise BillingValidationError("Debit amount must be non-negative.")
+        user = await self._session.get(User, user_id, with_for_update=True)
+        if user is None:
+            raise BillingNotFoundError(f"User {user_id} not found.")
+        if amount == 0:
+            return user
+        if int(user.ai_coins) < amount:
+            raise BillingValidationError("Insufficient AI-coin balance.")
+        user.ai_coins = int(user.ai_coins) - amount
+        await self._session.flush()
+        return user
+
+    async def refund_coins_in_transaction(
+        self, *, user_id: UUID, amount: int
+    ) -> User:
+        """Refund ``amount`` AI-coins without committing (unit-of-work safe)."""
+
+        if amount < 0:
+            raise BillingValidationError("Refund amount must be non-negative.")
+        user = await self._session.get(User, user_id, with_for_update=True)
+        if user is None:
+            raise BillingNotFoundError(f"User {user_id} not found.")
+        if amount == 0:
+            return user
+        user.ai_coins = int(user.ai_coins) + amount
+        await self._session.flush()
+        return user
+
+    async def credit_coins_in_transaction(
+        self, *, user_id: UUID, amount: int
+    ) -> User:
+        """Credit ``amount`` AI-coins without committing (unit-of-work safe)."""
+
+        if amount < 0:
+            raise BillingValidationError("Credit amount must be non-negative.")
+        user = await self._session.get(User, user_id, with_for_update=True)
+        if user is None:
+            raise BillingNotFoundError(f"User {user_id} not found.")
+        if amount == 0:
+            return user
+        user.ai_coins = int(user.ai_coins) + amount
+        await self._session.flush()
+        return user
+
+    async def debit_coins(self, *, user_id: UUID, amount: int) -> int:
+        """Debit coins and commit; return the new balance (``CoinWalletPort``)."""
+
+        user = await self.debit_coins_in_transaction(user_id=user_id, amount=amount)
+        await self._session.commit()
+        await self._session.refresh(user)
+        return int(user.ai_coins)
+
+    async def refund_coins(self, *, user_id: UUID, amount: int) -> int:
+        """Refund coins and commit; return the new balance (``CoinWalletPort``)."""
+
+        user = await self.refund_coins_in_transaction(user_id=user_id, amount=amount)
+        await self._session.commit()
+        await self._session.refresh(user)
+        return int(user.ai_coins)
+
+    async def credit_coins(self, *, user_id: UUID, amount: int) -> int:
+        """Credit coins and commit; return the new balance (``CoinWalletPort``)."""
+
+        user = await self.credit_coins_in_transaction(user_id=user_id, amount=amount)
+        await self._session.commit()
+        await self._session.refresh(user)
+        return int(user.ai_coins)
+
     async def debit_generation_coin(self, user_id: UUID) -> int:
         """Spend exactly 1 AI-coin for one generation. Raises if balance is 0."""
 
-        user = await self.debit_generation_coin_in_transaction(user_id)
-        await self._session.commit()
-        await self._session.refresh(user)
-        return user.ai_coins
+        return await self.debit_coins(user_id=user_id, amount=1)
 
     async def debit_generation_coin_in_transaction(self, user_id: UUID) -> User:
         """Debit one coin without committing the caller's transaction.
@@ -403,32 +478,17 @@ class BillingService:
         back. The original committing method remains available to old callers.
         """
 
-        user = await self._session.get(User, user_id, with_for_update=True)
-        if user is None:
-            raise BillingNotFoundError(f"User {user_id} not found.")
-        if user.ai_coins < 1:
-            raise BillingValidationError("Insufficient AI-coin balance.")
-        user.ai_coins -= 1
-        await self._session.flush()
-        return user
+        return await self.debit_coins_in_transaction(user_id=user_id, amount=1)
 
     async def refund_generation_coin(self, user_id: UUID) -> int:
         """Return 1 AI-coin after a failed generation (Safe Spend companion)."""
 
-        user = await self.refund_generation_coin_in_transaction(user_id)
-        await self._session.commit()
-        await self._session.refresh(user)
-        return user.ai_coins
+        return await self.refund_coins(user_id=user_id, amount=1)
 
     async def refund_generation_coin_in_transaction(self, user_id: UUID) -> User:
         """Refund one coin without committing the caller's transaction."""
 
-        user = await self._session.get(User, user_id, with_for_update=True)
-        if user is None:
-            raise BillingNotFoundError(f"User {user_id} not found.")
-        user.ai_coins = int(user.ai_coins) + 1
-        await self._session.flush()
-        return user
+        return await self.refund_coins_in_transaction(user_id=user_id, amount=1)
 
     async def claim_daily_bonus(self, user_id: UUID) -> DailyBonusResult:
         """Grant the configured daily free coins once per UTC day."""
@@ -466,7 +526,9 @@ class BillingService:
             if last_claimed_at is not None and last_claimed_at.date() == yesterday
             else 1
         )
-        user.ai_coins = int(user.ai_coins) + int(settings.daily_bonus_coins)
+        await self.credit_coins_in_transaction(
+            user_id=user_id, amount=int(settings.daily_bonus_coins)
+        )
         user.daily_bonus_claimed_at = now
         user.daily_bonus_streak = streak
 

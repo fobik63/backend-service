@@ -10,7 +10,7 @@ ZIP packaging of the 5 images, Selectel S3 upload, and presigned download URLs.
 from __future__ import annotations
 
 import asyncio
-import io
+import tempfile
 import uuid
 import zipfile
 from dataclasses import dataclass
@@ -42,6 +42,8 @@ from app.services.s3_storage import (
 
 
 PER_SLIDE_TIMEOUT_SECONDS: Final[float] = 120.0
+# Cap concurrent Midjourney/SD calls to avoid RAM + credit spikes (audit M2).
+SERIES_SLIDE_CONCURRENCY: Final[int] = 3
 
 
 # Default Russian overlay texts for the 5 marketplace slides.
@@ -232,19 +234,20 @@ async def generate_slide_series(
         raise SeriesGenerationError("product_image cannot be empty.")
 
     tasks = build_series_tasks(product_category)
+    semaphore = asyncio.Semaphore(SERIES_SLIDE_CONCURRENCY)
 
-    # Asynchronous loop: create all tasks first, then await their completion together.
-    async_jobs: list[asyncio.Task[SeriesResult]] = []
-    for task in tasks:
-        async_jobs.append(
-            asyncio.create_task(
-                _generate_single_slide(
-                    product_image,
-                    task,
-                    subscription_status=subscription_status,
-                )
+    async def _limited(task: SeriesTask) -> SeriesResult:
+        async with semaphore:
+            return await _generate_single_slide(
+                product_image,
+                task,
+                subscription_status=subscription_status,
             )
-        )
+
+    # Bounded parallelism: at most SERIES_SLIDE_CONCURRENCY in-flight generations.
+    async_jobs: list[asyncio.Task[SeriesResult]] = [
+        asyncio.create_task(_limited(task)) for task in tasks
+    ]
 
     raw_results = await asyncio.gather(*async_jobs, return_exceptions=True)
 
@@ -471,23 +474,22 @@ def _resolve_lifestyle_scene(product_category: str | None) -> str:
     return "premium interior scene on table or shelf"
 
 
-def build_series_zip_bytes(slides: list[SeriesResult]) -> tuple[bytes, tuple[str, ...]]:
-    """Pack exactly 5 slide images into an in-memory ZIP archive.
-
-    Returns:
-        Tuple of (zip_bytes, ordered filenames inside the archive).
-    """
+def build_series_zip_to_path(
+    slides: list[SeriesResult],
+    zip_path: Path,
+) -> tuple[str, ...]:
+    """Stream-pack exactly 5 slides into a ZIP on disk (no full archive in RAM)."""
 
     if len(slides) != 5:
         raise SeriesGenerationError(
             f"Expected exactly 5 slides for ZIP packaging, got {len(slides)}."
         )
 
-    buffer = io.BytesIO()
+    zip_path.parent.mkdir(parents=True, exist_ok=True)
     filenames: list[str] = []
 
     with zipfile.ZipFile(
-        buffer,
+        zip_path,
         mode="w",
         compression=zipfile.ZIP_DEFLATED,
         compresslevel=9,
@@ -501,7 +503,21 @@ def build_series_zip_bytes(slides: list[SeriesResult]) -> tuple[bytes, tuple[str
             filenames.append(filename)
             archive.writestr(filename, slide.image_bytes)
 
-    return buffer.getvalue(), tuple(filenames)
+    return tuple(filenames)
+
+
+def build_series_zip_bytes(slides: list[SeriesResult]) -> tuple[bytes, tuple[str, ...]]:
+    """Pack exactly 5 slide images into a ZIP archive.
+
+    Prefer ``build_series_zip_to_path`` / ``package_series_archive_to_s3`` for
+    production paths so the archive never resides fully in RAM. Kept for
+    callers that still need in-memory bytes (tests / small tools).
+    """
+
+    with tempfile.TemporaryDirectory(prefix="series_zip_bytes_") as tmp:
+        zip_path = Path(tmp) / "card_series.zip"
+        filenames = build_series_zip_to_path(slides, zip_path)
+        return zip_path.read_bytes(), filenames
 
 
 async def save_series_images_locally(
@@ -535,12 +551,12 @@ async def package_series_archive_to_s3(
     local_staging_dir: Path | None = None,
     keep_local_zip: bool = False,
 ) -> SeriesArchiveResult:
-    """Save 5 images, pack them into a ZIP, upload to Selectel S3, return presigned URL.
+    """Save 5 images, stream-pack a ZIP on disk, multipart-upload to Selectel S3.
 
     Steps:
     1) Optionally stage PNG files on disk.
-    2) Build an in-memory ZIP of all 5 slides.
-    3) Upload the ZIP to Selectel (S3-compatible).
+    2) Stream-write ZIP to a temp/staging path (never hold the full ZIP in RAM).
+    3) Upload via S3 multipart ``upload_file``.
     4) Return a time-limited Presigned URL for the frontend download.
     """
 
@@ -552,40 +568,54 @@ async def package_series_archive_to_s3(
     if local_staging_dir is not None:
         await save_series_images_locally(slides, destination_dir=local_staging_dir)
 
-    zip_bytes, filenames = await asyncio.to_thread(build_series_zip_bytes, slides)
-
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     owner = (user_id or "anonymous").replace("/", "_")
     object_key = f"series/{owner}/{stamp}_{uuid.uuid4().hex[:12]}/card_series.zip"
 
-    local_zip_path: str | None = None
+    temp_dir: tempfile.TemporaryDirectory[str] | None = None
     if keep_local_zip and local_staging_dir is not None:
         zip_path = local_staging_dir / "card_series.zip"
-        await asyncio.to_thread(zip_path.write_bytes, zip_bytes)
-        local_zip_path = str(zip_path)
+    else:
+        temp_dir = tempfile.TemporaryDirectory(prefix="series_zip_")
+        zip_path = Path(temp_dir.name) / "card_series.zip"
 
     try:
-        s3 = storage or get_s3_storage()
-        uploaded = await s3.upload_bytes(
-            object_key=object_key,
-            data=zip_bytes,
-            content_type="application/zip",
-            presign=True,
+        filenames = await asyncio.to_thread(build_series_zip_to_path, slides, zip_path)
+        archive_size = await asyncio.to_thread(lambda: zip_path.stat().st_size)
+
+        try:
+            s3 = storage or get_s3_storage()
+            uploaded = await s3.upload_file(
+                object_key=object_key,
+                file_path=zip_path,
+                content_type="application/zip",
+                presign=True,
+            )
+        except S3StorageError as exc:
+            raise SeriesGenerationError(
+                f"Failed to upload series ZIP to S3: {exc}"
+            ) from exc
+
+        if not uploaded.presigned_url:
+            raise SeriesGenerationError(
+                "S3 upload succeeded but presigned URL is empty."
+            )
+
+        local_zip_path: str | None = None
+        if keep_local_zip and local_staging_dir is not None:
+            local_zip_path = str(zip_path)
+
+        return SeriesArchiveResult(
+            object_key=uploaded.object_key,
+            bucket=uploaded.bucket,
+            presigned_url=uploaded.presigned_url,
+            slide_filenames=filenames,
+            archive_size_bytes=archive_size,
+            local_zip_path=local_zip_path,
         )
-    except S3StorageError as exc:
-        raise SeriesGenerationError(f"Failed to upload series ZIP to S3: {exc}") from exc
-
-    if not uploaded.presigned_url:
-        raise SeriesGenerationError("S3 upload succeeded but presigned URL is empty.")
-
-    return SeriesArchiveResult(
-        object_key=uploaded.object_key,
-        bucket=uploaded.bucket,
-        presigned_url=uploaded.presigned_url,
-        slide_filenames=filenames,
-        archive_size_bytes=len(zip_bytes),
-        local_zip_path=local_zip_path,
-    )
+    finally:
+        if temp_dir is not None:
+            temp_dir.cleanup()
 
 
 async def generate_slide_series_archive(

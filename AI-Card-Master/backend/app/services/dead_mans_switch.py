@@ -25,7 +25,7 @@ from redis.exceptions import RedisError
 from app.core.client_ip import parse_trusted_proxy_cidrs
 from app.core.config import Settings, get_settings
 from app.infrastructure.cloudflare import get_cloudflare_client
-from app.infrastructure.redis import get_redis_client
+from app.infrastructure.redis import get_security_redis_client
 from app.services.telegram_alerts import send_operator_telegram
 
 logger = logging.getLogger(__name__)
@@ -108,7 +108,7 @@ class DeadMansSwitchService:
 
     async def get_state(self) -> DeadMansSwitchState:
         try:
-            raw = await get_redis_client().get(self.redis_key)
+            raw = await get_security_redis_client().get(self.redis_key)
         except RedisError:
             logger.warning("Dead Man's Switch state read failed", exc_info=True)
             # Fail closed: if Redis blips after a real trigger we must not open
@@ -176,7 +176,7 @@ class DeadMansSwitchService:
         counter_key = f"{_FAILURE_COUNTER_PREFIX}{event.source_ip}:{bucket}"
 
         try:
-            client = get_redis_client()
+            client = get_security_redis_client()
             count = int(await client.incr(counter_key))
             await client.expire(counter_key, window * 2)
         except RedisError:
@@ -264,7 +264,7 @@ class DeadMansSwitchService:
 
         state = DeadMansSwitchState.inactive()
         try:
-            await get_redis_client().delete(self.redis_key)
+            await get_security_redis_client().delete(self.redis_key)
         except RedisError:
             logger.warning("Failed to clear Dead Man's Switch Redis key", exc_info=True)
 
@@ -278,7 +278,7 @@ class DeadMansSwitchService:
 
     async def _persist(self, state: DeadMansSwitchState) -> None:
         try:
-            await get_redis_client().set(
+            await get_security_redis_client().set(
                 self.redis_key,
                 json.dumps(state.to_dict(), ensure_ascii=False),
             )

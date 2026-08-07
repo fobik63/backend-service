@@ -6,7 +6,6 @@ Nightly Beat (03:00 UTC) dispatches chunked batches of ≤100 tracked SKUs.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime
@@ -17,6 +16,7 @@ from celery import Task
 from app.core.config import get_settings
 from app.domain.stock_parser import (
     STOCK_PARSER_DEFAULT_CHUNK_SIZE,
+    STOCK_PARSER_DEFAULT_KEYSET_BATCH_SIZE,
     ParseSkuRequest,
     ParserMarketplace,
     SkuItemView,
@@ -29,7 +29,8 @@ from app.infrastructure.eye_of_god.sku_image_fetcher import SkuCardImageFetcher
 from app.infrastructure.eye_of_god_factory import build_eye_of_god_bridge_service
 from app.infrastructure.persistence.stock_parser_repository import StockParserRepository
 from app.infrastructure.stock_parser_factory import build_stock_parser_service
-from app.models.database import SessionLocal, engine
+from app.models.database import SessionLocal
+from app.workers.async_runtime import run_worker_async
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -94,13 +95,9 @@ class StockParserTask(Task):
 
 
 def _run_async(factory: Callable[[], Awaitable[T]]) -> T:
-    async def _execute() -> T:
-        try:
-            return await factory()
-        finally:
-            await engine.dispose()
+    """Celery sync boundary; shared pools close on worker_process_shutdown."""
 
-    return asyncio.run(_execute())
+    return run_worker_async(factory)
 
 
 def _parse_captured_at(value: str | None) -> datetime | None:
@@ -115,6 +112,15 @@ def _parse_captured_at(value: str | None) -> datetime | None:
 def _chunk_size() -> int:
     settings = get_settings()
     return max(1, int(settings.stock_parser_chunk_size or STOCK_PARSER_DEFAULT_CHUNK_SIZE))
+
+
+def _keyset_batch_size() -> int:
+    settings = get_settings()
+    raw = int(
+        settings.stock_parser_keyset_batch_size or STOCK_PARSER_DEFAULT_KEYSET_BATCH_SIZE
+    )
+    # Keep keyset pages in the audit-recommended 200–500 band.
+    return max(200, min(raw, 500))
 
 
 def build_nightly_batch_payloads(
@@ -141,7 +147,11 @@ def build_nightly_batch_payloads(
     name="stock_parser.dispatch_nightly",
 )
 def dispatch_nightly_task(self: Task) -> dict[str, Any]:
-    """Beat entrypoint: enqueue ≤100-SKU chunk workers for active tracked SKUs."""
+    """Beat entrypoint: enqueue ≤100-SKU chunk workers for active tracked SKUs.
+
+    Active SKUs are scanned with keyset pagination (``id > last``) so the
+    dispatcher never loads the full catalog into RAM at once.
+    """
 
     settings = get_settings()
     captured_at = nightly_capture_at(
@@ -149,44 +159,82 @@ def dispatch_nightly_task(self: Task) -> dict[str, Any]:
         minute=settings.stock_parser_beat_minute_utc,
     )
     size = _chunk_size()
-
-    async def _load() -> list[SkuItemView]:
-        async with SessionLocal() as session:
-            repo = StockParserRepository(session)
-            return await repo.list_active_sku_items()
-
-    items = _run_async(_load)
-    chunks = build_nightly_batch_payloads(items, chunk_size=size)
+    keyset_size = _keyset_batch_size()
     captured_iso = captured_at.isoformat()
     run_date = captured_at.date().isoformat()
-    task_ids: list[str] = []
 
-    for index, chunk in enumerate(chunks):
-        task_id = f"stock_parser.parse_batch.{run_date}.{index}"
-        async_result = parse_batch_task.apply_async(
-            kwargs={
-                "items": chunk,
-                "captured_at": captured_iso,
-            },
-            task_id=task_id,
+    async def _dispatch() -> dict[str, Any]:
+        sku_total = 0
+        chunk_index = 0
+        task_ids: list[str] = []
+        pending: list[dict[str, Any]] = []
+        last_id = None
+
+        async with SessionLocal() as session:
+            repo = StockParserRepository(session)
+            while True:
+                batch = await repo.list_active_sku_items(
+                    after_id=last_id,
+                    limit=keyset_size,
+                )
+                if not batch:
+                    break
+                for item in batch:
+                    pending.append(
+                        {
+                            "marketplace": item.marketplace.value,
+                            "sku": item.article,
+                            "product_url": item.product_url,
+                        }
+                    )
+                    if len(pending) >= size:
+                        task_id = f"stock_parser.parse_batch.{run_date}.{chunk_index}"
+                        async_result = parse_batch_task.apply_async(
+                            kwargs={
+                                "items": pending,
+                                "captured_at": captured_iso,
+                            },
+                            task_id=task_id,
+                        )
+                        task_ids.append(str(async_result.id))
+                        pending = []
+                        chunk_index += 1
+                last_id = batch[-1].id
+                sku_total += len(batch)
+                if len(batch) < keyset_size:
+                    break
+
+        if pending:
+            task_id = f"stock_parser.parse_batch.{run_date}.{chunk_index}"
+            async_result = parse_batch_task.apply_async(
+                kwargs={
+                    "items": pending,
+                    "captured_at": captured_iso,
+                },
+                task_id=task_id,
+            )
+            task_ids.append(str(async_result.id))
+            chunk_index += 1
+
+        logger.info(
+            "Stock parser nightly dispatch sku_total=%s chunks=%s chunk_size=%s "
+            "keyset_batch_size=%s captured_at=%s",
+            sku_total,
+            chunk_index,
+            size,
+            keyset_size,
+            captured_iso,
         )
-        task_ids.append(str(async_result.id))
+        return {
+            "sku_total": sku_total,
+            "chunks": chunk_index,
+            "chunk_size": size,
+            "keyset_batch_size": keyset_size,
+            "captured_at": captured_iso,
+            "task_ids": task_ids,
+        }
 
-    logger.info(
-        "Stock parser nightly dispatch sku_total=%s chunks=%s chunk_size=%s "
-        "captured_at=%s",
-        len(items),
-        len(chunks),
-        size,
-        captured_iso,
-    )
-    return {
-        "sku_total": len(items),
-        "chunks": len(chunks),
-        "chunk_size": size,
-        "captured_at": captured_iso,
-        "task_ids": task_ids,
-    }
+    return _run_async(_dispatch)
 
 
 @celery_app.task(

@@ -48,6 +48,9 @@ class FakeRefundSession:
     async def commit(self) -> None:
         self.commits += 1
 
+    async def flush(self) -> None:
+        return None
+
 
 class FakeUserSession:
     def __init__(self, user: User) -> None:

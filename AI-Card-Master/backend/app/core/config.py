@@ -564,7 +564,17 @@ class Settings(BaseSettings):
     face_fix_cost_usd: Decimal = Field(default=Decimal("0"), alias="FACE_FIX_COST_USD")
 
     # Redis, Celery, and durable generation workflow.
+    # Cache/broker Redis uses volatile-lru + mandatory TTLs in compose.
+    # Security Redis (rate limits, bans, CAPTCHA, DMS) uses noeviction.
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
+    redis_security_url: str | None = Field(
+        default=None,
+        alias="REDIS_SECURITY_URL",
+        description=(
+            "Dedicated Redis for security keys (noeviction). "
+            "Falls back to REDIS_URL when unset (local/tests)."
+        ),
+    )
     celery_broker_url: str | None = Field(default=None, alias="CELERY_BROKER_URL")
     celery_result_backend: str | None = Field(default=None, alias="CELERY_RESULT_BACKEND")
     celery_task_always_eager: bool = Field(default=False, alias="CELERY_TASK_ALWAYS_EAGER")
@@ -806,6 +816,11 @@ class Settings(BaseSettings):
     stock_parser_chunk_size: int = Field(
         default=100,
         alias="STOCK_PARSER_CHUNK_SIZE",
+    )
+    # Keyset pagination batch when listing active SKUs (id > last); keep 200–500.
+    stock_parser_keyset_batch_size: int = Field(
+        default=300,
+        alias="STOCK_PARSER_KEYSET_BATCH_SIZE",
     )
     stock_parser_beat_hour_utc: int = Field(
         default=3,
@@ -1383,6 +1398,7 @@ class Settings(BaseSettings):
         "ai_strategy_max_recommendations",
         "stock_parser_circuit_breaker_threshold",
         "stock_parser_chunk_size",
+        "stock_parser_keyset_batch_size",
         "competitor_audit_redis_ttl_seconds",
         "competitor_audit_max_reviews",
         "competitor_audit_max_vision_images",
@@ -1569,6 +1585,20 @@ class Settings(BaseSettings):
             raise ValueError("REDIS_URL must start with redis:// or rediss://.")
         return normalized
 
+    @field_validator("redis_security_url")
+    @classmethod
+    def validate_redis_security_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        if not normalized.startswith(("redis://", "rediss://")):
+            raise ValueError(
+                "REDIS_SECURITY_URL must start with redis:// or rediss://."
+            )
+        return normalized
+
     @model_validator(mode="after")
     def validate_async_provider_security(self) -> "Settings":
         if not self.midjourney_providers:
@@ -1598,6 +1628,43 @@ class Settings(BaseSettings):
                 )
         return self
 
+    @model_validator(mode="after")
+    def validate_production_security_invariants(self) -> "Settings":
+        """Fail-fast production gates for captcha bypass, admin secret, pepper."""
+
+        if self.app_env != "production":
+            return self
+
+        if self.captcha_bypass_when_unconfigured:
+            raise ValueError(
+                "CAPTCHA_BYPASS_WHEN_UNCONFIGURED must be false in production."
+            )
+
+        admin_secret = self.admin_panel_token_secret.get_secret_value().strip()
+        jwt_secret = self.jwt_secret_key.get_secret_value()
+        if not admin_secret:
+            raise ValueError(
+                "ADMIN_PANEL_TOKEN_SECRET must be set explicitly in production "
+                "(JWT_SECRET_KEY fallback is forbidden)."
+            )
+        if admin_secret == jwt_secret:
+            raise ValueError(
+                "ADMIN_PANEL_TOKEN_SECRET must not equal JWT_SECRET_KEY in production."
+            )
+        if len(admin_secret) < 32:
+            raise ValueError(
+                "ADMIN_PANEL_TOKEN_SECRET must contain at least 32 characters "
+                "in production."
+            )
+
+        pepper = self.password_pepper.get_secret_value()
+        if len(pepper) < 32:
+            raise ValueError(
+                "PASSWORD_PEPPER must contain at least 32 characters in production."
+            )
+
+        return self
+
     @property
     def async_database_url(self) -> str:
         """Return SQLAlchemy async URL variant for PostgreSQL."""
@@ -1615,6 +1682,14 @@ class Settings(BaseSettings):
     @property
     def effective_celery_broker_url(self) -> str:
         return self.celery_broker_url or self.redis_url
+
+    @property
+    def effective_redis_security_url(self) -> str:
+        """Security Redis URL; defaults to REDIS_URL for single-instance local/dev."""
+
+        if self.redis_security_url:
+            return self.redis_security_url
+        return self.redis_url
 
     @property
     def effective_celery_result_backend(self) -> str:
@@ -1655,11 +1730,16 @@ class Settings(BaseSettings):
 
     @property
     def effective_admin_panel_token_secret(self) -> str:
-        """Admin panel secret; falls back to JWT secret when unset (dev only)."""
+        """Admin panel secret; JWT fallback is allowed only outside production."""
 
         explicit = self.admin_panel_token_secret.get_secret_value().strip()
         if explicit:
             return explicit
+        if self.app_env == "production":
+            raise RuntimeError(
+                "ADMIN_PANEL_TOKEN_SECRET must be set explicitly in production; "
+                "JWT_SECRET_KEY fallback is forbidden."
+            )
         return self.jwt_secret_key.get_secret_value()
 
 

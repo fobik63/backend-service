@@ -10,6 +10,7 @@ from app.application.visual_audit_service import VisualAuditService
 from app.core.config import get_settings
 from app.domain.smart_reasoning import ReasoningTaskKind
 from app.domain.visual_audit import VisualAuditFilterConfig
+from app.infrastructure.claude.facades import wrap_claude_for_domain
 from app.infrastructure.claude_client_loader import load_claude_client
 from app.infrastructure.claude_stage_cache import RedisClaudeStageCache
 from app.infrastructure.persistence.visual_audit_repository import VisualAuditRepository
@@ -60,6 +61,6 @@ def build_visual_audit_service(
         max_image_bytes=settings.generation_max_upload_bytes,
         redis_stage_ttl_seconds=settings.claude_47_stage_cache_ttl_seconds,
         default_filter_config=filter_config,
-        vision=client,
+        vision=wrap_claude_for_domain(client, domain="rising_star") or vision,
         stage_cache=RedisClaudeStageCache(),
     )

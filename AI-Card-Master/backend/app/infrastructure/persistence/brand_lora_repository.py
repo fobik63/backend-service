@@ -16,8 +16,11 @@ from app.domain.brand_lora import (
     BrandStyleFilter,
 )
 from app.models.brand_lora import BrandLoraProfile, BrandLoraReference
-from app.models.user import User
-from app.services.billing_service import BillingValidationError
+from app.services.billing_service import (
+    BillingNotFoundError,
+    BillingService,
+    BillingValidationError,
+)
 
 
 def _to_utc(value: datetime) -> datetime:
@@ -353,29 +356,39 @@ class BrandLoraRepository:
         return tuple(rows)
 
     async def debit_coins(self, *, user_id: UUID, amount: int) -> int:
-        if amount < 0:
-            raise BillingValidationError("Debit amount must be non-negative.")
-        user = await self._session.get(User, user_id, with_for_update=True)
-        if user is None:
-            raise LookupError("User was not found.")
-        if amount == 0:
-            return int(user.ai_coins)
-        if user.ai_coins < amount:
-            raise BillingValidationError(
-                f"Insufficient AI-coin balance for Brand LoRA training "
-                f"(need {amount})."
+        """Thin wrapper: balance mutation lives in ``BillingService`` (R1)."""
+
+        try:
+            user = await BillingService(self._session).debit_coins_in_transaction(
+                user_id=user_id, amount=amount
             )
-        user.ai_coins -= amount
-        await self._session.flush()
+        except BillingNotFoundError as exc:
+            raise LookupError("User was not found.") from exc
+        except BillingValidationError as exc:
+            if "Insufficient" in str(exc):
+                raise BillingValidationError(
+                    f"Insufficient AI-coin balance for Brand LoRA training "
+                    f"(need {amount})."
+                ) from exc
+            raise
         return int(user.ai_coins)
 
     async def refund_coins(self, *, user_id: UUID, amount: int) -> int:
+        """Thin wrapper: refund via ``BillingService``, then commit."""
+
         if amount <= 0:
-            user = await self._session.get(User, user_id)
-            return int(user.ai_coins) if user is not None else 0
-        user = await self._session.get(User, user_id, with_for_update=True)
-        if user is None:
-            raise LookupError("User was not found.")
-        user.ai_coins = int(user.ai_coins) + amount
+            try:
+                user = await BillingService(self._session).refund_coins_in_transaction(
+                    user_id=user_id, amount=0
+                )
+            except BillingNotFoundError:
+                return 0
+            return int(user.ai_coins)
+        try:
+            user = await BillingService(self._session).refund_coins_in_transaction(
+                user_id=user_id, amount=amount
+            )
+        except BillingNotFoundError as exc:
+            raise LookupError("User was not found.") from exc
         await self._session.commit()
         return int(user.ai_coins)

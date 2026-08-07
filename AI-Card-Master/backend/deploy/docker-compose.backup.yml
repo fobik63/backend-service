@@ -23,7 +23,7 @@ services:
       PGHOST: postgres
       PGPORT: "5432"
       PGUSER: ai_card
-      PGPASSWORD: ${POSTGRES_PASSWORD:-changeme_in_production}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       PGDATABASE: ai_card_master
       BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}

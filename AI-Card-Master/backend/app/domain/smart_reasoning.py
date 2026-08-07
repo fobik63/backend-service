@@ -3,6 +3,10 @@
 Plan §55: simple analytics → Claude 3.5 Haiku; deep «Глаз Бога» (and other
 Vision-heavy analysis) → Claude 4.7 Opus. Content-addressed Redis analytics
 cache (24h) avoids repeat API spend on identical inputs.
+
+Cost audit C1/C2: DEEP is reserved for Eye of God / Visual / Competitor Vision
+(and CoT Vision). Text-only cards (has_vision=False) downgrade DEEP → SIMPLE.
+ZERO_HALLUCINATION and EXPORT_FAIL_SAFE_FIX use Haiku + JSON schema.
 """
 
 from __future__ import annotations
@@ -39,9 +43,20 @@ class ReasoningTaskKind(StrEnum):
     SEMANTIC_COMPRESSION = "semantic_compression"
 
 
-# Simple text/enrichment workloads → Haiku; deep Vision / Eye-of-God → Opus.
+# Vision-heavy workloads that stay on Opus when photos are present.
+# Without images they downgrade to SIMPLE (Haiku) — cost audit C1.
+_VISION_DEEP_KINDS: frozenset[ReasoningTaskKind] = frozenset(
+    {
+        ReasoningTaskKind.EYE_OF_GOD,
+        ReasoningTaskKind.VISUAL_AUDIT,
+        ReasoningTaskKind.COMPETITOR_AUDIT,
+        ReasoningTaskKind.CLAUDE_REASONING,
+    }
+)
+
+# Simple text/enrichment / JSON-schema fixes → Haiku; deep Vision → Opus.
 # LOCAL tasks → Ollama (Llama 3) when Token Governor enables local routing.
-# Plan §59 explicitly requires Claude 4.7 for Fail-Safe export auto-fix.
+# ZERO_HALLUCINATION + EXPORT_FAIL_SAFE_FIX: Haiku/Sonnet JSON (cost audit C2).
 _TASK_TIERS: Mapping[ReasoningTaskKind, ReasoningTier] = {
     ReasoningTaskKind.PAIN_ANALYSIS: ReasoningTier.SIMPLE,
     ReasoningTaskKind.ORACLE_ENRICHMENT: ReasoningTier.SIMPLE,
@@ -53,15 +68,26 @@ _TASK_TIERS: Mapping[ReasoningTaskKind, ReasoningTier] = {
     ReasoningTaskKind.VISUAL_AUDIT: ReasoningTier.DEEP,
     ReasoningTaskKind.COMPETITOR_AUDIT: ReasoningTier.DEEP,
     ReasoningTaskKind.CLAUDE_REASONING: ReasoningTier.DEEP,
-    ReasoningTaskKind.ZERO_HALLUCINATION: ReasoningTier.DEEP,
-    ReasoningTaskKind.EXPORT_FAIL_SAFE_FIX: ReasoningTier.DEEP,
+    ReasoningTaskKind.ZERO_HALLUCINATION: ReasoningTier.SIMPLE,
+    ReasoningTaskKind.EXPORT_FAIL_SAFE_FIX: ReasoningTier.SIMPLE,
 }
 
 
-def tier_for_task(kind: ReasoningTaskKind) -> ReasoningTier:
-    """Return the cost tier for a named analytics workload."""
+def tier_for_task(
+    kind: ReasoningTaskKind,
+    *,
+    has_vision: bool = True,
+) -> ReasoningTier:
+    """Return the cost tier for a named analytics workload.
 
-    return _TASK_TIERS[kind]
+    When ``has_vision=False``, Vision-locked DEEP kinds downgrade to SIMPLE
+    so text-only competitor/CoT cards do not burn Opus credits (C1).
+    """
+
+    base = _TASK_TIERS[kind]
+    if base is ReasoningTier.DEEP and not has_vision and kind in _VISION_DEEP_KINDS:
+        return ReasoningTier.SIMPLE
+    return base
 
 
 def model_for_task(
@@ -70,6 +96,7 @@ def model_for_task(
     simple_model: str,
     deep_model: str,
     local_model: str | None = None,
+    has_vision: bool = True,
 ) -> str:
     """Select model id for the workload (Haiku / Opus / Ollama)."""
 
@@ -79,7 +106,7 @@ def model_for_task(
         raise ValueError("simple_model must not be empty.")
     if not deep:
         raise ValueError("deep_model must not be empty.")
-    tier = tier_for_task(kind)
+    tier = tier_for_task(kind, has_vision=has_vision)
     if tier is ReasoningTier.DEEP:
         return deep
     if tier is ReasoningTier.LOCAL:

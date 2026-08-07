@@ -292,12 +292,19 @@ class _FakeHealthRepo:
         return self.sku_items.get((marketplace.value, article.strip()))
 
     async def list_active_sku_items(
-        self, *, marketplace: ParserMarketplace | None = None
+        self,
+        *,
+        marketplace: ParserMarketplace | None = None,
+        after_id: UUID | None = None,
+        limit: int = 500,
     ) -> list[SkuItemView]:
         items = [v for v in self.sku_items.values() if v.is_active]
         if marketplace is not None:
             items = [v for v in items if v.marketplace is marketplace]
-        return items
+        items.sort(key=lambda item: item.id)
+        if after_id is not None:
+            items = [v for v in items if v.id > after_id]
+        return items[: max(1, min(int(limit), 500))]
 
     async def ensure_stock_snapshot_partition(
         self, *, captured_at: datetime

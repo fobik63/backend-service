@@ -1,6 +1,6 @@
 # AI-Card-Master production-oriented stack (plan §16 / §24).
 # Usage:
-#   cp .env.example .env   # fill secrets
+#   cp .env.example .env   # fill secrets (POSTGRES_PASSWORD is required)
 #   docker compose up -d --build
 #   docker compose exec api alembic upgrade head
 #
@@ -8,6 +8,9 @@
 #   bash deploy/release.sh
 #   python deploy/autoscale.py
 #   bash deploy/rollback.sh
+#
+# Postgres/Redis are internal-only (no host port publish). Attach a
+# docker-compose.override.yml locally if you need host-side 5432/6379.
 
 services:
   postgres:
@@ -16,7 +19,7 @@ services:
     environment:
       POSTGRES_DB: ai_card_master
       POSTGRES_USER: ai_card
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme_in_production}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -24,13 +27,21 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
-    ports:
-      - "5432:5432"
 
   redis:
+    # Cache + Celery broker/results: volatile-lru requires TTL on cache keys.
     image: redis:7-alpine
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru"]
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "yes",
+        "--maxmemory",
+        "512mb",
+        "--maxmemory-policy",
+        "volatile-lru",
+      ]
     volumes:
       - redisdata:/data
     healthcheck:
@@ -38,8 +49,28 @@ services:
       interval: 10s
       timeout: 3s
       retries: 10
-    ports:
-      - "6379:6379"
+
+  redis-security:
+    # Rate limits, IP/API bans, CAPTCHA, Dead Man's Switch — never evict.
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "yes",
+        "--maxmemory",
+        "256mb",
+        "--maxmemory-policy",
+        "noeviction",
+      ]
+    volumes:
+      - redissecuritydata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
 
   api:
     image: ai-card-master-backend:${IMAGE_TAG:-current}
@@ -51,8 +82,9 @@ services:
       - .env
     environment:
       APP_ENV: ${APP_ENV:-production}
-      DATABASE_URL: postgresql://ai_card:${POSTGRES_PASSWORD:-changeme_in_production}@postgres:5432/ai_card_master
+      DATABASE_URL: postgresql://ai_card:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/ai_card_master
       REDIS_URL: redis://redis:6379/0
+      REDIS_SECURITY_URL: redis://redis-security:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/1
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -62,6 +94,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      redis-security:
         condition: service_healthy
     ports:
       - "8000:8000"
@@ -95,8 +129,9 @@ services:
       - .env
     environment:
       APP_ENV: ${APP_ENV:-production}
-      DATABASE_URL: postgresql://ai_card:${POSTGRES_PASSWORD:-changeme_in_production}@postgres:5432/ai_card_master
+      DATABASE_URL: postgresql://ai_card:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/ai_card_master
       REDIS_URL: redis://redis:6379/0
+      REDIS_SECURITY_URL: redis://redis-security:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/1
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -104,6 +139,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      redis-security:
         condition: service_healthy
     command:
       [
@@ -119,21 +156,28 @@ services:
       ]
 
   beat:
+    # R3: exactly one Beat process — never scale this service.
+    # Redis Redlock (celery_beat_lock) is defense-in-depth if a second beat starts.
     image: ai-card-master-backend:${IMAGE_TAG:-current}
     build:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    deploy:
+      replicas: 1
     env_file:
       - .env
     environment:
       APP_ENV: ${APP_ENV:-production}
-      DATABASE_URL: postgresql://ai_card:${POSTGRES_PASSWORD:-changeme_in_production}@postgres:5432/ai_card_master
+      DATABASE_URL: postgresql://ai_card:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/ai_card_master
       REDIS_URL: redis://redis:6379/0
+      REDIS_SECURITY_URL: redis://redis-security:6379/0
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/1
     depends_on:
       redis:
+        condition: service_healthy
+      redis-security:
         condition: service_healthy
     command:
       [
@@ -147,4 +191,5 @@ services:
 volumes:
   pgdata:
   redisdata:
+  redissecuritydata:
   uploads:

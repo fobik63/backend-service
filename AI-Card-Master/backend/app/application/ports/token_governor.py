@@ -62,5 +62,15 @@ class LocalLlmPort(Protocol):
     ) -> tuple[PainAnalysisResult, int, int]:
         """Routine pain analysis on local LLM (Haiku replacement)."""
 
+    async def classify_text_task(
+        self,
+        *,
+        kind: Any,
+        text_blob: str,
+        item_count: int = 0,
+        has_vision: bool = False,
+    ) -> Any:
+        """Pre-filter simple text workloads before Claude (cost audit C6)."""
+
     async def aclose(self) -> None:
         """Release HTTP resources."""

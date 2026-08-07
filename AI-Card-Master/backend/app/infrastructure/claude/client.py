@@ -11,7 +11,6 @@ from decimal import Decimal
 from typing import Any, Mapping
 from uuid import UUID
 
-import httpx
 from anthropic import (
     APIConnectionError,
     APIStatusError,
@@ -103,7 +102,9 @@ from app.domain.visual_audit import (
 )
 from app.domain.smart_reasoning import (
     fingerprint_messages_request,
+    model_for_task,
     model_supports_adaptive_thinking,
+    ReasoningTaskKind,
     redis_analytics_key,
 )
 from app.infrastructure.claude.image_normalize import normalize_image_for_claude
@@ -168,22 +169,12 @@ class Claude47VisionClient:
             )
         self._analytics_cache_ttl_seconds = ttl
         self._analytics_task_kind = (analytics_task_kind or "claude").strip() or "claude"
+        # Single HTTP transport: official AsyncAnthropic SDK (no parallel httpx pool).
         self._sdk = AsyncAnthropic(
             api_key=self._api_key,
             base_url=self._settings.claude_47_base_url.rstrip("/"),
             timeout=self._settings.claude_47_timeout_seconds,
             max_retries=0,
-        )
-        # Legacy httpx path kept for deterministic retry/Retry-After handling.
-        self._client = httpx.AsyncClient(
-            base_url=self._settings.claude_47_base_url.rstrip("/"),
-            timeout=httpx.Timeout(self._settings.claude_47_timeout_seconds),
-            limits=httpx.Limits(
-                max_connections=self._settings.claude_47_max_connections,
-                max_keepalive_connections=self._settings.claude_47_max_keepalive_connections,
-                keepalive_expiry=30.0,
-            ),
-            http2=True,
         )
 
     @property
@@ -195,7 +186,6 @@ class Claude47VisionClient:
         return self._adaptive
 
     async def aclose(self) -> None:
-        await self._client.aclose()
         await self._sdk.close()
 
     async def analyze_visual_triggers(
@@ -208,33 +198,20 @@ class Claude47VisionClient:
     ) -> tuple[VisionStageResult, int, int]:
         if not images:
             raise ClaudeUpstreamError("At least one competitor image is required.")
-        max_images = self._settings.claude_47_max_images_per_request
-        selected = images[:max_images]
-        content: list[dict[str, Any]] = []
-        for image_bytes, mime_type in selected:
-            normalized, media_type = normalize_image_for_claude(
-                image_bytes,
-                media_type=mime_type,
-            )
-            content.append(
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": media_type,
-                        "data": base64.b64encode(normalized).decode("ascii"),
-                    },
-                }
-            )
-        content.append(
+        image_blocks, image_count = _encode_vision_image_blocks(
+            images,
+            max_images=self._settings.claude_47_max_images_per_request,
+        )
+        content: list[dict[str, Any]] = [
+            *image_blocks,
             {
                 "type": "text",
                 "text": build_vision_user_prompt(
                     product_category=product_category,
-                    image_count=len(selected),
+                    image_count=image_count,
                 ),
-            }
-        )
+            },
+        ]
         return await self._messages_parse(
             system=vision_system_prompt(),
             content=content,
@@ -291,25 +268,12 @@ class Claude47VisionClient:
 
         if not images:
             raise ClaudeUpstreamError("At least one Rising Star image is required.")
-        max_images = self._settings.claude_47_max_images_per_request
-        selected = images[:max_images]
-        content: list[dict[str, Any]] = []
-        for image_bytes, mime_type in selected:
-            normalized, media_type = normalize_image_for_claude(
-                image_bytes,
-                media_type=mime_type,
-            )
-            content.append(
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": media_type,
-                        "data": base64.b64encode(normalized).decode("ascii"),
-                    },
-                }
-            )
-        content.append(
+        image_blocks, image_count = _encode_vision_image_blocks(
+            images,
+            max_images=self._settings.claude_47_max_images_per_request,
+        )
+        content: list[dict[str, Any]] = [
+            *image_blocks,
             {
                 "type": "text",
                 "text": build_rising_star_vision_prompt(
@@ -319,10 +283,10 @@ class Claude47VisionClient:
                     sales_growth_ratio=sales_growth_ratio,
                     review_velocity_per_day=review_velocity_per_day,
                     review_count=review_count,
-                    image_count=len(selected),
+                    image_count=image_count,
                 ),
-            }
-        )
+            },
+        ]
         payload_json, input_tokens, output_tokens = await self._messages_json(
             system=rising_star_vision_system_prompt(),
             content=content,
@@ -360,25 +324,12 @@ class Claude47VisionClient:
             raise ClaudeUpstreamError(
                 "At least one SKU image is required for Eye-of-God Vision."
             )
-        max_images = self._settings.claude_47_max_images_per_request
-        selected = images[:max_images]
-        content: list[dict[str, Any]] = []
-        for image_bytes, mime_type in selected:
-            normalized, media_type = normalize_image_for_claude(
-                image_bytes,
-                media_type=mime_type,
-            )
-            content.append(
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": media_type,
-                        "data": base64.b64encode(normalized).decode("ascii"),
-                    },
-                }
-            )
-        content.append(
+        image_blocks, image_count = _encode_vision_image_blocks(
+            images,
+            max_images=self._settings.claude_47_max_images_per_request,
+        )
+        content: list[dict[str, Any]] = [
+            *image_blocks,
             {
                 "type": "text",
                 "text": build_eye_of_god_vision_prompt(
@@ -389,10 +340,10 @@ class Claude47VisionClient:
                     recent_avg_daily_sales=recent_avg_daily_sales,
                     baseline_avg_daily_sales=baseline_avg_daily_sales,
                     recent_window_days=recent_window_days,
-                    image_count=len(selected),
+                    image_count=image_count,
                 ),
-            }
-        )
+            },
+        ]
         payload_json, input_tokens, output_tokens = await self._messages_json(
             system=eye_of_god_vision_system_prompt(),
             content=content,
@@ -429,39 +380,39 @@ class Claude47VisionClient:
             self._settings.claude_47_max_images_per_request,
             self._settings.competitor_audit_max_vision_images,
         )
-        selected = images[:max_images]
-        content: list[dict[str, Any]] = []
-        for image_bytes, mime_type in selected:
-            normalized, media_type = normalize_image_for_claude(
-                image_bytes,
-                media_type=mime_type,
-            )
-            content.append(
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": media_type,
-                        "data": base64.b64encode(normalized).decode("ascii"),
-                    },
-                }
-            )
-        content.append(
+        image_blocks, image_count = _encode_vision_image_blocks(
+            images,
+            max_images=max_images,
+        )
+        content: list[dict[str, Any]] = [
+            *image_blocks,
             {
                 "type": "text",
                 "text": build_competitor_deep_analysis_prompt(
                     card=card,
-                    image_count=len(selected),
+                    image_count=image_count,
                     context_delta=context_delta,
                 ),
-            }
-        )
+            },
+        ]
         # Vision tokens when photos present; otherwise reasoning budget for text-only.
+        # Cost audit C1: text-only competitor cards use Haiku, not Opus.
         max_tokens = (
             self._settings.claude_47_vision_max_tokens
-            if selected
+            if image_count
             else self._settings.claude_47_reasoning_max_tokens
         )
+        model_override = None
+        if image_count == 0:
+            try:
+                model_override = model_for_task(
+                    ReasoningTaskKind.COMPETITOR_AUDIT,
+                    simple_model=self._settings.claude_35_haiku_model,
+                    deep_model=self._model,
+                    has_vision=False,
+                )
+            except ValueError:
+                model_override = self._settings.claude_35_haiku_model.strip() or None
         payload_json, input_tokens, output_tokens = await self._messages_json(
             system=competitor_deep_analysis_system_prompt(),
             content=content,
@@ -470,6 +421,7 @@ class Claude47VisionClient:
             operation="claude_competitor_deep_analysis",
             user_id=user_id,
             job_id=job_id,
+            model_override=model_override,
         )
         try:
             result = normalize_deep_analysis_card(payload_json, card=card)
@@ -501,36 +453,24 @@ class Claude47VisionClient:
             self._settings.claude_47_max_images_per_request,
             self._settings.zero_hallucination_max_vision_images,
         )
-        selected = images[:max_images]
-        content: list[dict[str, Any]] = []
-        for image_bytes, mime_type in selected:
-            normalized, media_type = normalize_image_for_claude(
-                image_bytes,
-                media_type=mime_type,
-            )
-            content.append(
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": media_type,
-                        "data": base64.b64encode(normalized).decode("ascii"),
-                    },
-                }
-            )
-        content.append(
+        image_blocks, image_count = _encode_vision_image_blocks(
+            images,
+            max_images=max_images,
+        )
+        content: list[dict[str, Any]] = [
+            *image_blocks,
             {
                 "type": "text",
                 "text": build_cross_check_user_prompt(
                     title=title,
                     description=description,
                     specs=list(specs),
-                    image_count=len(selected),
+                    image_count=image_count,
                     marketplace=marketplace,
                     article=article,
                 ),
-            }
-        )
+            },
+        ]
         payload_json, input_tokens, output_tokens = await self._messages_json(
             system=cross_check_system_prompt(),
             content=content,
@@ -937,7 +877,7 @@ class Claude47VisionClient:
                 response = await self._sdk.messages.parse(
                     model=self._model,
                     max_tokens=max_tokens,
-                    system=harden_system_prompt(system),
+                    system=_system_blocks_with_cache(harden_system_prompt(system)),
                     messages=[{"role": "user", "content": content}],
                     thinking={"type": "adaptive"},
                     output_config={"effort": self._settings.claude_47_effort},
@@ -1064,12 +1004,14 @@ class Claude47VisionClient:
         operation: str,
         user_id: UUID | None,
         job_id: UUID | None,
+        model_override: str | None = None,
     ) -> tuple[dict[str, Any], int, int]:
         cache_key = self._analytics_cache_key(
             system=system,
             content=content,
             json_schema=json_schema,
             operation=operation,
+            model_override=model_override,
         )
         cached = await self._read_analytics_cache(cache_key)
         if cached is not None:
@@ -1078,27 +1020,28 @@ class Claude47VisionClient:
                 logger.info(
                     "Claude analytics cache hit operation=%s model=%s",
                     operation,
-                    self._model,
+                    model_override or self._model,
                 )
                 return payload_hit, 0, 0
 
-        headers = {
-            "x-api-key": self._api_key,
-            "anthropic-version": self._settings.claude_47_api_version,
-            "content-type": "application/json",
-        }
+        effective_model = (model_override or self._model).strip() or self._model
+        adaptive = model_supports_adaptive_thinking(effective_model)
+
+        extra_headers: dict[str, str] = {}
         beta = self._settings.claude_47_structured_outputs_beta.strip()
-        if beta and self._adaptive:
-            headers["anthropic-beta"] = beta
+        if beta and adaptive:
+            extra_headers["anthropic-beta"] = beta
 
         hardened = harden_system_prompt(system)
-        if self._adaptive:
+        # Anthropic prompt caching (C3): ephemeral cache on stable system blocks.
+        system_blocks = _system_blocks_with_cache(hardened)
+        if adaptive:
             # Opus 4.7 rejects temperature/top_p/top_k and token-budget thinking.
-            payload: dict[str, Any] = {
-                "model": self._model,
+            create_kwargs: dict[str, Any] = {
+                "model": effective_model,
                 "max_tokens": max_tokens,
                 "thinking": {"type": "adaptive"},
-                "system": hardened,
+                "system": system_blocks,
                 "messages": [{"role": "user", "content": content}],
                 "output_config": {
                     "effort": self._settings.claude_47_effort,
@@ -1115,24 +1058,22 @@ class Claude47VisionClient:
                 "Respond with a single JSON object only (no markdown fences). "
                 "The JSON must match the required schema."
             )
-            payload = {
-                "model": self._model,
+            create_kwargs = {
+                "model": effective_model,
                 "max_tokens": max_tokens,
                 "temperature": self._settings.claude_47_temperature,
-                "system": haiku_system,
+                "system": _system_blocks_with_cache(haiku_system),
                 "messages": [{"role": "user", "content": content}],
             }
 
         started = time.perf_counter()
-        response = await self._post_with_retry(
-            endpoint="/v1/messages",
-            headers=headers,
-            payload=payload,
+        response = await self._messages_create_with_retry(
+            create_kwargs=create_kwargs,
+            extra_headers=extra_headers or None,
         )
         duration_ms = int((time.perf_counter() - started) * 1000)
         try:
-            body = response.json()
-            text = _extract_text_content(body.get("content"))
+            text = _extract_sdk_text_content(getattr(response, "content", None))
         except (KeyError, IndexError, TypeError, ValueError) as exc:
             await self._record_usage(
                 operation=operation,
@@ -1143,6 +1084,7 @@ class Claude47VisionClient:
                 usage=None,
                 duration_ms=duration_ms,
                 status="Error",
+                model_name=effective_model,
             )
             raise ClaudeUpstreamError("Unexpected Anthropic response shape.") from exc
         if not isinstance(text, str) or not text.strip():
@@ -1155,6 +1097,7 @@ class Claude47VisionClient:
                 usage=None,
                 duration_ms=duration_ms,
                 status="Error",
+                model_name=effective_model,
             )
             raise ClaudeUpstreamError("Anthropic returned empty text.")
 
@@ -1170,31 +1113,33 @@ class Claude47VisionClient:
                 usage=None,
                 duration_ms=duration_ms,
                 status="Error",
+                model_name=effective_model,
             )
             raise ClaudeUpstreamError("Anthropic response is not valid JSON.") from exc
 
-        usage = body.get("usage") if isinstance(body, dict) else None
-        input_tokens = _safe_token_count(
-            usage.get("input_tokens") if isinstance(usage, dict) else None
-        )
-        output_tokens = _safe_token_count(
-            usage.get("output_tokens") if isinstance(usage, dict) else None
-        )
+        usage_obj = getattr(response, "usage", None)
+        input_tokens = _safe_token_count(getattr(usage_obj, "input_tokens", None))
+        output_tokens = _safe_token_count(getattr(usage_obj, "output_tokens", None))
+        usage = {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+        }
         await self._record_usage(
             operation=operation,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             user_id=user_id,
             job_id=job_id,
-            usage=usage if isinstance(usage, dict) else None,
+            usage=usage,
             duration_ms=duration_ms,
             status="Success",
+            model_name=effective_model,
         )
         await self._write_analytics_cache(
             cache_key,
             {
                 "payload": parsed,
-                "model": self._model,
+                "model": effective_model,
                 "operation": operation,
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
@@ -1210,12 +1155,13 @@ class Claude47VisionClient:
         content: list[dict[str, Any]],
         json_schema: dict[str, Any],
         operation: str,
+        model_override: str | None = None,
     ) -> str | None:
         if self._analytics_cache is None:
             return None
         try:
             fingerprint = fingerprint_messages_request(
-                model_name=self._model,
+                model_name=(model_override or self._model),
                 system=system,
                 content=content,
                 json_schema=json_schema,
@@ -1223,7 +1169,7 @@ class Claude47VisionClient:
             )
             return redis_analytics_key(
                 task_kind=self._analytics_task_kind,
-                model_name=self._model,
+                model_name=(model_override or self._model),
                 fingerprint=fingerprint,
             )
         except (TypeError, ValueError):
@@ -1263,51 +1209,51 @@ class Claude47VisionClient:
                 "Analytics cache write failed key=%s", cache_key, exc_info=True
             )
 
-    async def _post_with_retry(
+    async def _messages_create_with_retry(
         self,
         *,
-        endpoint: str,
-        headers: dict[str, str],
-        payload: dict[str, Any],
-    ) -> httpx.Response:
+        create_kwargs: dict[str, Any],
+        extra_headers: dict[str, str] | None = None,
+    ) -> Any:
+        """Send Messages.create via the sole SDK transport with transient retries."""
+
         attempts = self._settings.claude_47_max_retries + 1
         last_error: Exception | None = None
+        call_kwargs = dict(create_kwargs)
+        if extra_headers:
+            call_kwargs["extra_headers"] = extra_headers
         for attempt in range(1, attempts + 1):
             try:
-                response = await self._client.post(
-                    endpoint, headers=headers, json=payload
-                )
-                if response.status_code in TRANSIENT_HTTP_CODES and attempt < attempts:
-                    await asyncio.sleep(self._retry_delay(attempt, response))
-                    continue
-                if response.is_error:
-                    raise ClaudeUpstreamError(
-                        f"Claude API error {response.status_code}: {response.text[:500]}"
-                    )
-                return response
-            except (
-                httpx.TimeoutException,
-                httpx.NetworkError,
-                httpx.RemoteProtocolError,
-            ) as exc:
+                return await self._sdk.messages.create(**call_kwargs)
+            except (APITimeoutError, APIConnectionError) as exc:
                 last_error = exc
                 if attempt >= attempts:
                     break
                 await asyncio.sleep(self._retry_delay(attempt, None))
+            except APIStatusError as exc:
+                last_error = exc
+                if (
+                    exc.status_code in TRANSIENT_HTTP_CODES
+                    and attempt < attempts
+                ):
+                    retry_after = _retry_after_from_status_error(exc)
+                    await asyncio.sleep(self._retry_delay(attempt, retry_after))
+                    continue
+                raise ClaudeUpstreamError(
+                    f"Claude API error {exc.status_code}: {str(exc)[:500]}"
+                ) from exc
         raise ClaudeUpstreamError(
             "Claude request failed after retries."
         ) from last_error
 
-    def _retry_delay(self, attempt: int, response: httpx.Response | None) -> float:
-        if response is not None:
-            retry_after = response.headers.get("Retry-After")
-            if retry_after:
-                try:
-                    parsed = float(retry_after)
-                    if parsed > 0:
-                        return min(parsed, 15.0)
-                except ValueError:
-                    logger.debug("Ignoring non-numeric Retry-After: %s", retry_after)
+    def _retry_delay(self, attempt: int, retry_after: str | None) -> float:
+        if retry_after:
+            try:
+                parsed = float(retry_after)
+                if parsed > 0:
+                    return min(parsed, 15.0)
+            except ValueError:
+                logger.debug("Ignoring non-numeric Retry-After: %s", retry_after)
         return min(
             self._settings.claude_47_base_retry_delay_seconds * (2 ** (attempt - 1))
             + random.uniform(0.0, 0.35),
@@ -1325,6 +1271,7 @@ class Claude47VisionClient:
         usage: dict[str, Any] | None,
         duration_ms: int | None = None,
         status: str = "Success",
+        model_name: str | None = None,
     ) -> None:
         total_tokens = input_tokens + output_tokens
         total_cost = (
@@ -1336,15 +1283,16 @@ class Claude47VisionClient:
             * self._settings.claude_47_output_1k_tokens_cost_usd
         )
         units = max(total_tokens, 1)
+        resolved_model = (model_name or self._model).strip() or self._model
         await record_api_usage_cost(
             provider="anthropic",
-            model_name=self._model,
+            model_name=resolved_model,
             operation=operation,
             units=units,
             unit_cost_usd=total_cost / Decimal(units),
             total_cost_usd=total_cost,
             user_id=user_id,
-            generation_job_id=None,
+            generation_job_id=job_id,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             status=status,
@@ -1355,15 +1303,98 @@ class Claude47VisionClient:
                 "output_tokens": output_tokens,
                 "claude_reasoning_job_id": str(job_id) if job_id else None,
                 "task_id": str(job_id) if job_id else None,
+                "generation_job_id": str(job_id) if job_id else None,
                 "anthropic_usage": usage,
             },
         )
+
+
+def _system_blocks_with_cache(system_text: str) -> list[dict[str, Any]]:
+    """Wrap system prompt as Anthropic content blocks with ephemeral prompt cache."""
+
+    return [
+        {
+            "type": "text",
+            "text": system_text,
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
 
 
 def _safe_token_count(value: object) -> int:
     if isinstance(value, int) and value >= 0:
         return value
     return 0
+
+
+def _encode_vision_image_blocks(
+    images: tuple[tuple[bytes, str], ...],
+    *,
+    max_images: int,
+) -> tuple[list[dict[str, Any]], int]:
+    """Limit Vision payload size and free raw bytes immediately after base64 encode.
+
+    Returns ``(image_content_blocks, selected_count)``. Unused images beyond
+    ``max_images`` are never normalized or encoded.
+    """
+
+    limit = max(0, int(max_images))
+    blocks: list[dict[str, Any]] = []
+    for index, (raw_bytes, mime_type) in enumerate(images):
+        if index >= limit:
+            break
+        normalized, media_type = normalize_image_for_claude(
+            raw_bytes,
+            media_type=mime_type,
+        )
+        # Drop the caller slice reference as soon as normalized bytes exist.
+        del raw_bytes
+        encoded = base64.b64encode(normalized).decode("ascii")
+        del normalized
+        blocks.append(
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": encoded,
+                },
+            }
+        )
+    return blocks, len(blocks)
+
+
+def _retry_after_from_status_error(exc: APIStatusError) -> str | None:
+    response = getattr(exc, "response", None)
+    if response is None:
+        return None
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return None
+    value = headers.get("retry-after") or headers.get("Retry-After")
+    return str(value) if value is not None else None
+
+
+def _extract_sdk_text_content(content: object) -> str:
+    """Return the first text block from an Anthropic SDK Message.content list."""
+
+    if not isinstance(content, list) or not content:
+        raise ValueError("Missing content blocks.")
+    texts: list[str] = []
+    for block in content:
+        block_type = getattr(block, "type", None)
+        if block_type is None and isinstance(block, dict):
+            block_type = block.get("type")
+            text = block.get("text")
+        else:
+            text = getattr(block, "text", None)
+        if block_type == "thinking":
+            continue
+        if isinstance(text, str) and text.strip():
+            texts.append(text)
+    if not texts:
+        raise ValueError("No text content block in Anthropic response.")
+    return texts[0]
 
 
 def _extract_text_content(content: object) -> str:

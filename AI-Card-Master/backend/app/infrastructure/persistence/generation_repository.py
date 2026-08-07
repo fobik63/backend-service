@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -42,8 +43,16 @@ from app.models.generation_job import (
 from app.domain.cost_analytics import CostCallStatus, CostEventRecord
 from app.infrastructure.persistence.cost_analytics_repository import CostAnalyticsRepository
 from app.models.user import User
-from app.services.billing_service import BillingValidationError
+from app.services.billing_service import BillingService
 from app.services.series_generator import SeriesTask
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationHistorySummary:
+    """Lightweight cabinet-history row: job metadata + slide count + cover only."""
+
+    job: GenerationJob
+    slide_count: int
 
 
 class GenerationRepository:
@@ -101,10 +110,12 @@ class GenerationRepository:
             user = await self._session.get(User, user_id, with_for_update=True)
             if user is None:
                 raise LookupError("Generation user was not found.")
-            if settings.generation_charge_coins:
-                if user.ai_coins < generation_cost:
-                    raise BillingValidationError("Insufficient AI-coin balance.")
-                user.ai_coins -= generation_cost
+            if settings.generation_charge_coins and generation_cost > 0:
+                # Single write-path: BillingService.in_transaction (audit R1).
+                await BillingService(self._session).debit_coins_in_transaction(
+                    user_id=user_id, amount=generation_cost
+                )
+                await self._session.refresh(user)
 
             now = datetime.now(UTC)
             job = GenerationJob(
@@ -213,11 +224,56 @@ class GenerationRepository:
     ) -> GenerationJob | None:
         """Load a job and slides while enforcing ownership."""
 
+        return await self.get_detail_for_user(job_id, user_id)
+
+    async def get_detail_for_user(
+        self, job_id: UUID, user_id: UUID
+    ) -> GenerationJob | None:
+        """Full card detail with all slides (selectinload) for status / editor UI."""
+
         return await self._session.scalar(
             select(GenerationJob)
             .where(GenerationJob.id == job_id, GenerationJob.user_id == user_id)
             .options(selectinload(GenerationJob.slides))
         )
+
+    async def list_summary_for_user(
+        self,
+        *,
+        user_id: UUID,
+        limit: int,
+        offset: int,
+    ) -> tuple[GenerationHistorySummary, ...]:
+        """Fast history list: counts + cover slide only (no nested attempts)."""
+
+        slide_count_sq = (
+            select(func.count())
+            .select_from(GenerationSlide)
+            .where(GenerationSlide.job_id == GenerationJob.id)
+            .correlate(GenerationJob)
+            .scalar_subquery()
+        )
+        result = await self._session.execute(
+            select(GenerationJob, slide_count_sq.label("slide_count"))
+            .where(GenerationJob.user_id == user_id)
+            .options(
+                selectinload(
+                    GenerationJob.slides.and_(GenerationSlide.slide_key == "cover")
+                )
+            )
+            .order_by(GenerationJob.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        summaries: list[GenerationHistorySummary] = []
+        for job, slide_count in result.all():
+            summaries.append(
+                GenerationHistorySummary(
+                    job=job,
+                    slide_count=int(slide_count or 0),
+                )
+            )
+        return tuple(summaries)
 
     async def list_generation_history_for_user(
         self,
@@ -226,16 +282,14 @@ class GenerationRepository:
         limit: int,
         offset: int,
     ) -> tuple[GenerationJob, ...]:
-        """Return newest generations for the personal cabinet history."""
+        """Backward-compatible history list (job entities from ``list_summary``)."""
 
-        jobs = await self._session.scalars(
-            select(GenerationJob)
-            .where(GenerationJob.user_id == user_id)
-            .order_by(GenerationJob.created_at.desc())
-            .limit(limit)
-            .offset(offset)
+        summaries = await self.list_summary_for_user(
+            user_id=user_id,
+            limit=limit,
+            offset=offset,
         )
-        return tuple(jobs)
+        return tuple(item.job for item in summaries)
 
     async def get_work_item(self, job_id: UUID) -> GenerationWorkItem | None:
         job = await self._session.scalar(
@@ -355,6 +409,9 @@ class GenerationRepository:
                 slide=slide,
                 provider_name=submission.provider,
                 external_job_id=submission.external_job_id,
+                provider_cost_usd=submission.provider_cost_usd,
+                provider_credits=submission.provider_credits,
+                cost_metadata=dict(submission.cost_metadata or {}),
             )
         await self._session.commit()
 
@@ -816,11 +873,12 @@ class GenerationRepository:
     async def _refund_locked_job(self, job: GenerationJob) -> None:
         if not job.coin_charged or job.coin_refunded:
             return
-        user = await self._session.get(User, job.user_id, with_for_update=True)
-        if user is None:
-            return
         refund_amount = int(job.coins_charged or 1)
-        user.ai_coins += refund_amount
+        if refund_amount > 0:
+            # Single write-path: BillingService.in_transaction (audit R1).
+            await BillingService(self._session).refund_coins_in_transaction(
+                user_id=job.user_id, amount=refund_amount
+            )
         job.coin_refunded = True
 
     async def _record_midjourney_cost(
@@ -829,6 +887,9 @@ class GenerationRepository:
         slide: GenerationSlide,
         provider_name: str,
         external_job_id: str,
+        provider_cost_usd: Decimal | None = None,
+        provider_credits: float | None = None,
+        cost_metadata: dict[str, Any] | None = None,
     ) -> None:
         normalized_provider = provider_name.strip().lower()
         if normalized_provider == "stable_diffusion":
@@ -838,7 +899,34 @@ class GenerationRepository:
         if job is None:
             return
 
-        unit_cost = Decimal(str(get_settings().midjourney_generation_cost_usd))
+        settings = get_settings()
+        flat_cost = Decimal(str(settings.midjourney_generation_cost_usd))
+        meta: dict[str, Any] = {
+            "slide_id": str(slide.id),
+            "external_job_id": external_job_id,
+            "provider_name": provider_name,
+        }
+        if cost_metadata:
+            meta.update(cost_metadata)
+
+        # Prefer real provider invoice when present; USD may still be estimated
+        # from credits, so mark metadata.estimated=True (cost audit C4).
+        if provider_cost_usd is not None and provider_cost_usd >= 0:
+            unit_cost = Decimal(str(provider_cost_usd))
+            meta["estimated"] = True
+            meta["provider_cost_usd"] = str(unit_cost)
+            if provider_credits is not None:
+                meta["provider_credits"] = provider_credits
+        elif provider_credits is not None and provider_credits >= 0:
+            # Credits without USD: keep flat USD for rollups, store raw credits.
+            unit_cost = flat_cost
+            meta["estimated"] = True
+            meta["provider_credits"] = provider_credits
+            meta["flat_cost_usd"] = str(flat_cost)
+        else:
+            unit_cost = flat_cost
+            meta["estimated"] = True
+
         task_uuid: UUID | None = None
         try:
             task_uuid = UUID(str(external_job_id))
@@ -858,11 +946,7 @@ class GenerationRepository:
                 user_id=job.user_id,
                 generation_job_id=job.id,
                 task_id=task_uuid,
-                metadata={
-                    "slide_id": str(slide.id),
-                    "external_job_id": external_job_id,
-                    "provider_name": provider_name,
-                },
+                metadata=meta,
             )
         )
 

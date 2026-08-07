@@ -97,6 +97,28 @@ def test_is_local_eligible_blocks_vision() -> None:
     )
     assert is_local_eligible(ReasoningTaskKind.COMPETITOR_AUDIT) is False
     assert is_local_eligible(ReasoningTaskKind.EYE_OF_GOD) is False
+    assert is_local_eligible(ReasoningTaskKind.EXPORT_FAIL_SAFE_FIX) is True
+    assert is_local_eligible(ReasoningTaskKind.ZERO_HALLUCINATION) is True
+
+
+def test_governor_downgrades_competitor_without_vision() -> None:
+    policy = TokenGovernorPolicy(
+        enabled=True,
+        ollama_enabled=False,
+        always_semantic_filter_competitor=False,
+    )
+    decision = decide_governor(
+        GovernorRequest(
+            task_kind=ReasoningTaskKind.COMPETITOR_AUDIT,
+            estimated_input_tokens=800,
+            has_vision=False,
+            semantic_filter_applied=True,
+        ),
+        policy=policy,
+    )
+    assert decision.action is GovernorAction.USE_CLAUDE
+    assert decision.provider is ProviderKind.CLAUDE_SIMPLE
+    assert decision.expected_cost_tier is ReasoningTier.SIMPLE
 
 
 def test_governor_routes_routine_to_ollama() -> None:
@@ -212,6 +234,43 @@ def test_settings_expose_governor_knobs() -> None:
     assert cfg.token_governor_soft_input_tokens == 5000
     assert cfg.ollama_base_url == "http://ollama:11434"
     assert cfg.ollama_model == "llama3"
+
+
+def test_text_task_classifier_keeps_small_pain_local() -> None:
+    from app.domain.text_task_classifier import (
+        TextTaskComplexity,
+        classify_text_task_heuristic,
+    )
+
+    result = classify_text_task_heuristic(
+        kind=ReasoningTaskKind.PAIN_ANALYSIS,
+        text_blob="Хлипкий пластик. Плохие швы.",
+        item_count=5,
+        has_vision=False,
+    )
+    assert result.complexity is TextTaskComplexity.SIMPLE
+
+
+def test_text_task_classifier_blocks_vision() -> None:
+    from app.domain.text_task_classifier import (
+        TextTaskComplexity,
+        classify_text_task_heuristic,
+        is_classifiable_text_task,
+    )
+
+    assert (
+        is_classifiable_text_task(
+            ReasoningTaskKind.PAIN_ANALYSIS,
+            has_vision=True,
+        )
+        is False
+    )
+    result = classify_text_task_heuristic(
+        kind=ReasoningTaskKind.COMPETITOR_AUDIT,
+        text_blob="x" * 100,
+        has_vision=True,
+    )
+    assert result.complexity is TextTaskComplexity.NEEDS_CLAUDE
 
 
 def test_policy_hard_must_exceed_soft() -> None:

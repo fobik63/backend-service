@@ -12,10 +12,12 @@ from typing import Literal
 from urllib.parse import quote, urlencode
 from uuid import UUID
 
+from app.application.ports.ai_engine import AIEnginePort
 from app.application.ports.image_generation import (
     AsyncImageProviderPort,
     ImmediateImageProviderPort,
 )
+from app.application.ports.image_pipeline import ImagePipelinePort
 from app.application.ports.persistence import (
     GenerationRepositoryPort,
     ObjectStoragePort,
@@ -43,16 +45,8 @@ from app.services.ai_engine import (
     AIEngineRateLimitError,
     AIEngineUpstreamError,
     AIEngineValidationError,
-    get_face_fix_engine,
-    note_provider_failure,
-    note_provider_success,
 )
-from app.services.image_optimizer import (
-    ImageOptimizationError,
-    OptimizedImage,
-    create_generation_thumbnail,
-    optimize_image_lossless,
-)
+from app.services.image_optimizer import ImageOptimizationError, OptimizedImage
 from app.services.infographic_service import (
     InfographicServiceError,
     get_overlay_service,
@@ -84,6 +78,8 @@ class GenerationApplicationService:
         brand_dna_claude_context_loader: Callable[[UUID], Awaitable[str | None]]
         | None = None,
         on_generation_completed: Callable[[UUID], None] | None = None,
+        ai_engine: AIEnginePort | None = None,
+        image_pipeline: ImagePipelinePort | None = None,
     ) -> None:
         self._repository = repository
         self._storage = storage
@@ -93,6 +89,19 @@ class GenerationApplicationService:
         self._brand_dna_claude_context_loader = brand_dna_claude_context_loader
         self._on_generation_completed = on_generation_completed
         self._settings = get_settings()
+        # Lazy defaults keep existing unit tests working without rewriting
+        # constructors; production wiring injects façades via the worker factory.
+        if ai_engine is None or image_pipeline is None:
+            from app.infrastructure.ai_engine_facade import (
+                build_default_ai_engine,
+                build_default_image_pipeline,
+            )
+
+            self._ai_engine = ai_engine or build_default_ai_engine()
+            self._image_pipeline = image_pipeline or build_default_image_pipeline()
+        else:
+            self._ai_engine = ai_engine
+            self._image_pipeline = image_pipeline
 
     async def submit_job(self, job_id: UUID) -> None:
         """Submit every slide without ever waiting for an async provider result."""
@@ -231,7 +240,7 @@ class GenerationApplicationService:
                 data=zip_bytes,
                 content_type="application/zip",
             )
-            thumbnail = await create_generation_thumbnail(images[0])
+            thumbnail = await self._image_pipeline.create_thumbnail(images[0])
             thumbnail_key = (
                 f"generation-previews/{work.user_id}/{work.id}/"
                 f"thumbnail{thumbnail.extension}"
@@ -304,7 +313,7 @@ class GenerationApplicationService:
                 if event is not None:
                     await self._handle_provider_event(event)
             except AIEngineError:
-                await note_provider_failure(provider.name)
+                await self._ai_engine.provider_health.note_failure(provider.name)
                 logger.warning(
                     "Single recovery check failed for provider=%s job=%s",
                     provider.name,
@@ -336,7 +345,7 @@ class GenerationApplicationService:
         if not event.is_terminal_success and not event.is_terminal_failure:
             return
         if event.is_terminal_failure:
-            await note_provider_failure(provider.name)
+            await self._ai_engine.provider_health.note_failure(provider.name)
             await self._repository.mark_attempt_failed(
                 attempt.id,
                 event.error_message or f"Provider ended with status {event.status}.",
@@ -393,10 +402,10 @@ class GenerationApplicationService:
                 provider_name=provider.name,
                 image=optimized,
             )
-            await note_provider_success(provider.name)
+            await self._ai_engine.provider_health.note_success(provider.name)
             await self._maybe_enqueue_finalize(work.id)
         except Exception as exc:
-            await note_provider_failure(provider.name)
+            await self._ai_engine.provider_health.note_failure(provider.name)
             await self._repository.mark_attempt_failed(
                 attempt.id,
                 str(exc),
@@ -471,10 +480,10 @@ class GenerationApplicationService:
                     await self._repository.mark_attempt_submitted(
                         attempt.id, submission
                     )
-                    await note_provider_success(provider.name)
+                    await self._ai_engine.provider_health.note_success(provider.name)
                     return
                 except Exception as exc:
-                    await note_provider_failure(provider.name)
+                    await self._ai_engine.provider_health.note_failure(provider.name)
                     if attempt is not None:
                         await self._repository.mark_attempt_failed(
                             attempt.id,
@@ -529,11 +538,11 @@ class GenerationApplicationService:
         post_processing_mode: GenerationPostProcessingMode,
     ) -> OptimizedImage:
         if _is_model_vto_slide(slide):
-            final_model_bytes = await _apply_face_fix_if_requested(
+            final_model_bytes = await self._apply_face_fix_if_requested(
                 generated_background,
                 post_processing_mode=post_processing_mode,
             )
-            return await optimize_image_lossless(final_model_bytes)
+            return await self._image_pipeline.optimize_lossless(final_model_bytes)
 
         composited = await composite_product_on_background(
             product_image=product_image,
@@ -571,11 +580,11 @@ class GenerationApplicationService:
                 text=text,
                 style_name=style,
             )
-        final_bytes = await _apply_face_fix_if_requested(
+        final_bytes = await self._apply_face_fix_if_requested(
             final_bytes,
             post_processing_mode=post_processing_mode,
         )
-        return await optimize_image_lossless(final_bytes)
+        return await self._image_pipeline.optimize_lossless(final_bytes)
 
     async def _store_slide(
         self,
@@ -638,15 +647,33 @@ class GenerationApplicationService:
             None,
         )
 
+    async def _apply_face_fix_if_requested(
+        self,
+        image_bytes: bytes,
+        *,
+        post_processing_mode: GenerationPostProcessingMode,
+    ) -> bytes:
+        if post_processing_mode != GenerationPostProcessingMode.HD_FACE_FIX:
+            return image_bytes
+        return await self._ai_engine.face_fix.fix_if_needed(image_bytes)
+
 
 async def _apply_face_fix_if_requested(
     image_bytes: bytes,
     *,
     post_processing_mode: GenerationPostProcessingMode,
+    ai_engine: AIEnginePort | None = None,
 ) -> bytes:
+    """Backward-compatible module helper used by older call sites/tests."""
+
     if post_processing_mode != GenerationPostProcessingMode.HD_FACE_FIX:
         return image_bytes
-    return await get_face_fix_engine().fix_if_needed(image_bytes)
+    engine = ai_engine
+    if engine is None:
+        from app.infrastructure.ai_engine_facade import build_default_ai_engine
+
+        engine = build_default_ai_engine()
+    return await engine.face_fix.fix_if_needed(image_bytes)
 
 
 def _normalise_error(exc: Exception) -> GenerationErrorInfo:

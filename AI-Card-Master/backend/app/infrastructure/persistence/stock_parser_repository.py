@@ -232,12 +232,21 @@ class StockParserRepository:
         return _sku_view(row) if row is not None else None
 
     async def list_active_sku_items(
-        self, *, marketplace: ParserMarketplace | None = None
+        self,
+        *,
+        marketplace: ParserMarketplace | None = None,
+        after_id: UUID | None = None,
+        limit: int = 500,
     ) -> list[SkuItemView]:
+        """Keyset page of active SKUs ordered by id (``id > after_id``)."""
+
+        page_size = max(1, min(int(limit), 500))
         stmt = select(SkuItem).where(SkuItem.is_active.is_(True))
         if marketplace is not None:
             stmt = stmt.where(SkuItem.marketplace == marketplace.value)
-        stmt = stmt.order_by(SkuItem.marketplace, SkuItem.article)
+        if after_id is not None:
+            stmt = stmt.where(SkuItem.id > after_id)
+        stmt = stmt.order_by(SkuItem.id).limit(page_size)
         result = await self._session.execute(stmt)
         return [_sku_view(row) for row in result.scalars().all()]
 

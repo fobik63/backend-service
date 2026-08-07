@@ -38,6 +38,7 @@ from app.services.s3_storage import (
 )
 from app.services.series_generator import (
     DEFAULT_SLIDE_OVERLAY_TEXTS,
+    SERIES_SLIDE_CONCURRENCY,
     SeriesArchiveResult,
     SeriesGenerationError,
     SeriesResult,
@@ -45,6 +46,7 @@ from app.services.series_generator import (
     apply_text_overlays_to_series,
     build_series_tasks,
     build_series_zip_bytes,
+    build_series_zip_to_path,
     generate_slide_series,
     generate_slide_series_archive,
     package_series_archive_to_s3,
@@ -99,9 +101,11 @@ __all__ = [
     "SeriesResult",
     "SeriesArchiveResult",
     "SeriesGenerationError",
+    "SERIES_SLIDE_CONCURRENCY",
     "DEFAULT_SLIDE_OVERLAY_TEXTS",
     "build_series_tasks",
     "build_series_zip_bytes",
+    "build_series_zip_to_path",
     "generate_slide_series",
     "generate_slide_series_archive",
     "package_series_archive_to_s3",

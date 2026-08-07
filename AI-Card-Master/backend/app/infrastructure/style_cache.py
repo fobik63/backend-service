@@ -65,7 +65,11 @@ class RedisStylePresetCache:
 
     async def _increment_usage(self, niche_key: str) -> None:
         try:
-            await get_redis_client().incr(f"style:usage:{niche_key}")
+            settings = get_settings()
+            client = get_redis_client()
+            key = f"style:usage:{niche_key}"
+            await client.incr(key)
+            await client.expire(key, settings.style_cache_ttl_seconds)
         except RedisError:
             logger.debug("Style usage counter failed for %s", niche_key)
 

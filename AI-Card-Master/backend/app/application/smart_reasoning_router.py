@@ -42,13 +42,24 @@ class SmartReasoningRouter:
     def local_model(self) -> str | None:
         return self._local_model
 
-    def tier_for(self, kind: ReasoningTaskKind) -> ReasoningTier:
-        return tier_for_task(kind)
+    def tier_for(
+        self,
+        kind: ReasoningTaskKind,
+        *,
+        has_vision: bool = True,
+    ) -> ReasoningTier:
+        return tier_for_task(kind, has_vision=has_vision)
 
-    def model_for(self, kind: ReasoningTaskKind) -> str:
+    def model_for(
+        self,
+        kind: ReasoningTaskKind,
+        *,
+        has_vision: bool = True,
+    ) -> str:
         return model_for_task(
             kind,
             simple_model=self._simple_model,
             deep_model=self._deep_model,
             local_model=self._local_model,
+            has_vision=has_vision,
         )

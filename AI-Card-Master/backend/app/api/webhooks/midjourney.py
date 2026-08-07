@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 from typing import Annotated, Any
 
@@ -11,6 +9,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.midjourney_webhook_service import MidjourneyWebhookIngressService
 from app.infrastructure.persistence.generation_repository import GenerationRepository
 from app.models.database import get_db_session
 from app.services.ai_engine import (
@@ -31,11 +30,22 @@ class WebhookAck(BaseModel):
     already_processed: bool = False
 
 
+def get_midjourney_webhook_service(
+    db_session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> MidjourneyWebhookIngressService:
+    return MidjourneyWebhookIngressService(
+        repository=GenerationRepository(db_session),
+        provider_resolver=get_async_midjourney_provider,
+    )
+
+
 @router.post("/{provider_name}", response_model=WebhookAck)
 async def receive_midjourney_webhook(
     provider_name: str,
     request: Request,
-    db_session: Annotated[AsyncSession, Depends(get_db_session)],
+    service: Annotated[
+        MidjourneyWebhookIngressService, Depends(get_midjourney_webhook_service)
+    ],
     callback_token: Annotated[str | None, Query(alias="token", max_length=512)] = None,
     content_length: Annotated[int | None, Header(alias="Content-Length", ge=0)] = None,
 ) -> WebhookAck:
@@ -46,7 +56,7 @@ async def receive_midjourney_webhook(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail="Webhook payload is too large.",
         )
-    provider = get_async_midjourney_provider(provider_name)
+    provider = service.resolve_provider(provider_name)
     if provider is None:
         # Do not reveal configured provider names to unauthenticated callers.
         raise HTTPException(
@@ -60,7 +70,8 @@ async def receive_midjourney_webhook(
             detail="Webhook payload is too large.",
         )
     headers = {key.lower(): value for key, value in request.headers.items()}
-    if not provider.verify_webhook(
+    if not service.verify(
+        provider,
         headers=headers,
         raw_body=raw_body,
         callback_token=callback_token,
@@ -71,33 +82,27 @@ async def receive_midjourney_webhook(
         )
 
     try:
-        payload = json.loads(raw_body)
-    except json.JSONDecodeError as exc:
+        payload = service.parse_json(raw_body)
+    except AIEngineValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Webhook body must be valid JSON.",
+            detail=str(exc),
         ) from exc
-    if not isinstance(payload, dict):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Webhook body must be a JSON object.",
-        )
+
     try:
-        event = provider.parse_webhook(payload)
+        safe_payload = _bounded_payload(payload)
+        _stored, duplicate = await service.accept(
+            provider=provider,
+            payload=payload,
+            raw_body=raw_body,
+            safe_payload=safe_payload,
+        )
     except AIEngineValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         ) from exc
 
-    safe_payload = _bounded_payload(payload)
-    event = event.model_copy(update={"raw_payload": safe_payload})
-    repository = GenerationRepository(db_session)
-    _stored, duplicate = await repository.store_webhook_event(
-        event=event,
-        payload_hash=hashlib.sha256(raw_body).hexdigest(),
-        raw_payload=safe_payload,
-    )
     return WebhookAck(already_processed=duplicate)
 
 

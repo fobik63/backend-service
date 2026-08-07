@@ -20,6 +20,16 @@ from app.domain.pain_analysis import (
     pain_analysis_system_prompt,
 )
 from app.domain.semantic_filter import estimate_text_tokens
+from app.domain.smart_reasoning import ReasoningTaskKind
+from app.domain.text_task_classifier import (
+    TextTaskClassification,
+    TextTaskComplexity,
+    build_text_classification_prompt,
+    classify_text_task_heuristic,
+    is_classifiable_text_task,
+    normalize_classification_payload,
+    text_classification_system_prompt,
+)
 from app.services.api_usage_costs import record_api_usage_cost
 
 logger = logging.getLogger(__name__)
@@ -211,6 +221,57 @@ class OllamaClient:
         except (ValueError, Exception) as exc:
             raise OllamaError(f"Ollama pain analysis failed validation: {exc}") from exc
         return result, in_tok, out_tok
+
+    async def classify_text_task(
+        self,
+        *,
+        kind: ReasoningTaskKind,
+        text_blob: str,
+        item_count: int = 0,
+        has_vision: bool = False,
+    ) -> TextTaskClassification:
+        """Filter simple text workloads before Claude (cost audit C6).
+
+        Uses a deterministic heuristic first; when borderline and Ollama is up,
+        asks the local model for a JSON complexity verdict.
+        """
+
+        heuristic = classify_text_task_heuristic(
+            kind=kind,
+            text_blob=text_blob,
+            item_count=item_count,
+            has_vision=has_vision,
+        )
+        if not is_classifiable_text_task(kind, has_vision=has_vision):
+            return heuristic
+        if heuristic.complexity is TextTaskComplexity.SIMPLE:
+            return heuristic
+        if not self._enabled:
+            return heuristic
+
+        try:
+            payload, _in_tok, _out_tok = await self.complete_json(
+                system=text_classification_system_prompt(),
+                user=build_text_classification_prompt(
+                    kind=kind,
+                    text_preview=text_blob,
+                    estimated_tokens=heuristic.estimated_tokens,
+                    item_count=item_count,
+                ),
+                schema_hint='{"complexity":"simple"|"needs_claude","reason":"..."}',
+            )
+            return normalize_classification_payload(
+                payload,
+                estimated_tokens=heuristic.estimated_tokens,
+                used_local_llm=True,
+            )
+        except OllamaError:
+            logger.info(
+                "Ollama text classifier unavailable; keeping heuristic decision=%s",
+                heuristic.complexity.value,
+                exc_info=True,
+            )
+            return heuristic
 
     async def aclose(self) -> None:
         await self._client.aclose()
