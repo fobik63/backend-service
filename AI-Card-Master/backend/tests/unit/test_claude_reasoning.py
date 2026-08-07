@@ -115,14 +115,23 @@ class _FakeClaude:
     def __init__(self) -> None:
         self.vision_calls = 0
         self.reasoning_calls = 0
+        self.last_vision_kwargs: dict | None = None
+        self.last_reasoning_kwargs: dict | None = None
 
     async def analyze_visual_triggers(
         self,
         *,
         images: tuple[tuple[bytes, str], ...],
         product_category: str | None,
+        user_id: UUID | None = None,
+        job_id: UUID | None = None,
     ) -> tuple[VisionStageResult, int, int]:
         self.vision_calls += 1
+        self.last_vision_kwargs = {
+            "user_id": user_id,
+            "job_id": job_id,
+            "product_category": product_category,
+        }
         assert images
         return _vision(), 100, 50
 
@@ -131,8 +140,14 @@ class _FakeClaude:
         *,
         vision: VisionStageResult,
         text_context: CompetitorTextContext,
+        user_id: UUID | None = None,
+        job_id: UUID | None = None,
     ) -> tuple[ReasoningStageResult, int, int]:
         self.reasoning_calls += 1
+        self.last_reasoning_kwargs = {
+            "user_id": user_id,
+            "job_id": job_id,
+        }
         assert vision.visual_triggers
         return _reasoning(), 80, 40
 
@@ -491,6 +506,12 @@ async def test_run_chain_of_thought_two_stages() -> None:
     assert call_order == ["vision", "reasoning"]
     assert claude.vision_calls == 1
     assert claude.reasoning_calls == 1
+    assert claude.last_vision_kwargs is not None
+    assert claude.last_vision_kwargs["job_id"] == job.id
+    assert claude.last_vision_kwargs["user_id"] == user_id
+    assert claude.last_reasoning_kwargs is not None
+    assert claude.last_reasoning_kwargs["job_id"] == job.id
+    assert claude.last_reasoning_kwargs["user_id"] == user_id
     assert completed.input_tokens == 180
     assert completed.output_tokens == 90
     assert repo.jobs[job.id].vision_result is not None

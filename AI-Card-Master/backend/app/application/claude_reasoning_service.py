@@ -231,6 +231,8 @@ class ClaudeReasoningService:
                 vision, in_tok, out_tok = await claude.analyze_visual_triggers(
                     images=images,
                     product_category=text_context.product_category,
+                    user_id=job.user_id,
+                    job_id=job_id,
                 )
                 vision_payload = vision.model_dump(mode="json")
                 # Persist only validated structured fields; never Anthropic thinking blocks.
@@ -256,6 +258,8 @@ class ClaudeReasoningService:
             reasoning, in_tok2, out_tok2 = await claude.align_triggers_with_text(
                 vision=vision,
                 text_context=text_context,
+                user_id=job.user_id,
+                job_id=job_id,
             )
             reasoning_payload = reasoning.model_dump(mode="json")
             if "thinking" in reasoning_payload:

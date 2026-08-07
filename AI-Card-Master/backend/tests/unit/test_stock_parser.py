@@ -12,6 +12,7 @@ from app.application.stock_parser_service import StockParserService
 from app.domain.stock_parser import (
     CIRCUIT_BREAKER_THRESHOLD,
     STOCK_PARSER_DEFAULT_CHUNK_SIZE,
+    STOCK_SNAPSHOT_UPSERT_BATCH_SIZE,
     ParseSkuRequest,
     ParsedSkuSnapshot,
     ParserErrorKind,
@@ -624,6 +625,15 @@ def test_chunk_sequence_caps_at_100() -> None:
     assert len(chunks) == 3
     assert [len(c) for c in chunks] == [100, 100, 50]
     assert all(len(c) <= STOCK_PARSER_DEFAULT_CHUNK_SIZE for c in chunks)
+
+
+def test_snapshot_upsert_batch_size_is_within_audit_bounds() -> None:
+    """X3: INSERT…ON CONFLICT batches must stay in the 100–500 row window."""
+
+    assert 100 <= STOCK_SNAPSHOT_UPSERT_BATCH_SIZE <= 500
+    items = list(range(STOCK_SNAPSHOT_UPSERT_BATCH_SIZE + 50))
+    chunks = chunk_sequence(items, STOCK_SNAPSHOT_UPSERT_BATCH_SIZE)
+    assert [len(c) for c in chunks] == [STOCK_SNAPSHOT_UPSERT_BATCH_SIZE, 50]
 
 
 def test_build_nightly_batch_payloads_chunk_size() -> None:

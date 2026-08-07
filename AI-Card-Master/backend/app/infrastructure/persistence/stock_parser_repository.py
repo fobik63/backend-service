@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Sequence
+from typing import Any, Sequence
 from uuid import UUID, uuid4
 
 from sqlalchemy import select, text
@@ -15,9 +15,11 @@ from app.domain.stock_parser import (
     ParserHealthStatus,
     ParserHealthView,
     ParserMarketplace,
+    STOCK_SNAPSHOT_UPSERT_BATCH_SIZE,
     SkuItemView,
     StockSnapshotView,
     StockSnapshotWrite,
+    chunk_sequence,
 )
 from app.models.stock_parser import ParserHealth, SkuItem, StockSnapshot
 
@@ -265,48 +267,47 @@ class StockParserRepository:
     async def insert_stock_snapshots(
         self, *, rows: Sequence[StockSnapshotWrite]
     ) -> list[StockSnapshotView]:
-        """Upsert snapshots; retries must not create duplicate fact rows."""
+        """Upsert snapshots in batches; retries must not create duplicate fact rows."""
 
         if not rows:
             return []
 
         # Ensure every month bucket exists before INSERT (DEFAULT is fallback).
         months_seen: set[tuple[int, int]] = set()
+        prepared: list[dict[str, Any]] = []
+        now = _utc_now()
         for item in rows:
-            ts = _as_utc(item.captured_at) or _utc_now()
-            key = (ts.year, ts.month)
+            captured_at = _as_utc(item.captured_at) or now
+            key = (captured_at.year, captured_at.month)
             if key not in months_seen:
                 months_seen.add(key)
-                await self.ensure_stock_snapshot_partition(captured_at=ts)
+                await self.ensure_stock_snapshot_partition(captured_at=captured_at)
+            prepared.append(
+                {
+                    "id": uuid4(),
+                    "sku_id": item.sku_id,
+                    "captured_at": captured_at,
+                    "warehouse_id": item.warehouse_id,
+                    "quantity": item.quantity,
+                    "price_kopecks": item.price_kopecks,
+                    "currency": item.currency,
+                    "created_at": now,
+                }
+            )
 
         views: list[StockSnapshotView] = []
-        for item in rows:
-            captured_at = _as_utc(item.captured_at) or _utc_now()
-            stmt = (
-                pg_insert(StockSnapshot)
-                .values(
-                    id=uuid4(),
-                    sku_id=item.sku_id,
-                    captured_at=captured_at,
-                    warehouse_id=item.warehouse_id,
-                    quantity=item.quantity,
-                    price_kopecks=item.price_kopecks,
-                    currency=item.currency,
-                    created_at=_utc_now(),
-                )
-                .on_conflict_do_update(
-                    index_elements=["sku_id", "warehouse_id", "captured_at"],
-                    set_={
-                        "quantity": item.quantity,
-                        "price_kopecks": item.price_kopecks,
-                        "currency": item.currency,
-                    },
-                )
-                .returning(StockSnapshot)
-            )
+        for batch in chunk_sequence(prepared, STOCK_SNAPSHOT_UPSERT_BATCH_SIZE):
+            insert_stmt = pg_insert(StockSnapshot).values(batch)
+            stmt = insert_stmt.on_conflict_do_update(
+                index_elements=["sku_id", "warehouse_id", "captured_at"],
+                set_={
+                    "quantity": insert_stmt.excluded.quantity,
+                    "price_kopecks": insert_stmt.excluded.price_kopecks,
+                    "currency": insert_stmt.excluded.currency,
+                },
+            ).returning(StockSnapshot)
             result = await self._session.execute(stmt)
-            entity = result.scalar_one()
-            views.append(_snapshot_view(entity))
+            views.extend(_snapshot_view(entity) for entity in result.scalars().all())
         await self._session.commit()
         return views
 

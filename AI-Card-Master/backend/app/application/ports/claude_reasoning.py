@@ -124,10 +124,13 @@ class ClaudeVisionReasoningPort(Protocol):
         *,
         images: tuple[tuple[bytes, str], ...],
         product_category: str | None,
+        user_id: UUID | None = None,
+        job_id: UUID | None = None,
     ) -> tuple[VisionStageResult, int, int]:
         """Stage 1: Vision analysis → structured visual triggers.
 
         Returns (result, input_tokens, output_tokens).
+        ``job_id`` is correlated as cost ``task_id`` (not generation_jobs FK).
         """
 
     async def align_triggers_with_text(
@@ -135,10 +138,13 @@ class ClaudeVisionReasoningPort(Protocol):
         *,
         vision: VisionStageResult,
         text_context: CompetitorTextContext,
+        user_id: UUID | None = None,
+        job_id: UUID | None = None,
     ) -> tuple[ReasoningStageResult, int, int]:
         """Stage 2: Chain-of-Thought text alignment.
 
         Returns (result, input_tokens, output_tokens).
+        ``job_id`` is correlated as cost ``task_id`` (not generation_jobs FK).
         """
 
     async def aclose(self) -> None:

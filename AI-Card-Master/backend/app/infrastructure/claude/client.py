@@ -113,6 +113,14 @@ from app.services.infographic_service import TRANSIENT_HTTP_CODES
 
 logger = logging.getLogger(__name__)
 
+# Operations whose ``job_id`` is a real ``generation_jobs.id`` (FK-safe).
+_GENERATION_JOB_LINKED_OPERATIONS: frozenset[str] = frozenset(
+    {
+        "claude_export_fail_safe_fix",
+        "claude_zero_hallucination_cross_check",
+    }
+)
+
 
 class ClaudeIntegrationError(Exception):
     """Base Claude 4.7 integration failure."""
@@ -1284,6 +1292,24 @@ class Claude47VisionClient:
         )
         units = max(total_tokens, 1)
         resolved_model = (model_name or self._model).strip() or self._model
+        # Only link generation_jobs FK when the caller job_id is a GenerationJob
+        # (export fail-safe / zero-hallucination). Other Claude workflows
+        # (CoT, pain, oracle, audits) correlate via task_id only (audit C5).
+        link_generation_job = operation in _GENERATION_JOB_LINKED_OPERATIONS
+        generation_job_id = job_id if link_generation_job else None
+        meta: dict[str, Any] = {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "task_id": str(job_id) if job_id else None,
+            "anthropic_usage": usage,
+        }
+        if generation_job_id is not None:
+            meta["generation_job_id"] = str(generation_job_id)
+        if job_id is not None and operation in {
+            "claude_vision_triggers",
+            "claude_cot_text_alignment",
+        }:
+            meta["claude_reasoning_job_id"] = str(job_id)
         await record_api_usage_cost(
             provider="anthropic",
             model_name=resolved_model,
@@ -1292,20 +1318,13 @@ class Claude47VisionClient:
             unit_cost_usd=total_cost / Decimal(units),
             total_cost_usd=total_cost,
             user_id=user_id,
-            generation_job_id=job_id,
+            generation_job_id=generation_job_id,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             status=status,
             duration_ms=duration_ms,
             task_id=job_id,
-            metadata={
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "claude_reasoning_job_id": str(job_id) if job_id else None,
-                "task_id": str(job_id) if job_id else None,
-                "generation_job_id": str(job_id) if job_id else None,
-                "anthropic_usage": usage,
-            },
+            metadata=meta,
         )
 
 
