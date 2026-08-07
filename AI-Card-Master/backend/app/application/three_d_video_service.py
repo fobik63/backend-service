@@ -174,6 +174,7 @@ class ThreeDVideoRenderService:
 
         background = self._background_from_studio(render_settings)
         resolution = f"{int(render_settings.width)}x{int(render_settings.height)}"
+        studio_payload = render_settings.model_dump(mode="json")
 
         task = await self._repository.create_task(
             task_3d_id=task_3d_id,
@@ -187,6 +188,7 @@ class ThreeDVideoRenderService:
             status=ThreeDVideoTaskStatus.QUEUED,
             cost_coins=cost,
             idempotency_key=cleaned_key,
+            studio_settings=studio_payload,
         )
 
         if cost > 0:
@@ -345,22 +347,11 @@ class ThreeDVideoRenderService:
                 int(round(float(task.duration_seconds) * max(1, int(task.fps)))),
             )
 
-            cfg = RenderEngineConfig(
+            cfg = self._build_render_engine_config(
+                task=task,
                 width=width,
                 height=height,
-                fps=int(task.fps) or self._render_fps,
                 frame_count=frame_count,
-                fill_ratio=self._render_fill_ratio,
-                elevation_degrees=float(task.elevation_angle),
-                background_rgb=_BACKGROUND_RGB.get(
-                    task.background_type, (24, 28, 36)
-                ),
-                backend=self._render_backend,  # type: ignore[arg-type]
-                preview_format=self._preview_format,  # type: ignore[arg-type]
-                ffmpeg_bin=self._ffmpeg_bin,
-                cache_dir=(
-                    Path(self._mesh_cache_dir) if self._mesh_cache_dir else None
-                ),
             )
 
             loop = asyncio.get_running_loop()
@@ -576,6 +567,56 @@ class ThreeDVideoRenderService:
                 return str(key).strip(), name
         raise ThreeDVideoValidationError(
             f"Source 3D task {task_3d_id} has no downloadable mesh key."
+        )
+
+    def _build_render_engine_config(
+        self,
+        *,
+        task: ThreeDVideoTaskView,
+        width: int,
+        height: int,
+        frame_count: int,
+    ) -> RenderEngineConfig:
+        """Rebuild engine config, restoring studio lighting / shadow catcher."""
+
+        cache_dir = Path(self._mesh_cache_dir) if self._mesh_cache_dir else None
+        fps = int(task.fps) or self._render_fps
+        if isinstance(task.studio_settings, dict) and task.studio_settings:
+            try:
+                studio = RenderSettingsDTO.from_persisted(task.studio_settings)
+                return RenderEngineConfig.from_studio_settings(
+                    studio,
+                    fps=fps,
+                    frame_count=frame_count,
+                    backend=self._render_backend,  # type: ignore[arg-type]
+                    preview_format=self._preview_format,  # type: ignore[arg-type]
+                    cache_dir=cache_dir,
+                    ffmpeg_bin=self._ffmpeg_bin,
+                    background_rgb=_BACKGROUND_RGB.get(
+                        task.background_type, studio.background_rgb
+                    ),
+                )
+            except Exception:
+                logger.warning(
+                    "Invalid studio_settings on video_task_id=%s; using defaults",
+                    task.id,
+                    exc_info=True,
+                )
+
+        return RenderEngineConfig(
+            width=width,
+            height=height,
+            fps=fps,
+            frame_count=frame_count,
+            fill_ratio=self._render_fill_ratio,
+            elevation_degrees=float(task.elevation_angle),
+            background_rgb=_BACKGROUND_RGB.get(
+                task.background_type, (24, 28, 36)
+            ),
+            backend=self._render_backend,  # type: ignore[arg-type]
+            preview_format=self._preview_format,  # type: ignore[arg-type]
+            ffmpeg_bin=self._ffmpeg_bin,
+            cache_dir=cache_dir,
         )
 
     def _resolve_resolution(self, resolution: str) -> tuple[int, int]:

@@ -624,6 +624,54 @@ class RenderSettingsDTO(BaseModel):
         )
 
     @classmethod
+    def from_persisted(cls, payload: dict[str, object]) -> RenderSettingsDTO:
+        """Rebuild from JSONB / ``model_dump(mode='json')`` (lists + str enums)."""
+
+        data = dict(payload)
+        bg = data.get("background_rgb")
+        if isinstance(bg, list) and len(bg) == 3:
+            data["background_rgb"] = (int(bg[0]), int(bg[1]), int(bg[2]))
+
+        catcher_raw = data.get("shadow_catcher")
+        catcher: ShadowCatcherFloorSettings | None = None
+        if isinstance(catcher_raw, ShadowCatcherFloorSettings):
+            catcher = catcher_raw
+        elif isinstance(catcher_raw, dict):
+            sc = dict(catcher_raw)
+            albedo = sc.get("albedo_rgb")
+            if isinstance(albedo, list) and len(albedo) == 3:
+                sc["albedo_rgb"] = (
+                    float(albedo[0]),
+                    float(albedo[1]),
+                    float(albedo[2]),
+                )
+            catcher = ShadowCatcherFloorSettings(
+                enabled=bool(sc.get("enabled", True)),
+                size_scale=float(sc.get("size_scale", 4.0)),
+                y_offset=float(sc.get("y_offset", 0.02)),
+                opacity=float(sc.get("opacity", 0.55)),
+                shadow_softness=float(sc.get("shadow_softness", 0.65)),
+                shadow_strength=float(sc.get("shadow_strength", 0.72)),
+                receive_shadows=bool(sc.get("receive_shadows", True)),
+                albedo_rgb=sc.get("albedo_rgb", (0.04, 0.04, 0.05)),  # type: ignore[arg-type]
+            )
+
+        return cls.create(
+            str(data.get("aspect_ratio", "3:4")),
+            width=int(data["width"]) if data.get("width") is not None else None,
+            height=int(data["height"]) if data.get("height") is not None else None,
+            lighting_preset=str(data.get("lighting_preset", LightingPresetName.STUDIO_SOFT)),
+            shadow_catcher=catcher,
+            background_mode=str(
+                data.get("background_mode", StudioBackgroundMode.GRADIENT)
+            ),
+            background_rgb=data.get("background_rgb", (24, 28, 36)),  # type: ignore[arg-type]
+            elevation_degrees=float(data.get("elevation_degrees", 20.0)),
+            fill_ratio=float(data.get("fill_ratio", 0.825)),
+            fov_degrees=float(data.get("fov_degrees", 35.0)),
+        )
+
+    @classmethod
     def for_square(
         cls,
         side: int = DEFAULT_SQUARE_SIDE,

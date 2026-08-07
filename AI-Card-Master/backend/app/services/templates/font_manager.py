@@ -544,22 +544,34 @@ def parse_font_metadata(data: bytes, *, extension: str) -> ParsedFontMetadata:
             "Install the backend requirements (fonttools)."
         ) from exc
 
+    font = None
+    family: str | None = None
+    full_name: str | None = None
+    style: str | None = None
+    postscript: str | None = None
     try:
-        font = TTFont(BytesIO(data), recalcBBoxes=False, recalcTimestamp=False)
-    except Exception as exc:
-        raise FontValidationError(f"Invalid font file: {exc}") from exc
+        try:
+            font = TTFont(BytesIO(data), recalcBBoxes=False, recalcTimestamp=False)
+        except Exception as exc:
+            raise FontValidationError(f"Invalid font file: {exc}") from exc
 
-    try:
-        name_table = font["name"]
-    except Exception as exc:
-        font.close()
-        raise FontValidationError(f"Font is missing the name table: {exc}") from exc
+        try:
+            name_table = font["name"]
+        except Exception as exc:
+            raise FontValidationError(f"Font is missing the name table: {exc}") from exc
 
-    family = _name_record(name_table, name_id=1) or _name_record(name_table, name_id=16)
-    full_name = _name_record(name_table, name_id=4) or family
-    style = _name_record(name_table, name_id=2) or "Regular"
-    postscript = _name_record(name_table, name_id=6)
-    font.close()
+        family = _name_record(name_table, name_id=1) or _name_record(
+            name_table, name_id=16
+        )
+        full_name = _name_record(name_table, name_id=4) or family
+        style = _name_record(name_table, name_id=2) or "Regular"
+        postscript = _name_record(name_table, name_id=6)
+    finally:
+        if font is not None:
+            try:
+                font.close()
+            except Exception:
+                logger.debug("TTFont.close() failed", exc_info=True)
 
     if not family or not family.strip():
         raise FontValidationError("Font metadata does not contain a family name.")

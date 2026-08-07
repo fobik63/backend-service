@@ -306,6 +306,12 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
         await close_security_redis_client()
         await close_redis_client()
         await close_s3_storage()
+        try:
+            from app.services.templates.image_cache import get_image_asset_cache
+
+            await get_image_asset_cache().aclose()
+        except Exception:
+            logger.exception("Failed to close canvas image asset cache on shutdown")
         await engine.dispose()
 
 

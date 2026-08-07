@@ -188,6 +188,7 @@ class ThreeDVideoTaskView:
     coins_refunded: bool = False
     coin_hold_id: UUID | None = None
     idempotency_key: str | None = None
+    studio_settings: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -61,6 +61,9 @@ def _task_view(row: ThreeDVideoTask) -> ThreeDVideoTaskView:
         coins_refunded=bool(row.coins_refunded),
         coin_hold_id=row.coin_hold_id,
         idempotency_key=row.idempotency_key,
+        studio_settings=(
+            dict(row.studio_settings) if isinstance(row.studio_settings, dict) else None
+        ),
     )
 
 
@@ -109,6 +112,7 @@ class ThreeDVideoRepository:
         status: ThreeDVideoTaskStatus = ThreeDVideoTaskStatus.QUEUED,
         cost_coins: int = 0,
         idempotency_key: str | None = None,
+        studio_settings: dict | None = None,
     ) -> ThreeDVideoTaskView:
         resolved = parse_resolution(resolution)
         if fps <= 0:
@@ -132,6 +136,7 @@ class ThreeDVideoRepository:
             progress_percent=0,
             stage="queued",
             idempotency_key=idempotency_key,
+            studio_settings=dict(studio_settings) if studio_settings else None,
         )
         self._session.add(row)
         await self._session.commit()
@@ -257,7 +262,13 @@ class ThreeDVideoRepository:
                     commit=False,
                 )
                 if status is not CoinHoldStatus.REFUNDED and int(row.cost_coins) > 0:
-                    pass
+                    try:
+                        await BillingService(self._session).refund_coins_in_transaction(
+                            user_id=row.user_id,
+                            amount=int(row.cost_coins),
+                        )
+                    except BillingNotFoundError as exc:
+                        raise LookupError("User was not found.") from exc
             except PricingNotFoundError:
                 amount = int(row.cost_coins) if row.coins_held else 0
                 if amount > 0:

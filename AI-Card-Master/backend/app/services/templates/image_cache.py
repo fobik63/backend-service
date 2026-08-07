@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
+import socket
 import threading
 from collections import OrderedDict
 from pathlib import Path
@@ -18,6 +20,14 @@ DEFAULT_MAX_ENTRIES: Final[int] = 128
 DEFAULT_MAX_BYTES: Final[int] = 128 * 1024 * 1024  # 128 MiB
 DEFAULT_TIMEOUT_SECONDS: Final[float] = 20.0
 MAX_DOWNLOAD_BYTES: Final[int] = 40 * 1024 * 1024  # 40 MiB per asset
+
+_BLOCKED_HOSTNAMES: Final[frozenset[str]] = frozenset(
+    {
+        "localhost",
+        "metadata.google.internal",
+        "metadata.google",
+    }
+)
 
 
 class ImageAssetCacheError(RuntimeError):
@@ -34,6 +44,7 @@ class ImageAssetCache:
         max_bytes: int = DEFAULT_MAX_BYTES,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         http_client: httpx.AsyncClient | None = None,
+        allow_local_files: bool = False,
     ) -> None:
         if max_entries < 1:
             raise ValueError("max_entries must be >= 1")
@@ -44,6 +55,7 @@ class ImageAssetCache:
         self._timeout = httpx.Timeout(timeout_seconds)
         self._http_client = http_client
         self._owned_client = False
+        self._allow_local_files = allow_local_files
         self._lock = threading.RLock()
         self._async_locks: dict[str, asyncio.Lock] = {}
         self._async_locks_guard = asyncio.Lock()
@@ -141,27 +153,65 @@ class ImageAssetCache:
         scheme = (parsed.scheme or "").lower()
 
         if scheme in {"http", "https"}:
+            await self._assert_public_http_url(key, parsed)
             return await self._download_http(key)
-
-        if scheme == "file":
-            path = Path(unquote(parsed.path))
-            # Windows file:///C:/... → path may start with /C:/
-            if path.as_posix().startswith("/") and len(path.parts) > 1 and path.parts[0] == "/":
-                # Keep Path as-is; pathlib handles /C:/foo on Windows in most cases.
-                pass
-            if len(parsed.netloc) == 1 and parsed.netloc.isalpha():
-                # file://C:/Windows/... rare form
-                path = Path(f"{parsed.netloc}:{unquote(parsed.path)}")
-            return await asyncio.to_thread(self._read_local, path)
 
         if scheme == "data":
             return _decode_data_url(key)
 
-        # Bare filesystem path (absolute or relative).
-        if scheme == "" or len(scheme) == 1:
+        if scheme == "file" or scheme == "" or len(scheme) == 1:
+            if not self._allow_local_files:
+                raise ImageAssetCacheError(
+                    "Local filesystem image URLs are disabled for canvas assets "
+                    "(SSRF/LFI guard). Use https:// or data: URLs."
+                )
+            if scheme == "file":
+                path = Path(unquote(parsed.path))
+                if len(parsed.netloc) == 1 and parsed.netloc.isalpha():
+                    path = Path(f"{parsed.netloc}:{unquote(parsed.path)}")
+                return await asyncio.to_thread(self._read_local, path)
             return await asyncio.to_thread(self._read_local, Path(key))
 
         raise ImageAssetCacheError(f"Unsupported image URL scheme: {scheme!r}")
+
+    async def _assert_public_http_url(self, url: str, parsed: object) -> None:
+        """Reject loopback / link-local / private targets (SSRF shield)."""
+
+        hostname = getattr(parsed, "hostname", None)
+        if not hostname:
+            raise ImageAssetCacheError(f"Image URL is missing a hostname: {url}")
+        host = str(hostname).strip().lower().rstrip(".")
+        if host in _BLOCKED_HOSTNAMES or host.endswith(".localhost"):
+            raise ImageAssetCacheError(f"Blocked image host (SSRF guard): {host}")
+
+        try:
+            infos = await asyncio.to_thread(
+                socket.getaddrinfo, host, None, type=socket.SOCK_STREAM
+            )
+        except socket.gaierror as exc:
+            raise ImageAssetCacheError(f"Cannot resolve image host: {host}") from exc
+
+        for info in infos:
+            sockaddr = info[4]
+            if not sockaddr:
+                continue
+            ip_text = sockaddr[0]
+            try:
+                ip = ipaddress.ip_address(ip_text)
+            except ValueError:
+                continue
+            if (
+                ip.is_private
+                or ip.is_loopback
+                or ip.is_link_local
+                or ip.is_reserved
+                or ip.is_multicast
+                or ip.is_unspecified
+            ):
+                raise ImageAssetCacheError(
+                    f"Blocked non-public image address {ip} for host {host} "
+                    "(SSRF guard)."
+                )
 
     async def _download_http(self, url: str) -> bytes:
         client = await self._client()

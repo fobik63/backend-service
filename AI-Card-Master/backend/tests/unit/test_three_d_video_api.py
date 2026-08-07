@@ -36,7 +36,7 @@ from app.domain.three_d_video import (
 )
 from app.services.billing_service import BillingValidationError
 from app.services.three_d.render_engine import OrbitVideoResult
-from app.services.three_d.styles import RenderSettingsDTO
+from app.services.three_d.styles import RenderSettingsDTO, ShadowCatcherFloorSettings
 
 
 @dataclass
@@ -77,6 +77,11 @@ class FakeVideoRepository:
             progress_percent=0,
             stage="queued",
             idempotency_key=kwargs.get("idempotency_key"),
+            studio_settings=(
+                dict(kwargs["studio_settings"])
+                if isinstance(kwargs.get("studio_settings"), dict)
+                else None
+            ),
         )
         self._store.video_tasks[task.id] = task
         return task
@@ -416,6 +421,49 @@ async def test_create_render_holds_ten_coins_and_requires_glb() -> None:
             ai_coins=50,
             render_settings=settings,
         )
+
+
+@pytest.mark.asyncio
+async def test_create_render_persists_studio_lighting_for_worker() -> None:
+    """API lighting / shadow-catcher must survive into RenderEngineConfig."""
+
+    user_id = uuid4()
+    store = _Store(balances={user_id: 50})
+    source = _source(user_id)
+    store.source_tasks[source.id] = source
+    store.source_assets[source.id] = _glb_asset(source.id, user_id)
+    service = _build_service(store, cost_coins=0)
+
+    settings = RenderSettingsDTO.for_marketplace_card(
+        lighting_preset="cyberpunk",
+        shadow_catcher=ShadowCatcherFloorSettings(
+            enabled=True,
+            opacity=0.4,
+            shadow_strength=0.9,
+        ),
+    )
+    task, _ = await service.create_render_task(
+        user_id=user_id,
+        task_3d_id=source.id,
+        ai_coins=50,
+        render_settings=settings,
+        fps=12,
+        duration_seconds=1.0,
+    )
+    assert task.studio_settings is not None
+    assert task.studio_settings["lighting_preset"] == "cyberpunk"
+    assert task.studio_settings["shadow_catcher"]["shadow_strength"] == pytest.approx(
+        0.9
+    )
+
+    cfg = service._build_render_engine_config(
+        task=task,
+        width=1080,
+        height=1440,
+        frame_count=12,
+    )
+    assert cfg.lighting_preset.value == "cyberpunk"
+    assert cfg.resolved_shadow_catcher().shadow_strength == pytest.approx(0.9)
 
 
 @pytest.mark.asyncio

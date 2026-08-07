@@ -32,6 +32,7 @@ class ThreeDVideoPersistencePort(Protocol):
         status: ThreeDVideoTaskStatus = ThreeDVideoTaskStatus.QUEUED,
         cost_coins: int = 0,
         idempotency_key: str | None = None,
+        studio_settings: dict | None = None,
     ) -> ThreeDVideoTaskView: ...
 
     async def find_idempotent_task(

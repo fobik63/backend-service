@@ -27,6 +27,26 @@ from app.workers.async_runtime import run_worker_async
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
+
+def _resolve_video_time_limits() -> tuple[int, int]:
+    """Prefer Settings env overrides; fall back to domain constants."""
+
+    try:
+        cfg = get_settings()
+        soft = int(cfg.three_d_video_soft_time_limit_seconds)
+        hard = int(cfg.three_d_video_hard_time_limit_seconds)
+        if soft > 0 and hard > soft:
+            return soft, hard
+    except Exception:
+        logger.debug("Using domain 360° video time limits", exc_info=True)
+    return (
+        RENDER_360_VIDEO_SOFT_TIME_LIMIT_SECONDS,
+        RENDER_360_VIDEO_HARD_TIME_LIMIT_SECONDS,
+    )
+
+
+_VIDEO_SOFT_TIME_LIMIT, _VIDEO_HARD_TIME_LIMIT = _resolve_video_time_limits()
+
 # Process-local pointer so SIGTERM / soft-kill handlers can fail+refund the
 # in-flight video job before the worker child exits.
 _active_video_lock = threading.Lock()
@@ -183,14 +203,14 @@ def poll_active_3d_tasks(self: Task) -> dict[str, Any]:
     base=ThreeDVideoRenderTaskBase,
     name="three_d.render_360_video_task",
     queue=CELERY_THREE_D_HEAVY_QUEUE,
-    soft_time_limit=RENDER_360_VIDEO_SOFT_TIME_LIMIT_SECONDS,
-    time_limit=RENDER_360_VIDEO_HARD_TIME_LIMIT_SECONDS,
+    soft_time_limit=_VIDEO_SOFT_TIME_LIMIT,
+    time_limit=_VIDEO_HARD_TIME_LIMIT,
 )
 def render_360_video_task(self: Task, video_task_id: str) -> dict[str, Any]:
     """Render a 360° orbital video with OOM-oriented isolation guards.
 
     * Queue: ``three_d_heavy`` (never shares concurrency with card generation).
-    * ``soft_time_limit=150`` / ``time_limit=180`` (hard).
+    * ``soft_time_limit`` / ``time_limit`` from Settings (defaults 150 / 180).
     * ``gc.collect()`` after every job to release mesh/FFmpeg buffers.
     * Redis progress every N frames: ``{"stage": "rendering_frames", "progress": 45}``.
     * On MemoryError / SoftTimeLimit / SIGTERM / worker crash → FAILED + refund.
@@ -228,7 +248,7 @@ def render_360_video_task(self: Task, video_task_id: str) -> dict[str, Any]:
                         video_task_id=UUID(video_task_id),
                         error_detail=(
                             "SoftTimeLimitExceeded: render exceeded "
-                            f"{RENDER_360_VIDEO_SOFT_TIME_LIMIT_SECONDS}s"
+                            f"{_VIDEO_SOFT_TIME_LIMIT}s"
                         ),
                     )
                 except TimeLimitExceeded:
@@ -240,7 +260,7 @@ def render_360_video_task(self: Task, video_task_id: str) -> dict[str, Any]:
                         video_task_id=UUID(video_task_id),
                         error_detail=(
                             "TimeLimitExceeded: render exceeded "
-                            f"{RENDER_360_VIDEO_HARD_TIME_LIMIT_SECONDS}s"
+                            f"{_VIDEO_HARD_TIME_LIMIT}s"
                         ),
                     )
                 logger.info(

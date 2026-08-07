@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -17,6 +18,7 @@ from sqlalchemy import (
     Text,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -351,6 +353,10 @@ class ThreeDVideoTask(Base):
         index=True,
     )
     idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    studio_settings: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     execution_time_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -388,6 +394,11 @@ class VideoAsset(Base):
     __tablename__ = "video_assets"
     __table_args__ = (
         Index("ix_video_assets_video_task_id", "video_task_id"),
+        Index(
+            "uq_video_assets_video_task_id",
+            "video_task_id",
+            unique=True,
+        ),
         Index("ix_video_assets_user_id", "user_id"),
         Index("ix_video_assets_user_video_task", "user_id", "video_task_id"),
     )

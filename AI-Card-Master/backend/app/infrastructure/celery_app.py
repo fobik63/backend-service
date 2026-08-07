@@ -44,6 +44,27 @@ celery_app = Celery(
 CELERY_DEFAULT_QUEUE = "default"
 CELERY_THREE_D_HEAVY_QUEUE = "three_d_heavy"
 
+
+def _three_d_video_soft_time_limit() -> int:
+    return int(
+        getattr(
+            settings,
+            "three_d_video_soft_time_limit_seconds",
+            150,
+        )
+    )
+
+
+def _three_d_video_hard_time_limit() -> int:
+    return int(
+        getattr(
+            settings,
+            "three_d_video_hard_time_limit_seconds",
+            180,
+        )
+    )
+
+
 celery_app.conf.update(
     task_serializer="json",
     result_serializer="json",
@@ -105,7 +126,11 @@ celery_app.conf.update(
         # Long-running 3D mesh / texture / video-render style jobs.
         "three_d.process_generation_task": {"queue": CELERY_THREE_D_HEAVY_QUEUE},
         "three_d.poll_active_tasks": {"queue": CELERY_THREE_D_HEAVY_QUEUE},
-        "three_d.render_360_video_task": {"queue": CELERY_THREE_D_HEAVY_QUEUE},
+        "three_d.render_360_video_task": {
+            "queue": CELERY_THREE_D_HEAVY_QUEUE,
+            "soft_time_limit": _three_d_video_soft_time_limit(),
+            "time_limit": _three_d_video_hard_time_limit(),
+        },
     },
     beat_schedule={
         "dispatch-generation-outbox": {
