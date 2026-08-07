@@ -25,3 +25,9 @@ gunicorn>=23.0.0
 pytest>=8.0.0
 pytest-asyncio>=0.24.0
 respx>=0.21.0
+numpy>=2.0.0
+trimesh>=4.4.0
+# Optional GL backends for headless orbital video (render_engine.py).
+# Soft-imported; software rasteriser is the CI / no-GPU fallback.
+pyvista>=0.44.0
+moderngl>=5.11.0

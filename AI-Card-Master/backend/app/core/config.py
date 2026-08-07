@@ -794,6 +794,90 @@ class Settings(BaseSettings):
         alias="THREE_D_GPU_RENTAL_COINS_PER_MINUTE",
         description="AI-coins charged per minute when a GPU rental session is stopped.",
     )
+    # Headless orbital video render (app/services/three_d/render_engine.py).
+    three_d_render_backend: Literal["auto", "pyvista", "moderngl", "software"] = Field(
+        default="auto",
+        alias="THREE_D_RENDER_BACKEND",
+        description="Offscreen raster backend. auto → pyvista/moderngl → software.",
+    )
+    three_d_render_width: int = Field(
+        default=1280,
+        ge=64,
+        le=4096,
+        alias="THREE_D_RENDER_WIDTH",
+    )
+    three_d_render_height: int = Field(
+        default=720,
+        ge=64,
+        le=4096,
+        alias="THREE_D_RENDER_HEIGHT",
+    )
+    three_d_render_fps: int = Field(
+        default=24,
+        ge=1,
+        le=120,
+        alias="THREE_D_RENDER_FPS",
+    )
+    three_d_render_frame_count: int = Field(
+        default=120,
+        ge=2,
+        le=3600,
+        alias="THREE_D_RENDER_FRAME_COUNT",
+        description="Default orbit length (120 frames ≈ 5 s @ 24 fps).",
+    )
+    three_d_render_fill_ratio: float = Field(
+        default=0.825,
+        ge=0.80,
+        le=0.85,
+        alias="THREE_D_RENDER_FILL_RATIO",
+        description="Target mesh screen coverage (80–85 %).",
+    )
+    three_d_render_preview_format: Literal["gif", "webp"] = Field(
+        default="webp",
+        alias="THREE_D_RENDER_PREVIEW_FORMAT",
+    )
+    three_d_ffmpeg_bin: str = Field(
+        default="ffmpeg",
+        alias="THREE_D_FFMPEG_BIN",
+    )
+    three_d_mesh_cache_dir: str = Field(
+        default="",
+        alias="THREE_D_MESH_CACHE_DIR",
+        description="Local mesh cache root; empty → OS temp dir.",
+    )
+    # Celery ``render_360_video_task`` (OOM-isolated three_d_heavy lane).
+    three_d_video_cost_coins: int = Field(
+        default=10,
+        ge=0,
+        alias="THREE_D_VIDEO_COST_COINS",
+        description="AI-coins frozen per 360° orbital video render job.",
+    )
+    three_d_video_progress_frame_interval: int = Field(
+        default=10,
+        ge=1,
+        le=120,
+        alias="THREE_D_VIDEO_PROGRESS_FRAME_INTERVAL",
+        description="Publish Redis progress every N rendered frames.",
+    )
+    three_d_video_soft_time_limit_seconds: int = Field(
+        default=150,
+        ge=30,
+        le=600,
+        alias="THREE_D_VIDEO_SOFT_TIME_LIMIT_SECONDS",
+    )
+    three_d_video_hard_time_limit_seconds: int = Field(
+        default=180,
+        ge=60,
+        le=900,
+        alias="THREE_D_VIDEO_HARD_TIME_LIMIT_SECONDS",
+    )
+    three_d_video_worker_concurrency: int = Field(
+        default=2,
+        ge=1,
+        le=8,
+        alias="THREE_D_VIDEO_WORKER_CONCURRENCY",
+        description="Max concurrent render jobs per worker-three-d process.",
+    )
 
     # Redis, Celery, and durable generation workflow.
     # Cache/broker Redis uses volatile-lru + mandatory TTLs in compose.
@@ -1860,6 +1944,24 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return value.strip().lower()
         return value
+
+    @field_validator("three_d_render_backend", "three_d_render_preview_format", mode="before")
+    @classmethod
+    def normalize_three_d_render_enums(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
+
+    @model_validator(mode="after")
+    def validate_three_d_video_time_limits(self) -> "Settings":
+        soft = int(self.three_d_video_soft_time_limit_seconds)
+        hard = int(self.three_d_video_hard_time_limit_seconds)
+        if soft >= hard:
+            raise ValueError(
+                "THREE_D_VIDEO_SOFT_TIME_LIMIT_SECONDS must be < "
+                "THREE_D_VIDEO_HARD_TIME_LIMIT_SECONDS."
+            )
+        return self
 
     @field_validator(
         "three_d_mock_duration_seconds",

@@ -388,9 +388,11 @@ app.include_router(midjourney_webhook_router)
 # 3D Generation — feature-toggled (ENABLE_THREE_D) so disabled envs stay lean.
 if settings.enable_three_d:
     from app.api.three_d import router as three_d_router
+    from app.api.three_d_video import router as three_d_video_router
     from app.api.three_d_ws import router as three_d_ws_router
 
     app.include_router(three_d_router)
+    app.include_router(three_d_video_router)
     app.include_router(three_d_ws_router)
 
 

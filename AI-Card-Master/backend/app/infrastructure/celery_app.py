@@ -105,6 +105,7 @@ celery_app.conf.update(
         # Long-running 3D mesh / texture / video-render style jobs.
         "three_d.process_generation_task": {"queue": CELERY_THREE_D_HEAVY_QUEUE},
         "three_d.poll_active_tasks": {"queue": CELERY_THREE_D_HEAVY_QUEUE},
+        "three_d.render_360_video_task": {"queue": CELERY_THREE_D_HEAVY_QUEUE},
     },
     beat_schedule={
         "dispatch-generation-outbox": {

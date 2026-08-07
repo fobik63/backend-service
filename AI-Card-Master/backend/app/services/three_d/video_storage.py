@@ -1,4 +1,4 @@
-"""S3/MinIO helper for heavy 3D binaries with correct Content-Type + presign."""
+"""S3/MinIO uploader for 360° video assets (MP4 / WebP / GIF) with Cache-Control."""
 
 from __future__ import annotations
 
@@ -7,30 +7,30 @@ from pathlib import Path
 from typing import Protocol
 from uuid import UUID
 
-from app.domain.three_d import (
-    THREE_D_CONTENT_TYPES,
-    THREE_D_FILE_EXTENSIONS,
-    ThreeDAssetFormat,
-    ThreeDPresignedUrls,
-    ThreeDUploadResult,
+from app.domain.three_d_video import (
+    VIDEO_ASSET_CACHE_CONTROL,
+    VIDEO_CONTENT_TYPES,
+    VIDEO_FILE_EXTENSIONS,
+    VideoAssetFormat,
+    VideoPresignedUrls,
+    VideoUploadResult,
 )
 from app.services.s3_storage import S3UploadResult, SelectelS3Storage, get_s3_storage
 
 logger = logging.getLogger(__name__)
 
-_KEY_PREFIX = "three-d"
+_KEY_PREFIX = "three-d-video"
 
-# Re-export domain DTOs for callers that import from this module.
 __all__ = [
-    "ThreeDObjectStorage",
-    "ThreeDPresignedUrls",
-    "ThreeDUploadResult",
-    "get_three_d_object_storage",
+    "VideoAssetUploader",
+    "VideoPresignedUrls",
+    "VideoUploadResult",
+    "get_video_asset_uploader",
 ]
 
 
-class _ThreeDS3Client(Protocol):
-    """Minimal S3 surface used by ThreeDObjectStorage (testable)."""
+class _VideoS3Client(Protocol):
+    """Minimal S3 surface used by VideoAssetUploader (testable)."""
 
     async def upload_bytes(
         self,
@@ -39,6 +39,7 @@ class _ThreeDS3Client(Protocol):
         data: bytes,
         content_type: str,
         presign: bool = True,
+        cache_control: str | None = None,
     ) -> S3UploadResult: ...
 
     async def upload_file(
@@ -48,6 +49,7 @@ class _ThreeDS3Client(Protocol):
         file_path: str | Path,
         content_type: str,
         presign: bool = True,
+        cache_control: str | None = None,
     ) -> S3UploadResult: ...
 
     async def generate_presigned_url(
@@ -59,63 +61,62 @@ class _ThreeDS3Client(Protocol):
 
     async def delete_object(self, *, object_key: str) -> None: ...
 
-    async def download_bytes(self, *, object_key: str, max_bytes: int) -> bytes: ...
 
+class VideoAssetUploader:
+    """Async uploader for orbital video binaries with long-lived Cache-Control.
 
-class ThreeDObjectStorage:
-    """Upload/download helper specialized for 3D mesh + texture binaries.
-
-    Stores objects under ``three-d/{user_id}/{task_id}/…`` with MIME types:
-    - GLB  → ``model/gltf-binary``
-    - USDZ → ``model/vnd.usdz+zip``
-    - OBJ  → ``model/obj``
-    - PNG  → ``image/png``
+    Objects live under ``three-d-video/{user_id}/{video_task_id}/…`` with:
+    - MP4  → ``video/mp4``
+    - WebP → ``image/webp``
+    - GIF  → ``image/gif``
+    - ``Cache-Control: public, max-age=31536000, immutable``
     """
 
-    def __init__(self, client: _ThreeDS3Client | None = None) -> None:
-        self._client: _ThreeDS3Client = client or get_s3_storage()
+    def __init__(self, client: _VideoS3Client | None = None) -> None:
+        self._client: _VideoS3Client = client or get_s3_storage()
 
     @staticmethod
-    def content_type_for(asset_format: ThreeDAssetFormat) -> str:
-        return THREE_D_CONTENT_TYPES[asset_format]
+    def content_type_for(asset_format: VideoAssetFormat) -> str:
+        return VIDEO_CONTENT_TYPES[asset_format]
 
     @staticmethod
     def build_object_key(
         *,
         user_id: UUID,
-        task_id: UUID,
-        asset_format: ThreeDAssetFormat,
+        video_task_id: UUID,
+        asset_format: VideoAssetFormat,
         filename: str | None = None,
     ) -> str:
-        """Build a deterministic, namespaced object key for a 3D asset."""
+        """Build a deterministic, namespaced object key for a video asset."""
 
-        ext = THREE_D_FILE_EXTENSIONS[asset_format]
+        ext = VIDEO_FILE_EXTENSIONS[asset_format]
         if filename is not None and filename.strip():
             stem = Path(filename.strip()).stem or asset_format.value
             safe_stem = "".join(
                 ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in stem
             ).strip("-") or asset_format.value
-            return f"{_KEY_PREFIX}/{user_id}/{task_id}/{safe_stem}.{ext}"
-        return f"{_KEY_PREFIX}/{user_id}/{task_id}/{asset_format.value}.{ext}"
+            return f"{_KEY_PREFIX}/{user_id}/{video_task_id}/{safe_stem}.{ext}"
+        return f"{_KEY_PREFIX}/{user_id}/{video_task_id}/{asset_format.value}.{ext}"
 
     async def upload_bytes(
         self,
         *,
         user_id: UUID,
-        task_id: UUID,
-        asset_format: ThreeDAssetFormat,
+        video_task_id: UUID,
+        asset_format: VideoAssetFormat,
         data: bytes,
         filename: str | None = None,
         presign: bool = True,
-    ) -> ThreeDUploadResult:
-        """Upload an in-memory 3D binary with the correct Content-Type."""
+        cache_control: str = VIDEO_ASSET_CACHE_CONTROL,
+    ) -> VideoUploadResult:
+        """Upload an in-memory video/preview binary with correct MIME + cache."""
 
         if not data:
-            raise ValueError("Cannot upload empty 3D payload.")
+            raise ValueError("Cannot upload empty video payload.")
         content_type = self.content_type_for(asset_format)
         object_key = self.build_object_key(
             user_id=user_id,
-            task_id=task_id,
+            video_task_id=video_task_id,
             asset_format=asset_format,
             filename=filename,
         )
@@ -124,15 +125,17 @@ class ThreeDObjectStorage:
             data=data,
             content_type=content_type,
             presign=presign,
+            cache_control=cache_control,
         )
         logger.info(
-            "Uploaded 3D %s (%s bytes, %s) → %s",
+            "Uploaded video %s (%s bytes, %s, cache=%s) → %s",
             asset_format.value,
             len(data),
             content_type,
+            cache_control,
             object_key,
         )
-        return ThreeDUploadResult(
+        return VideoUploadResult(
             format=asset_format,
             object_key=uploaded.object_key,
             content_type=content_type,
@@ -145,24 +148,25 @@ class ThreeDObjectStorage:
         self,
         *,
         user_id: UUID,
-        task_id: UUID,
-        asset_format: ThreeDAssetFormat,
+        video_task_id: UUID,
+        asset_format: VideoAssetFormat,
         file_path: str | Path,
         filename: str | None = None,
         presign: bool = True,
-    ) -> ThreeDUploadResult:
-        """Multipart-upload a large local 3D file without loading it into RAM."""
+        cache_control: str = VIDEO_ASSET_CACHE_CONTROL,
+    ) -> VideoUploadResult:
+        """Multipart-upload a large local video file without loading it into RAM."""
 
         path = Path(file_path)
         if not path.is_file():
             raise ValueError(f"Upload path is not a file: {path}")
         size = path.stat().st_size
         if size <= 0:
-            raise ValueError("Cannot upload empty 3D file.")
+            raise ValueError("Cannot upload empty video file.")
         content_type = self.content_type_for(asset_format)
         object_key = self.build_object_key(
             user_id=user_id,
-            task_id=task_id,
+            video_task_id=video_task_id,
             asset_format=asset_format,
             filename=filename or path.name,
         )
@@ -171,15 +175,17 @@ class ThreeDObjectStorage:
             file_path=path,
             content_type=content_type,
             presign=presign,
+            cache_control=cache_control,
         )
         logger.info(
-            "Uploaded 3D file %s (%s bytes, %s) → %s",
+            "Uploaded video file %s (%s bytes, %s, cache=%s) → %s",
             asset_format.value,
             size,
             content_type,
+            cache_control,
             object_key,
         )
-        return ThreeDUploadResult(
+        return VideoUploadResult(
             format=asset_format,
             object_key=uploaded.object_key,
             content_type=content_type,
@@ -194,7 +200,7 @@ class ThreeDObjectStorage:
         *,
         expires_in: int | None = None,
     ) -> str:
-        """Create a temporary GET URL for a private 3D object."""
+        """Create a temporary GET URL for a private video object."""
 
         if not object_key or not object_key.strip():
             raise ValueError("object_key must not be empty.")
@@ -206,33 +212,28 @@ class ThreeDObjectStorage:
     async def presign_asset_urls(
         self,
         *,
-        file_glb_url: str | None = None,
-        file_usdz_url: str | None = None,
-        file_obj_url: str | None = None,
-        preview_png_url: str | None = None,
-        thumbnail_url: str | None = None,
+        file_mp4_url: str | None = None,
+        file_webp_url: str | None = None,
+        file_gif_url: str | None = None,
         expires_in: int | None = None,
-    ) -> ThreeDPresignedUrls:
-        """Presign every non-empty asset key for frontend download/AR viewers."""
+    ) -> VideoPresignedUrls:
+        """Presign every non-empty asset key for safe frontend download."""
 
         async def _maybe(key: str | None) -> str | None:
             if key is None or not key.strip():
                 return None
-            # External CDN URLs (provider fixtures) are returned as-is.
             if key.startswith("http://") or key.startswith("https://"):
                 return key
             return await self.generate_presigned_url(key, expires_in=expires_in)
 
-        return ThreeDPresignedUrls(
-            glb=await _maybe(file_glb_url),
-            usdz=await _maybe(file_usdz_url),
-            obj=await _maybe(file_obj_url),
-            preview_png=await _maybe(preview_png_url),
-            thumbnail=await _maybe(thumbnail_url),
+        return VideoPresignedUrls(
+            mp4=await _maybe(file_mp4_url),
+            webp=await _maybe(file_webp_url),
+            gif=await _maybe(file_gif_url),
         )
 
     async def delete_object(self, object_key: str) -> None:
-        """Idempotently delete one stored 3D object (rollback / cleanup)."""
+        """Idempotently delete one stored video object (rollback / cleanup)."""
 
         if not object_key or not object_key.strip():
             return
@@ -240,22 +241,10 @@ class ThreeDObjectStorage:
             return
         await self._client.delete_object(object_key=object_key.strip())
 
-    async def download_bytes(self, *, object_key: str, max_bytes: int) -> bytes:
-        """Download a mesh/texture binary with a hard size cap (render cache)."""
 
-        if not object_key or not object_key.strip():
-            raise ValueError("object_key must not be empty.")
-        if max_bytes <= 0:
-            raise ValueError("max_bytes must be positive.")
-        download = getattr(self._client, "download_bytes", None)
-        if not callable(download):
-            raise TypeError("Underlying S3 client does not support download_bytes.")
-        return await download(object_key=object_key.strip(), max_bytes=max_bytes)
-
-
-def get_three_d_object_storage(
+def get_video_asset_uploader(
     client: SelectelS3Storage | None = None,
-) -> ThreeDObjectStorage:
-    """Factory for the 3D-specialized object storage helper."""
+) -> VideoAssetUploader:
+    """Factory for the 360° video asset uploader."""
 
-    return ThreeDObjectStorage(client=client)
+    return VideoAssetUploader(client=client)

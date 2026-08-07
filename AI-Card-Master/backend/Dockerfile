@@ -16,7 +16,18 @@ RUN apt-get update \
         zlib1g-dev \
         postgresql-client \
         redis-tools \
+        ffmpeg \
+        libgl1 \
+        libglib2.0-0 \
+        libegl1 \
+        libgles2 \
+        libosmesa6 \
     && rm -rf /var/lib/apt/lists/*
+
+# Prefer EGL in GPU workers; OSMesa is the CPU fallback for headless render.
+ENV PYVISTA_OFF_SCREEN=true \
+    MESA_GL_VERSION_OVERRIDE=3.3 \
+    THREE_D_GL_BACKEND=
 
 COPY requirements.txt .
 RUN pip install -r requirements.txt gunicorn>=23.0.0

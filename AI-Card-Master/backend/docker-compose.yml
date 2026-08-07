@@ -201,7 +201,7 @@ services:
         "-Q",
         "three_d_heavy",
         "--concurrency",
-        "${CELERY_THREE_D_CONCURRENCY:-1}",
+        "${CELERY_THREE_D_CONCURRENCY:-2}",
       ]
 
   beat:

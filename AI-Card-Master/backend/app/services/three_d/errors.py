@@ -10,3 +10,29 @@ class ThreeDServiceUnavailableError(RuntimeError):
 
     def __init__(self, message: str = THREE_D_UNAVAILABLE_MESSAGE) -> None:
         super().__init__(message or THREE_D_UNAVAILABLE_MESSAGE)
+
+
+class RenderEngineError(RuntimeError):
+    """Base error for the autonomous 3D render pipeline."""
+
+
+class MeshLoadError(RenderEngineError):
+    """Mesh bytes / path could not be decoded."""
+
+
+class HeadlessGLError(RenderEngineError):
+    """No usable offscreen GL context could be initialised."""
+
+
+class FFmpegEncodeError(RenderEngineError):
+    """FFmpeg subprocess failed or produced an empty container."""
+
+
+__all__ = [
+    "FFmpegEncodeError",
+    "HeadlessGLError",
+    "MeshLoadError",
+    "RenderEngineError",
+    "THREE_D_UNAVAILABLE_MESSAGE",
+    "ThreeDServiceUnavailableError",
+]

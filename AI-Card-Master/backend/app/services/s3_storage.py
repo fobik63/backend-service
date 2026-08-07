@@ -79,6 +79,7 @@ class SelectelS3Storage:
         data: bytes,
         content_type: str,
         presign: bool = True,
+        cache_control: str | None = None,
     ) -> S3UploadResult:
         """Upload bytes to the configured bucket and optionally return a presigned URL."""
 
@@ -88,12 +89,15 @@ class SelectelS3Storage:
             raise S3StorageError("Cannot upload empty payload.")
 
         def _put() -> dict[str, Any]:
-            return self._client.put_object(
-                Bucket=self._bucket,
-                Key=object_key,
-                Body=data,
-                ContentType=content_type,
-            )
+            kwargs: dict[str, Any] = {
+                "Bucket": self._bucket,
+                "Key": object_key,
+                "Body": data,
+                "ContentType": content_type,
+            }
+            if cache_control is not None and cache_control.strip():
+                kwargs["CacheControl"] = cache_control.strip()
+            return self._client.put_object(**kwargs)
 
         try:
             response = await asyncio.to_thread(_put)
@@ -130,6 +134,7 @@ class SelectelS3Storage:
         file_path: str | Path,
         content_type: str,
         presign: bool = True,
+        cache_control: str | None = None,
     ) -> S3UploadResult:
         """Multipart-upload a local file without loading the whole payload into RAM."""
 
@@ -148,13 +153,16 @@ class SelectelS3Storage:
             max_concurrency=4,
             use_threads=True,
         )
+        extra_args: dict[str, str] = {"ContentType": content_type}
+        if cache_control is not None and cache_control.strip():
+            extra_args["CacheControl"] = cache_control.strip()
 
         def _upload() -> dict[str, Any]:
             self._client.upload_file(
                 Filename=str(path),
                 Bucket=self._bucket,
                 Key=object_key,
-                ExtraArgs={"ContentType": content_type},
+                ExtraArgs=extra_args,
                 Config=transfer_config,
             )
             return self._client.head_object(Bucket=self._bucket, Key=object_key)
