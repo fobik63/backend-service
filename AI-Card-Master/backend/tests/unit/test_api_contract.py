@@ -143,6 +143,8 @@ def test_liveness_and_dependency_readiness_are_separate() -> None:
 
     assert "/health/live" in paths
     assert "/health/ready" in paths
+    assert "/healthz" in paths
+    assert "/readyz" in paths
 
 
 def test_model_vto_task_preserves_garment_and_typage_prompt() -> None:

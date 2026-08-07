@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 _JSON_METHODS = frozenset({"POST", "PUT", "PATCH"})
 _SKIP_PREFIXES = (
     "/health",
+    "/readyz",
     "/docs",
     "/redoc",
     "/openapi.json",

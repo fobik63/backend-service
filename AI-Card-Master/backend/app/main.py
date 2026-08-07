@@ -12,8 +12,10 @@ Image upload lives in app.api.images (same path: POST /api/v1/images/upload).
 
 from __future__ import annotations
 
+import json
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncGenerator
 
 from fastapi import FastAPI, HTTPException, Request, Response, status
@@ -40,6 +42,7 @@ from app.api import (
     visual_audit_router,
     exports_router,
     generations_router,
+    health_router,
     images_router,
     legal_router,
     marketplace_bridge_router,
@@ -112,6 +115,22 @@ class ReadinessResponse(BaseModel):
     dependencies: dict[str, bool]
 
 
+_BACKEND_ROOT = Path(__file__).resolve().parents[1]
+_OPENAPI_EXPORT_PATH = _BACKEND_ROOT / "docs" / "openapi.json"
+
+
+def export_openapi_schema(application: FastAPI, destination: Path) -> Path:
+    """Write the live OpenAPI document to disk for frontend / SDK sync."""
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    schema = application.openapi()
+    destination.write_text(
+        json.dumps(schema, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return destination
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
     """Initialize and validate runtime resources.
@@ -156,6 +175,19 @@ app = FastAPI(
     openapi_url="/openapi.json" if _docs_enabled else None,
 )
 
+
+@app.on_event("startup")
+async def export_openapi_on_startup() -> None:
+    """Persist ``docs/openapi.json`` automatically when ``APP_ENV=development``."""
+
+    if settings.app_env != "development":
+        return
+    try:
+        path = export_openapi_schema(app, _OPENAPI_EXPORT_PATH)
+        logger.info("OpenAPI schema exported to %s", path)
+    except OSError:
+        logger.exception("Failed to export OpenAPI schema on startup")
+
 # Cascading slowapi rate limits (Redis). Must be attached before middleware.
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
@@ -189,6 +221,8 @@ app.add_middleware(SlowAPIASGIMiddleware)
 
 
 # Register API routers.
+# Isolated infra probes (/healthz, /readyz) — outside /api/v1.
+app.include_router(health_router)
 app.include_router(admin_router)
 app.include_router(admin_security_ws_router)
 app.include_router(auth_router)
@@ -305,10 +339,12 @@ async def health() -> HealthResponse:
 
 
 @app.get("/health/live", response_model=HealthResponse, tags=["system"])
-@app.get("/healthz", response_model=HealthResponse, tags=["system"])
 @limiter.exempt
 async def liveness() -> HealthResponse:
-    """Process-only liveness; orchestration should restart on failure."""
+    """Process-only liveness; orchestration should restart on failure.
+
+    Prefer ``GET /healthz`` for Kubernetes-style probes (minimal JSON body).
+    """
 
     return HealthResponse(status="ok", detail="API process is alive.")
 

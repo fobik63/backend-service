@@ -15,6 +15,7 @@ from app.api.claude_analyses import router as claude_analyses_router
 from app.api.claude_reasoning import router as claude_reasoning_router
 from app.api.exports import router as exports_router
 from app.api.generations import router as generations_router
+from app.api.health import router as health_router
 from app.api.images import router as images_router
 from app.api.legal import router as legal_router
 from app.api.marketplace_bridge import router as marketplace_bridge_router
@@ -45,6 +46,7 @@ __all__ = [
     "claude_reasoning_router",
     "exports_router",
     "generations_router",
+    "health_router",
     "images_router",
     "legal_router",
     "marketplace_bridge_router",

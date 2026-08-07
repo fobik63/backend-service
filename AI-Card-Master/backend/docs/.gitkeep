@@ -1,0 +1,3 @@
+# Generated artifacts for frontend / API tooling.
+# `openapi.json` is written automatically on FastAPI startup when APP_ENV=development.
+# `postman_auth_collection.json` is produced by `python -m scripts.export_postman`.

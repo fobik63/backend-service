@@ -656,6 +656,29 @@ class Settings(BaseSettings):
     face_fix_max_retries: int = Field(default=2, alias="FACE_FIX_MAX_RETRIES")
     face_fix_cost_usd: Decimal = Field(default=Decimal("0"), alias="FACE_FIX_COST_USD")
 
+    # 3D generation engine (Adapter Pattern — app/services/three_d).
+    # Default "mock" keeps local/dev and CI free of Meshy/Tripo/RunPod deps.
+    three_d_provider: Literal["mock", "meshy", "tripo", "runpod"] = Field(
+        default="mock",
+        alias="THREE_D_PROVIDER",
+    )
+    three_d_mock_duration_seconds: float = Field(
+        default=2.0,
+        alias="THREE_D_MOCK_DURATION_SECONDS",
+        description="Total simulated GPU/API latency for MockThreeDEngineAdapter.",
+    )
+    three_d_mock_queue_delay_seconds: float = Field(
+        default=0.05,
+        alias="THREE_D_MOCK_QUEUE_DELAY_SECONDS",
+        description="Initial QUEUED dwell before PROCESSING in the mock adapter.",
+    )
+    three_d_mock_ticks_per_stage: int = Field(
+        default=3,
+        ge=1,
+        alias="THREE_D_MOCK_TICKS_PER_STAGE",
+        description="Progress ticks per mock stage (drafting_mesh / textures / baking).",
+    )
+
     # Redis, Celery, and durable generation workflow.
     # Cache/broker Redis uses volatile-lru + mandatory TTLs in compose.
     # Security Redis (rate limits, bans, CAPTCHA, DMS) uses noeviction.
@@ -1706,6 +1729,23 @@ class Settings(BaseSettings):
         if normalized not in {"auto", "turnstile", "recaptcha"}:
             raise ValueError("CAPTCHA_PROVIDER must be auto, turnstile, or recaptcha.")
         return normalized
+
+    @field_validator("three_d_provider", mode="before")
+    @classmethod
+    def normalize_three_d_provider(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
+
+    @field_validator(
+        "three_d_mock_duration_seconds",
+        "three_d_mock_queue_delay_seconds",
+    )
+    @classmethod
+    def validate_three_d_mock_delays(cls, value: float) -> float:
+        if value < 0:
+            raise ValueError("THREE_D mock delay settings must be >= 0.")
+        return value
 
     @field_validator("claude_47_max_retries", "yookassa_max_retries")
     @classmethod

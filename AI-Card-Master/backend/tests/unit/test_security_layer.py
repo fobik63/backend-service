@@ -425,6 +425,9 @@ def test_path_helpers_classify_health_and_protected() -> None:
 
     assert is_public_healthcheck_path("/health/ready") is True
     assert should_fail_closed_on_redis("/health/ready") is False
+    assert is_public_healthcheck_path("/healthz") is True
+    assert is_public_healthcheck_path("/readyz") is True
+    assert should_fail_closed_on_redis("/readyz") is False
     assert is_protected_security_path("/api/v1/admin/stats") is True
     assert is_protected_security_path("/api/v1/generations") is True
     assert should_fail_closed_on_redis("/api/v1/payments") is True
