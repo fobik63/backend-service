@@ -1,4 +1,4 @@
-"""Rembg / ONNX background removal engine."""
+"""Rembg / ONNX background removal engine with alpha matting + edge cleanup."""
 
 from __future__ import annotations
 
@@ -10,10 +10,17 @@ from typing import Final
 from PIL import Image
 
 from app.services.bg_removal.dto import BgRemovalResultDTO
+from app.services.bg_removal.postprocess import refine_cutout_rgba
 
-RemoverFn = Callable[[bytes], bytes]
+RemoverFn = Callable[..., bytes]
 
 MAX_IMAGE_PIXELS: Final[int] = 40_000_000
+
+# rembg alpha-matting knobs (soft edge / hair / fabric silhouettes).
+ALPHA_MATTING: Final[bool] = True
+ALPHA_MATTING_FOREGROUND_THRESHOLD: Final[int] = 240
+ALPHA_MATTING_BACKGROUND_THRESHOLD: Final[int] = 10
+ALPHA_MATTING_ERODE_SIZE: Final[int] = 10
 
 
 class BackgroundRemovalEngineError(ValueError):
@@ -21,10 +28,12 @@ class BackgroundRemovalEngineError(ValueError):
 
 
 def remove_background(image_bytes: bytes) -> bytes:
-    """Remove the product background and return a PNG with alpha.
+    """Remove the product background and return a cleaned PNG with alpha.
 
-    Uses the rembg ONNX session (u2net by default). Pure sync helper so callers
-    can run it via ``asyncio.to_thread``.
+    Pipeline:
+    1. rembg ONNX (u2net) with alpha matting for soft contours
+    2. morphological alpha erosion + light edge blur
+    3. defringe — replace fringe RGB with nearest solid product colours
     """
 
     payload = bytes(image_bytes or b"")
@@ -54,7 +63,13 @@ def remove_background(image_bytes: bytes) -> bytes:
         ) from exc
 
     try:
-        output = rembg_remove(payload)
+        output = rembg_remove(
+            payload,
+            alpha_matting=ALPHA_MATTING,
+            alpha_matting_foreground_threshold=ALPHA_MATTING_FOREGROUND_THRESHOLD,
+            alpha_matting_background_threshold=ALPHA_MATTING_BACKGROUND_THRESHOLD,
+            alpha_matting_erode_size=ALPHA_MATTING_ERODE_SIZE,
+        )
     except Exception as exc:
         raise BackgroundRemovalEngineError(
             f"Background removal failed: {exc}"
@@ -63,14 +78,15 @@ def remove_background(image_bytes: bytes) -> bytes:
     if not output:
         raise BackgroundRemovalEngineError("rembg returned an empty result.")
 
-    # Ensure we always hand out a real PNG with an alpha channel.
     try:
         with Image.open(io.BytesIO(output)) as cutout:
             cutout.load()
-            rgba = cutout.convert("RGBA")
+            cleaned = refine_cutout_rgba(cutout.convert("RGBA"))
             buffer = io.BytesIO()
-            rgba.save(buffer, format="PNG")
+            cleaned.save(buffer, format="PNG")
             return buffer.getvalue()
+    except BackgroundRemovalEngineError:
+        raise
     except Exception as exc:
         raise BackgroundRemovalEngineError(
             f"Failed to encode cutout PNG: {exc}"

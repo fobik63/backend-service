@@ -10,12 +10,16 @@ from uuid import uuid4
 import pytest
 from PIL import Image, ImageDraw
 
+import numpy as np
+
 from app.services.bg_removal import (
     BG_REMOVAL_COST_COINS,
     BackgroundRemovalEngine,
     BackgroundRemovalEngineError,
     BackgroundRemovalService,
     BackgroundRemovalValidationError,
+    defringe_edge_colors,
+    refine_alpha_edges,
     remove_background,
 )
 from app.services.billing_service import BillingValidationError
@@ -38,7 +42,7 @@ def _product_png(*, size: int = 64, with_bg: bool = True) -> bytes:
     return buffer.getvalue()
 
 
-def _fake_remover(image_bytes: bytes) -> bytes:
+def _fake_remover(image_bytes: bytes, **_: object) -> bytes:
     """Deterministic stand-in for rembg: keep non-white pixels, add alpha."""
 
     with Image.open(io.BytesIO(image_bytes)) as src:
@@ -79,6 +83,36 @@ def test_remove_background_returns_png_with_alpha() -> None:
 def test_remove_background_rejects_empty() -> None:
     with pytest.raises(BackgroundRemovalEngineError, match="empty"):
         remove_background(b"")
+
+
+def test_refine_alpha_edges_erodes_perimeter_junk() -> None:
+    rgba = np.zeros((32, 32, 4), dtype=np.uint8)
+    rgba[8:24, 8:24] = (200, 200, 200, 255)
+    # White dust speck on the silhouette edge.
+    rgba[8, 15] = (255, 255, 255, 255)
+    cleaned = refine_alpha_edges(rgba, erode_px=2, edge_blur_sigma=0.5)
+    assert cleaned[8, 15, 3] < 255
+    # Interior stays opaque.
+    assert cleaned[16, 16, 3] == 255
+
+
+def test_defringe_replaces_fringe_with_interior_color() -> None:
+    rgba = np.zeros((24, 24, 4), dtype=np.uint8)
+    # Solid blue product core.
+    rgba[6:18, 6:18] = (20, 80, 200, 255)
+    # Semi-transparent fringe contaminated with white background.
+    rgba[5, 6:18] = (255, 255, 255, 120)
+    # Opaque rim also contaminated (common rembg halo).
+    rgba[6, 6:18] = (250, 250, 250, 255)
+    cleaned = defringe_edge_colors(
+        rgba, solid_alpha=250, interior_inset_px=2, max_radius=6
+    )
+    fringe_rgb = cleaned[5, 12, :3]
+    rim_rgb = cleaned[6, 12, :3]
+    assert int(fringe_rgb[2]) > int(fringe_rgb[0])  # bluish, not white
+    assert int(rim_rgb[2]) > int(rim_rgb[0])
+    assert cleaned[5, 12, 3] == 120
+    assert cleaned[16, 16, 3] == 255
 
 
 @pytest.mark.asyncio

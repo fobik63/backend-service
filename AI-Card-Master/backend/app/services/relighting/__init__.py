@@ -8,6 +8,7 @@ from app.services.relighting.dto import (
     RelightingJobResultDTO,
     RelightingPresetName,
     ShadowParamsDTO,
+    StudioLightDTO,
 )
 from app.services.relighting.engine import RelightingEngineError, RelightingEngineService
 from app.services.relighting.presets import LIGHTING_PRESETS, get_lighting_preset
@@ -22,6 +23,12 @@ from app.services.relighting.shadows import (
     ShadowGeneratorError,
     build_shadow_params,
     generate_shadow_layer,
+)
+from app.services.relighting.softbox import (
+    build_softbox_shadow_params,
+    parse_studio_light_instruction,
+    softbox_direction,
+    softbox_to_lighting_preset,
 )
 
 __all__ = [
@@ -41,7 +48,12 @@ __all__ = [
     "RelightingValidationError",
     "ShadowGeneratorError",
     "ShadowParamsDTO",
+    "StudioLightDTO",
     "build_shadow_params",
+    "build_softbox_shadow_params",
     "generate_shadow_layer",
     "get_lighting_preset",
+    "parse_studio_light_instruction",
+    "softbox_direction",
+    "softbox_to_lighting_preset",
 ]

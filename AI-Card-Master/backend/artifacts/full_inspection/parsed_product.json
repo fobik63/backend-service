@@ -1,0 +1,110 @@
+{
+  "inspected_at": "2026-08-08T18:24:21.233796+00:00",
+  "source": "fixture_fallback",
+  "warnings": [
+    "live stock parse failed: ParserHttpError: HTTP 403 from https://card.wb.ru/cards/v1/detail: <html>\r\n<head><title>403 Forbidden</title></head>\r\n<body>\r\n<center><h1>403 Forbidden</h1></center>\r\n<hr><center>Angie</center>\r\n</body>\r\n</html>\r\n",
+    "Used local fixture through stock-parser mappers (marketplace API unavailable from this network)."
+  ],
+  "marketplace": "wildberries",
+  "sku": "146132199",
+  "product_url": "https://www.wildberries.ru/catalog/146132199/detail.aspx",
+  "title": "Кроссовки мужские для бега Air Flex Pro",
+  "price_kopecks": 899000,
+  "price_before_discount_kopecks": 1499000,
+  "currency": "RUB",
+  "total_stock": 27,
+  "stocks": [
+    {
+      "warehouse_id": "507",
+      "quantity": 12,
+      "warehouse_name": null
+    },
+    {
+      "warehouse_id": "117986",
+      "quantity": 4,
+      "warehouse_name": null
+    },
+    {
+      "warehouse_id": "120762",
+      "quantity": 0,
+      "warehouse_name": null
+    },
+    {
+      "warehouse_id": "507",
+      "quantity": 3,
+      "warehouse_name": null
+    },
+    {
+      "warehouse_id": "2737",
+      "quantity": 8,
+      "warehouse_name": null
+    }
+  ],
+  "description": "Тестовая карточка WB: лёгкие кроссовки для бега и города.",
+  "characteristics": [
+    {
+      "name": "Бренд",
+      "value": "Air Flex"
+    },
+    {
+      "name": "Цвет",
+      "value": "чёрный"
+    },
+    {
+      "name": "Материал верха",
+      "value": "текстиль / синтетика"
+    },
+    {
+      "name": "Сезон",
+      "value": "демисезон"
+    },
+    {
+      "name": "Пол",
+      "value": "Мужской"
+    }
+  ],
+  "deep_title": null,
+  "raw_payload": {
+    "data": {
+      "products": [
+        {
+          "id": 146132199,
+          "name": "Кроссовки мужские для бега Air Flex Pro",
+          "salePriceU": 899000,
+          "priceU": 1499000,
+          "sizes": [
+            {
+              "stocks": [
+                {
+                  "wh": 507,
+                  "qty": 12
+                },
+                {
+                  "wh": 117986,
+                  "qty": 4
+                },
+                {
+                  "wh": 120762,
+                  "qty": 0
+                }
+              ]
+            },
+            {
+              "stocks": [
+                {
+                  "wh": 507,
+                  "qty": 3
+                },
+                {
+                  "wh": 2737,
+                  "qty": 8
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "_fixture": true
+  }
+}

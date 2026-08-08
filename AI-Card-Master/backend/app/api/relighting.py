@@ -21,6 +21,7 @@ from app.services.relighting import (
     RelightingServiceError,
     RelightingUpstreamError,
     RelightingValidationError,
+    StudioLightDTO,
 )
 from app.services.s3_storage import S3StorageConfigurationError, S3StorageError
 
@@ -55,11 +56,37 @@ class RelightProcessRequest(StrictAPIModel):
     )
 
 
+class RelightCustomRequest(StrictAPIModel):
+    image_url: str = Field(
+        ...,
+        min_length=8,
+        max_length=2048,
+        description="Public HTTP(S) URL of the product image",
+    )
+    studio_light: StudioLightDTO = Field(
+        ...,
+        description=(
+            "Parametric softbox: light_angle, light_elevation, "
+            "color_temp_k, intensity, softbox_diffusion"
+        ),
+    )
+
+
+class RelightParseInstructionRequest(StrictAPIModel):
+    instruction: str = Field(
+        ...,
+        min_length=2,
+        max_length=512,
+        description='Natural-language cue, e.g. "мягкий тёплый свет слева сверху"',
+    )
+
+
 class RelightProcessResponse(StrictAPIModel):
     success: bool = True
     result_url: str = Field(..., min_length=1)
     object_key: str = Field(..., min_length=1)
-    preset_name: RelightingPresetName
+    preset_name: RelightingPresetName | None = None
+    studio_light: StudioLightDTO | None = None
     coins_charged: int = Field(..., ge=0)
     new_balance: int = Field(..., ge=0)
     width: int = Field(..., gt=0)
@@ -68,10 +95,51 @@ class RelightProcessResponse(StrictAPIModel):
     cost_coins: int = Field(default=RELIGHTING_COST_COINS, ge=0)
 
 
+class RelightParseInstructionResponse(StrictAPIModel):
+    success: bool = True
+    studio_light: StudioLightDTO
+    instruction: str = Field(..., min_length=1)
+
+
 def _get_relighting_service(
     db_session: AsyncSession = Depends(get_db_session),
 ) -> RelightingService:
     return RelightingService(db_session)
+
+
+def _map_relighting_http_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, RelightingValidationError):
+        return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    if isinstance(exc, BillingValidationError):
+        return HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail=str(exc),
+        )
+    if isinstance(exc, BillingNotFoundError):
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    if isinstance(exc, RelightingEngineError):
+        return HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        )
+    if isinstance(exc, S3StorageConfigurationError):
+        return HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Object storage is not configured.",
+        )
+    if isinstance(exc, (RelightingUpstreamError, S3StorageError)):
+        logger.exception("Relighting upstream failure")
+        return HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        )
+    if isinstance(exc, RelightingServiceError):
+        logger.exception("Relighting service failure")
+        return HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        )
+    raise exc
 
 
 @router.post(
@@ -109,55 +177,104 @@ async def process_relighting(
             shadow_intensity=body.shadow_intensity,
             idempotency_key=cleaned_key,
         )
-    except RelightingValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
-    except BillingValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail=str(exc),
-        ) from exc
-    except BillingNotFoundError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(exc),
-        ) from exc
-    except RelightingEngineError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(exc),
-        ) from exc
-    except S3StorageConfigurationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Object storage is not configured.",
-        ) from exc
-    except (RelightingUpstreamError, S3StorageError) as exc:
-        logger.exception("Relighting upstream failure")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(exc),
-        ) from exc
-    except RelightingServiceError as exc:
-        logger.exception("Relighting service failure")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(exc),
-        ) from exc
+    except Exception as exc:
+        mapped = _map_relighting_http_error(exc)
+        raise mapped from exc
 
     return RelightProcessResponse(
         success=True,
         result_url=result.result_url,
         object_key=result.object_key,
         preset_name=result.preset_name,
+        studio_light=result.studio_light,
         coins_charged=result.coins_charged,
         new_balance=result.new_balance,
         width=result.width,
         height=result.height,
         content_type=result.content_type,
         cost_coins=RELIGHTING_COST_COINS,
+    )
+
+
+@router.post(
+    "/custom",
+    response_model=RelightProcessResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Relight with a parametric softbox (StudioLightDTO)",
+    description=(
+        "Downloads ``image_url``, applies a parametric softbox "
+        "(angle / elevation / color temperature / intensity / diffusion) with a "
+        "soft contact shadow opposite the key, uploads PNG to S3, and charges "
+        f"{RELIGHTING_COST_COINS} AI-coins."
+    ),
+)
+async def process_custom_relighting(
+    body: RelightCustomRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    service: Annotated[RelightingService, Depends(_get_relighting_service)],
+    idempotency_key: Annotated[
+        str | None,
+        Header(
+            alias="X-Idempotency-Key",
+            description="Optional durable billing idempotency key",
+        ),
+    ] = None,
+) -> RelightProcessResponse:
+    cleaned_key = idempotency_key.strip() if idempotency_key else None
+    if cleaned_key == "":
+        cleaned_key = None
+
+    try:
+        result = await service.process_custom(
+            user_id=current_user.id,
+            image_url=str(body.image_url),
+            studio_light=body.studio_light,
+            idempotency_key=cleaned_key,
+        )
+    except Exception as exc:
+        mapped = _map_relighting_http_error(exc)
+        raise mapped from exc
+
+    return RelightProcessResponse(
+        success=True,
+        result_url=result.result_url,
+        object_key=result.object_key,
+        preset_name=result.preset_name,
+        studio_light=result.studio_light,
+        coins_charged=result.coins_charged,
+        new_balance=result.new_balance,
+        width=result.width,
+        height=result.height,
+        content_type=result.content_type,
+        cost_coins=RELIGHTING_COST_COINS,
+    )
+
+
+@router.post(
+    "/parse-instruction",
+    response_model=RelightParseInstructionResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Convert a lighting phrase into StudioLightDTO",
+    description=(
+        'Maps cues like "мягкий тёплый свет слева сверху" to parametric '
+        "softbox fields (no billing)."
+    ),
+)
+async def parse_relighting_instruction(
+    body: RelightParseInstructionRequest,
+) -> RelightParseInstructionResponse:
+    try:
+        studio_light = RelightingService.parse_instruction(body.instruction)
+    except RelightingValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    return RelightParseInstructionResponse(
+        success=True,
+        studio_light=studio_light,
+        instruction=body.instruction.strip(),
     )
 
 
@@ -181,4 +298,11 @@ async def list_relighting_presets() -> dict[str, object]:
             for preset in LIGHTING_PRESETS.values()
         ],
         "cost_coins": RELIGHTING_COST_COINS,
+        "studio_light_params": {
+            "light_angle": {"min": 0.0, "max": 360.0, "unit": "deg"},
+            "light_elevation": {"min": 10.0, "max": 90.0, "unit": "deg"},
+            "color_temp_k": {"min": 2700, "max": 7500, "unit": "K"},
+            "intensity": {"min": 0.0, "max": 2.0},
+            "softbox_diffusion": {"min": 0.0, "max": 1.0},
+        },
     }

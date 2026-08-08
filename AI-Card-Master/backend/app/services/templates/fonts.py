@@ -72,6 +72,12 @@ _FAMILY_FILES: Final[dict[str, dict[str, tuple[str, ...]]]] = {
         "light": ("Inter-Light.ttf", "Inter-Regular.ttf", "DejaVuSans.ttf"),
         "medium": ("Inter-Medium.ttf", "Inter-Regular.ttf", "DejaVuSans.ttf"),
         "semibold": ("Inter-SemiBold.ttf", "Inter-Bold.ttf", "DejaVuSans-Bold.ttf"),
+        "extrabold": (
+            "Inter-ExtraBold.ttf",
+            "Inter-Bold.ttf",
+            "Inter-Black.ttf",
+            "DejaVuSans-Bold.ttf",
+        ),
         "black": ("Inter-Black.ttf", "Inter-Bold.ttf", "DejaVuSans-Bold.ttf"),
     },
     "montserrat": {
@@ -148,7 +154,9 @@ _WEIGHT_ALIASES: Final[dict[str, str]] = {
     "demibold": "semibold",
     "700": "bold",
     "bold": "bold",
-    "800": "black",
+    "800": "extrabold",
+    "extrabold": "extrabold",
+    "ultrabold": "extrabold",
     "900": "black",
     "black": "black",
     "heavy": "black",
@@ -161,6 +169,7 @@ _WEIGHT_AXIS_VALUES: Final[dict[str, int]] = {
     "medium": 500,
     "semibold": 600,
     "bold": 700,
+    "extrabold": 800,
     "black": 900,
 }
 
@@ -435,6 +444,7 @@ class FontRegistry:
             "light": ("-Light", " Light"),
             "medium": ("-Medium", " Medium"),
             "semibold": ("-SemiBold", "-Semibold", " SemiBold"),
+            "extrabold": ("-ExtraBold", "-Extrabold", "-Bold", "-Black"),
             "black": ("-Black", " Black", "blk"),
         }.get(weight_key, ("",))
 

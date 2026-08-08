@@ -64,6 +64,14 @@ from app.services.templates.download_default_fonts import ensure_default_fonts  
 from app.services.templates.font_manager import get_font_manager_service  # noqa: E402
 from app.services.templates.fonts import FontRegistry  # noqa: E402
 from app.services.templates.image_cache import ImageAssetCache  # noqa: E402
+from app.services.templates.presets.ozon_top_seller import (  # noqa: E402
+    ASSET_PRODUCT,
+    OZON_TOP_SELLER_PRESET_ID,
+    OzonTopSellerConfig,
+    build_ozon_top_seller_assets,
+    build_ozon_top_seller_canvas,
+    fit_product_box,
+)
 from app.services.templates.renderer import CanvasServerRenderer  # noqa: E402
 from app.services.three_d.errors import FFmpegEncodeError  # noqa: E402
 from app.services.three_d.render_engine import (  # noqa: E402
@@ -83,10 +91,12 @@ logger = logging.getLogger("render_visual_test")
 DEFAULT_ARTIFACTS_DIR = _BACKEND_ROOT / "artifacts"
 DEFAULT_ASSETS_DIR = DEFAULT_ARTIFACTS_DIR / "test_assets"
 CANVAS_OUT_NAME = "real_canvas_output.png"
+OZON_CARD_OUT_NAME = "ozon_perfect_card.png"
 VIDEO_OUT_NAME = "real_360_output.mp4"
 PREVIEW_OUT_NAME = "real_360_preview.gif"
 
 SNEAKER_PNG_FILENAME = "sneaker_transparent.png"
+CLEAN_CUTOUT_FILENAME = "clean_cutout.png"
 MESH_GLB_FILENAME = "MaterialsVariantsShoe.glb"
 
 # Public CDN mirrors — first success wins. PNG must carry a real Alpha channel.
@@ -523,6 +533,85 @@ def build_test_canvas(
     )
 
 
+def _resolve_product_cutout(
+    *,
+    sneaker_path: Path | None,
+    artifacts_dir: Path,
+) -> tuple[bytes, str]:
+    """Prefer cleaned cutout → cached sneaker → drawn placeholder."""
+
+    candidates: list[Path] = []
+    clean = artifacts_dir / CLEAN_CUTOUT_FILENAME
+    if clean.is_file():
+        candidates.append(clean)
+    if sneaker_path is not None:
+        candidates.append(sneaker_path)
+    assets_sneaker = DEFAULT_ASSETS_DIR / SNEAKER_PNG_FILENAME
+    if assets_sneaker.is_file():
+        candidates.append(assets_sneaker)
+
+    for path in candidates:
+        if not path.is_file():
+            continue
+        try:
+            payload = path.read_bytes()
+            _validate_transparent_png(payload)
+            logger.info("Using product cutout: %s", path.resolve())
+            return payload, str(path.resolve())
+        except (OSError, ValueError) as exc:
+            logger.warning("Skipping cutout %s (%s)", path, exc)
+
+    logger.warning("No transparent cutout found — falling back to drawn placeholder")
+    return _product_placeholder_png(), "placeholder"
+
+
+async def render_ozon_top_seller_artifact(
+    artifacts_dir: Path,
+    *,
+    sneaker_path: Path | None = None,
+) -> Path:
+    """Render the ``ozon_top_seller`` commercial preset → ``ozon_perfect_card.png``."""
+
+    ensure_default_fonts()
+    font_manager = get_font_manager_service()
+    await font_manager.bootstrap(persist_system_fonts=False)
+
+    product_source, source_label = _resolve_product_cutout(
+        sneaker_path=sneaker_path,
+        artifacts_dir=artifacts_dir,
+    )
+    config = OzonTopSellerConfig()
+    assets = build_ozon_top_seller_assets(product_source, config=config)
+    cache = ImageAssetCache()
+    for url, payload in assets.items():
+        cache.put(url, payload)
+
+    product_box = fit_product_box(assets[ASSET_PRODUCT])
+    canvas = build_ozon_top_seller_canvas(
+        product_box=product_box,
+        config=config,
+    )
+    renderer = CanvasServerRenderer(
+        font_registry=FontRegistry(),
+        font_manager=font_manager,
+        image_cache=cache,
+    )
+    result = await renderer.render(canvas, output_format="png")
+
+    out_path = artifacts_dir / OZON_CARD_OUT_NAME
+    out_path.write_bytes(result.image_bytes)
+    logger.info(
+        "Ozon Top Seller (%s) PNG saved: %s (%sx%s, %s bytes, source=%s)",
+        OZON_TOP_SELLER_PRESET_ID,
+        out_path,
+        result.width,
+        result.height,
+        len(result.image_bytes),
+        source_label,
+    )
+    return out_path.resolve()
+
+
 async def render_canvas_artifact(
     artifacts_dir: Path,
     *,
@@ -911,6 +1000,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Skip CanvasServerRenderer PNG pass",
     )
     parser.add_argument(
+        "--legacy-canvas",
+        action="store_true",
+        help="Also render the older real_canvas_output.png demo card",
+    )
+    parser.add_argument(
         "--skip-video",
         action="store_true",
         help="Skip 360° orbit video pass",
@@ -954,15 +1048,24 @@ async def _async_main(args: argparse.Namespace) -> int:
             mesh_path = _find_default_mesh()
 
     canvas_path: Path | None = None
+    ozon_path: Path | None = None
     mp4_path: Path | None = None
     gif_path: Path | None = None
 
     if not args.skip_canvas:
-        print("=== [1/2] CanvasServerRenderer (real sneaker + drop shadow) ===")
-        canvas_path = await render_canvas_artifact(
+        print(
+            f"=== [1/2] Ozon Top Seller preset ({OZON_TOP_SELLER_PRESET_ID}) ==="
+        )
+        ozon_path = await render_ozon_top_seller_artifact(
             artifacts_dir,
             sneaker_path=sneaker_path,
         )
+        if args.legacy_canvas:
+            print("=== [1b/2] Legacy canvas demo (real_canvas_output.png) ===")
+            canvas_path = await render_canvas_artifact(
+                artifacts_dir,
+                sneaker_path=sneaker_path,
+            )
     else:
         print("=== [1/2] CanvasServerRenderer (skipped) ===")
 
@@ -979,6 +1082,8 @@ async def _async_main(args: argparse.Namespace) -> int:
 
     print()
     print("Visual E2E artifacts:")
+    if ozon_path is not None:
+        print(f"  ozon   : {ozon_path}")
     if canvas_path is not None:
         print(f"  canvas : {canvas_path}")
     if mp4_path is not None:

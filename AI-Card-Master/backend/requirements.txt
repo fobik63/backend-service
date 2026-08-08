@@ -29,6 +29,8 @@ respx>=0.21.0
 numpy>=2.0.0
 rembg>=2.0.57
 onnxruntime>=1.19.0
+opencv-python-headless>=4.8.0
+pymatting>=1.1.12
 trimesh>=4.4.0
 # Optional GL backends for headless orbital video (render_engine.py).
 # Soft-imported; software rasteriser is the CI / no-GPU fallback.

@@ -18,10 +18,16 @@ from app.services.relighting import (
     RelightingPresetName,
     RelightingService,
     RelightingValidationError,
+    StudioLightDTO,
     get_lighting_preset,
+    parse_studio_light_instruction,
 )
 from app.services.relighting.depth_normal import estimate_depth_and_normals
 from app.services.relighting.shadows import build_shadow_params, generate_shadow_layer
+from app.services.relighting.softbox import (
+    build_softbox_shadow_params,
+    softbox_direction,
+)
 from app.services.s3_storage import S3UploadResult
 
 
@@ -105,6 +111,50 @@ def test_shadow_generator_respects_blur_angle_opacity() -> None:
     assert none.opacity == 0.0
 
 
+def test_softbox_direction_and_opposite_contact_shadow() -> None:
+    left_key = StudioLightDTO(
+        light_angle=180.0,
+        light_elevation=60.0,
+        color_temp_k=3200,
+        intensity=1.0,
+        softbox_diffusion=0.8,
+    )
+    direction = softbox_direction(left_key)
+    assert direction[0] < 0.0  # from the left (−X)
+    assert direction[1] > 0.0  # elevated (+Y)
+
+    shadows = build_softbox_shadow_params(left_key)
+    assert shadows.contact_strength > 0.0
+    # Light from left → contact puddle biased to the right (positive offset).
+    assert shadows.contact_offset_ratio > 0.0
+
+    right_key = StudioLightDTO(
+        light_angle=0.0,
+        light_elevation=45.0,
+        color_temp_k=5500,
+        intensity=1.2,
+        softbox_diffusion=0.3,
+    )
+    right_shadows = build_softbox_shadow_params(right_key)
+    assert right_shadows.contact_offset_ratio < 0.0
+    assert right_shadows.blur_px < shadows.blur_px  # harder = less blur
+
+
+def test_parse_studio_light_instruction_ru_warm_left() -> None:
+    light = parse_studio_light_instruction("мягкий тёплый свет слева сверху")
+    assert light.light_angle == pytest.approx(180.0)
+    assert light.light_elevation >= 60.0
+    assert light.color_temp_k == 3200
+    assert light.softbox_diffusion >= 0.8
+
+
+def test_parse_studio_light_instruction_en_hard_cool_right() -> None:
+    light = parse_studio_light_instruction("hard cool light from the right")
+    assert light.light_angle == pytest.approx(0.0)
+    assert light.color_temp_k == 6500
+    assert light.softbox_diffusion <= 0.2
+
+
 @pytest.mark.asyncio
 async def test_engine_process_returns_relit_png() -> None:
     engine = RelightingEngineService()
@@ -117,9 +167,26 @@ async def test_engine_process_returns_relit_png() -> None:
         shadow_intensity=0.5,
     )
     assert result.preset_name is RelightingPresetName.SOFT_COMMERCIAL
+    assert result.studio_light is None
     assert result.image_png.startswith(b"\x89PNG")
     assert result.width == 96
     assert result.height == 96
+
+
+@pytest.mark.asyncio
+async def test_engine_process_custom_softbox() -> None:
+    engine = RelightingEngineService()
+    light = StudioLightDTO(
+        light_angle=135.0,
+        light_elevation=50.0,
+        color_temp_k=4000,
+        intensity=1.1,
+        softbox_diffusion=0.7,
+    )
+    result = await engine.process_custom(_product_png(), studio_light=light)
+    assert result.preset_name is None
+    assert result.studio_light == light
+    assert result.image_png.startswith(b"\x89PNG")
 
 
 @pytest.mark.asyncio
@@ -170,6 +237,50 @@ async def test_relighting_service_charges_five_coins() -> None:
     assert result.result_url == "https://cdn.example/out.png"
     assert result.preset_name is RelightingPresetName.GOLDEN_HOUR
     billing.refund_coins_in_transaction.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_relighting_service_custom_softbox_billing() -> None:
+    user_id = uuid4()
+    user = SimpleNamespace(id=user_id, ai_coins=15)
+
+    session = AsyncMock()
+    session.commit = AsyncMock()
+    billing = MagicMock()
+    billing.debit_coins_in_transaction = AsyncMock(return_value=user)
+    billing.refund_coins_in_transaction = AsyncMock()
+    storage = MagicMock()
+    storage.upload_bytes = AsyncMock(
+        return_value=S3UploadResult(
+            bucket="test-bucket",
+            object_key=f"relighting/{user_id}/custom.png",
+            etag="xyz",
+            presigned_url="https://cdn.example/custom.png",
+        )
+    )
+
+    light = StudioLightDTO(
+        light_angle=180.0,
+        light_elevation=65.0,
+        color_temp_k=3200,
+        intensity=1.0,
+        softbox_diffusion=0.85,
+    )
+    service = RelightingService(session, billing=billing, storage=storage)
+    service._download_image = AsyncMock(return_value=_product_png())  # type: ignore[method-assign]
+
+    result = await service.process_custom(
+        user_id=user_id,
+        image_url="https://cdn.example/product.png",
+        studio_light=light,
+    )
+
+    assert result.studio_light == light
+    assert result.preset_name is None
+    assert result.coins_charged == 5
+    billing.debit_coins_in_transaction.assert_awaited_once()
+    debit_body = billing.debit_coins_in_transaction.await_args.kwargs["response_body"]
+    assert debit_body["operation"] == "relighting_custom"
 
 
 @pytest.mark.asyncio

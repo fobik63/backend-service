@@ -14,6 +14,17 @@ from app.services.templates.image_cache import (
     ImageAssetCacheError,
     get_image_asset_cache,
 )
+from app.services.templates.prompt_parser import (
+    CanvasPromptParser,
+    CanvasPromptParserConfigurationError,
+    CanvasPromptParserError,
+    CanvasPromptParserUpstreamError,
+    CanvasPromptParserValidationError,
+    build_canvas_parser_user_prompt,
+    close_canvas_prompt_parser,
+    get_canvas_prompt_parser,
+    parse_canvas_json,
+)
 from app.services.templates.renderer import (
     BADGE_FONT_HEIGHT_RATIO,
     CANVAS_SUPERSAMPLE_SCALE,
@@ -40,6 +51,11 @@ __all__ = [
     "DEFAULT_SYSTEM_FAMILIES",
     "PREVIEW_HEIGHT",
     "PREVIEW_WIDTH",
+    "CanvasPromptParser",
+    "CanvasPromptParserConfigurationError",
+    "CanvasPromptParserError",
+    "CanvasPromptParserUpstreamError",
+    "CanvasPromptParserValidationError",
     "CanvasRenderError",
     "CanvasRenderValidationError",
     "CanvasServerRenderer",
@@ -51,8 +67,12 @@ __all__ = [
     "ImageAssetCacheError",
     "OutputFormat",
     "RenderedCanvas",
+    "build_canvas_parser_user_prompt",
+    "close_canvas_prompt_parser",
+    "get_canvas_prompt_parser",
     "get_canvas_server_renderer",
     "get_font_manager_service",
     "get_font_registry",
     "get_image_asset_cache",
+    "parse_canvas_json",
 ]

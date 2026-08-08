@@ -20,8 +20,13 @@ from app.services.billing_service import (
     BillingService,
     BillingValidationError,
 )
-from app.services.relighting.dto import RelightingJobResultDTO, RelightingPresetName
+from app.services.relighting.dto import (
+    RelightingJobResultDTO,
+    RelightingPresetName,
+    StudioLightDTO,
+)
 from app.services.relighting.engine import RelightingEngineService
+from app.services.relighting.softbox import parse_studio_light_instruction
 from app.services.s3_storage import (
     S3UploadResult,
     SelectelS3Storage,
@@ -172,11 +177,88 @@ class RelightingService:
             result_url=upload.presigned_url or f"s3://{upload.bucket}/{upload.object_key}",
             object_key=upload.object_key,
             preset_name=result.preset_name,
+            studio_light=None,
             coins_charged=self._cost_coins,
             new_balance=int(user.ai_coins),
             width=result.width,
             height=result.height,
         )
+
+    async def process_custom(
+        self,
+        *,
+        user_id: UUID,
+        image_url: str,
+        studio_light: StudioLightDTO,
+        idempotency_key: str | None = None,
+    ) -> RelightingJobResultDTO:
+        """Download product image, apply parametric softbox, upload, charge coins."""
+
+        cleaned_url = (image_url or "").strip()
+        if not cleaned_url:
+            raise RelightingValidationError("image_url must not be empty.")
+
+        image_bytes = await self._download_image(cleaned_url)
+
+        try:
+            user = await self._billing.debit_coins_in_transaction(
+                user_id=user_id,
+                amount=self._cost_coins,
+                idempotency_key=idempotency_key,
+                response_body={
+                    "operation": "relighting_custom",
+                    "studio_light": studio_light.model_dump(mode="json"),
+                },
+            )
+        except BillingValidationError:
+            raise
+        except BillingNotFoundError:
+            raise
+        except BillingError as exc:
+            raise RelightingServiceError(str(exc)) from exc
+
+        try:
+            result = await self._engine.process_custom(
+                image_bytes,
+                studio_light=studio_light,
+            )
+            upload = await self._upload_result(
+                user_id=user_id,
+                png_bytes=result.image_png,
+            )
+        except Exception:
+            try:
+                await self._billing.refund_coins_in_transaction(
+                    user_id=user_id,
+                    amount=self._cost_coins,
+                )
+            except BillingError:
+                logger.exception(
+                    "Failed to refund relighting coins for user_id=%s", user_id
+                )
+            raise
+
+        await self._session.commit()
+
+        return RelightingJobResultDTO(
+            result_url=upload.presigned_url or f"s3://{upload.bucket}/{upload.object_key}",
+            object_key=upload.object_key,
+            preset_name=None,
+            studio_light=studio_light,
+            coins_charged=self._cost_coins,
+            new_balance=int(user.ai_coins),
+            width=result.width,
+            height=result.height,
+        )
+
+    @staticmethod
+    def parse_instruction(instruction: str) -> StudioLightDTO:
+        """Convert a natural-language lighting phrase into ``StudioLightDTO``."""
+
+        try:
+            return parse_studio_light_instruction(instruction)
+        except ValueError as exc:
+            raise RelightingValidationError(str(exc)) from exc
 
     async def _upload_result(
         self,

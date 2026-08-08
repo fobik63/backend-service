@@ -87,16 +87,65 @@ class LightingPresetDTO(BaseModel):
         return value
 
 
+class StudioLightDTO(BaseModel):
+    """Parametric softbox light for custom virtual-studio relighting."""
+
+    # Not strict: API clients often send ints for numeric softbox knobs.
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    light_angle: float = Field(
+        default=45.0,
+        ge=0.0,
+        le=360.0,
+        description="Azimuth degrees: 0=right, 90=front(+Z), 180=left, 270=back.",
+    )
+    light_elevation: float = Field(
+        default=55.0,
+        ge=10.0,
+        le=90.0,
+        description="Elevation above horizon (10=side, 90=overhead).",
+    )
+    color_temp_k: int = Field(
+        default=5500,
+        ge=2700,
+        le=7500,
+        description="Softbox color temperature in Kelvin.",
+    )
+    intensity: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=2.0,
+        description="Key softbox intensity multiplier.",
+    )
+    softbox_diffusion: float = Field(
+        default=0.65,
+        ge=0.0,
+        le=1.0,
+        description="0=hard softbox edge, 1=fully diffused wrap.",
+    )
+
+
 class ShadowParamsDTO(BaseModel):
     """Contact + cast shadow controls derived from preset × intensity."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     blur_px: int = Field(ge=0, le=80)
-    angle_deg: float = Field(ge=-90.0, le=90.0)
+    angle_deg: float = Field(
+        ge=-180.0,
+        le=360.0,
+        description="Cast/contact offset angle (shadow opposite to key light).",
+    )
     opacity: float = Field(ge=0.0, le=1.0)
     cast_length: float = Field(ge=0.0, le=1.5)
     contact_strength: float = Field(default=0.55, ge=0.0, le=1.0)
+    contact_offset_ratio: float = Field(
+        default=0.0,
+        ge=-1.0,
+        le=1.0,
+        description="Horizontal contact shift as fraction of product width "
+        "(negative = left, opposite to a right-side key).",
+    )
 
 
 class DepthNormalMapsDTO(BaseModel):
@@ -119,7 +168,8 @@ class RelightProcessResultDTO(BaseModel):
     image_png: bytes = Field(min_length=1)
     depth_png: bytes = Field(min_length=1)
     normal_png: bytes = Field(min_length=1)
-    preset_name: RelightingPresetName
+    preset_name: RelightingPresetName | None = None
+    studio_light: StudioLightDTO | None = None
     width: int = Field(gt=0)
     height: int = Field(gt=0)
     shadow_intensity: float = Field(ge=0.0, le=1.0)
@@ -132,7 +182,8 @@ class RelightingJobResultDTO(BaseModel):
 
     result_url: str = Field(min_length=1)
     object_key: str = Field(min_length=1)
-    preset_name: RelightingPresetName
+    preset_name: RelightingPresetName | None = None
+    studio_light: StudioLightDTO | None = None
     coins_charged: int = Field(ge=0)
     new_balance: int = Field(ge=0)
     width: int = Field(gt=0)

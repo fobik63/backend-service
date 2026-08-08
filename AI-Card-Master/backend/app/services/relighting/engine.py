@@ -21,12 +21,17 @@ from app.services.relighting.dto import (
     RelightProcessResultDTO,
     RelightingPresetName,
     ShadowParamsDTO,
+    StudioLightDTO,
 )
 from app.services.relighting.presets import get_lighting_preset
 from app.services.relighting.shadows import (
     ShadowGeneratorError,
     build_shadow_params,
     generate_shadow_layer,
+)
+from app.services.relighting.softbox import (
+    build_softbox_shadow_params,
+    softbox_to_lighting_preset,
 )
 
 
@@ -66,6 +71,28 @@ class RelightingEngineService:
                 bytes(image_bytes),
                 preset,
                 intensity,
+                None,
+            )
+        except (DepthNormalEstimationError, ShadowGeneratorError) as exc:
+            raise RelightingEngineError(str(exc)) from exc
+
+    async def process_custom(
+        self,
+        image_bytes: bytes,
+        *,
+        studio_light: StudioLightDTO,
+    ) -> RelightProcessResultDTO:
+        """Relight with a parametric softbox (``StudioLightDTO``)."""
+
+        preset = softbox_to_lighting_preset(studio_light)
+        shadow_params = build_softbox_shadow_params(studio_light)
+        try:
+            return await asyncio.to_thread(
+                self._process_custom_sync,
+                bytes(image_bytes),
+                preset,
+                studio_light,
+                shadow_params,
             )
         except (DepthNormalEstimationError, ShadowGeneratorError) as exc:
             raise RelightingEngineError(str(exc)) from exc
@@ -75,6 +102,7 @@ class RelightingEngineService:
         image_bytes: bytes,
         preset: LightingPresetDTO,
         shadow_intensity: float,
+        studio_light: StudioLightDTO | None,
     ) -> RelightProcessResultDTO:
         maps = estimate_depth_and_normals(image_bytes)
         rgba = load_rgba(image_bytes)
@@ -100,10 +128,44 @@ class RelightingEngineService:
             image_png=out.getvalue(),
             depth_png=maps.depth_png,
             normal_png=maps.normal_png,
-            preset_name=preset.name,
+            preset_name=None if studio_light is not None else preset.name,
+            studio_light=studio_light,
             width=canvas.width,
             height=canvas.height,
             shadow_intensity=shadow_intensity,
+        )
+
+    def _process_custom_sync(
+        self,
+        image_bytes: bytes,
+        preset: LightingPresetDTO,
+        studio_light: StudioLightDTO,
+        shadow_params: ShadowParamsDTO,
+    ) -> RelightProcessResultDTO:
+        maps = estimate_depth_and_normals(image_bytes)
+        rgba = load_rgba(image_bytes)
+        mask = extract_product_mask(rgba)
+
+        with Image.open(io.BytesIO(maps.normal_png)) as normal_img:
+            normal_img.load()
+            normals = normal_img.convert("RGB")
+
+        lit = _apply_lighting(rgba, normals, mask, preset)
+        canvas = _compose_on_backdrop(lit, mask, preset, shadow_params)
+
+        out = io.BytesIO()
+        canvas.save(out, format="PNG", optimize=True, compress_level=6)
+        # Map softbox intensity into the legacy 0..1 shadow_intensity field.
+        reported = max(0.0, min(1.0, float(studio_light.intensity) / 2.0))
+        return RelightProcessResultDTO(
+            image_png=out.getvalue(),
+            depth_png=maps.depth_png,
+            normal_png=maps.normal_png,
+            preset_name=None,
+            studio_light=studio_light,
+            width=canvas.width,
+            height=canvas.height,
+            shadow_intensity=reported,
         )
 
 

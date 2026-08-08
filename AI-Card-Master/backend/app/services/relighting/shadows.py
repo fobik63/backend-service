@@ -20,6 +20,7 @@ def build_shadow_params(
     opacity: float,
     cast_length: float,
     shadow_intensity: float,
+    contact_offset_ratio: float = 0.0,
 ) -> ShadowParamsDTO:
     """Scale preset shadow knobs by ``shadow_intensity`` (0..1)."""
 
@@ -30,6 +31,7 @@ def build_shadow_params(
         opacity=max(0.0, min(1.0, opacity * intensity)),
         cast_length=max(0.0, cast_length * (0.4 + 0.6 * intensity)),
         contact_strength=max(0.0, min(1.0, 0.35 + 0.65 * intensity)),
+        contact_offset_ratio=max(-1.0, min(1.0, float(contact_offset_ratio))),
     )
 
 
@@ -108,6 +110,8 @@ def _cast_shadow(mask: Image.Image, params: ShadowParamsDTO) -> Image.Image | No
 
 
 def _contact_shadow(mask: Image.Image, params: ShadowParamsDTO) -> Image.Image | None:
+    """Soft contact puddle under the product base, biased opposite the key light."""
+
     if params.contact_strength <= 0.0:
         return None
 
@@ -120,7 +124,28 @@ def _contact_shadow(mask: Image.Image, params: ShadowParamsDTO) -> Image.Image |
     band = mask.crop((left, max(top, bottom - band_h), right, bottom))
     target_h = max(3, band_h // 3)
     contact = band.resize((band.width, target_h), Image.Resampling.LANCZOS)
+
+    # Elongate slightly away from the light so the puddle reads as directional.
+    offset_ratio = float(params.contact_offset_ratio)
+    if abs(offset_ratio) > 1e-4:
+        stretch = 1.0 + min(0.45, abs(offset_ratio) * 0.9)
+        stretched_w = max(1, int(round(contact.width * stretch)))
+        contact = contact.resize(
+            (stretched_w, contact.height),
+            Image.Resampling.LANCZOS,
+        )
+
     blur = max(2, params.blur_px // 2 if params.blur_px else 4)
+    # Angle-aware micro-offset baked into the plate (caller also shifts paste).
+    angle = math.radians(params.angle_deg)
+    micro_dx = int(round(math.sin(angle) * contact.width * 0.04))
+    if micro_dx != 0 or abs(offset_ratio) > 1e-4:
+        pad = abs(micro_dx) + max(2, int(round(abs(offset_ratio) * contact.width * 0.15)))
+        sheet = Image.new("L", (contact.width + pad * 2, contact.height + pad * 2), 0)
+        shift_x = int(round(offset_ratio * contact.width * 0.5))
+        sheet.paste(contact, (pad + micro_dx + shift_x, pad))
+        contact = sheet
+
     contact = contact.filter(ImageFilter.GaussianBlur(radius=blur))
     strength = min(1.0, params.contact_strength)
     alpha = contact.point(lambda p: min(180, int(p * 0.55 * strength)))
