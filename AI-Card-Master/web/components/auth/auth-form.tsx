@@ -1,33 +1,46 @@
 "use client"
 
 import { zodResolver } from "@hookform/resolvers/zod"
-import { KeyRound, Loader2 } from "lucide-react"
+import { ArrowLeft, KeyRound, Loader2 } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { useState, useTransition } from "react"
+import { useCallback, useEffect, useState, useTransition } from "react"
 import { useForm } from "react-hook-form"
 import { toast } from "sonner"
 
-import { TelegramIcon } from "@/components/auth/telegram-icon"
+import {
+  TelegramLoginButton,
+  type TelegramLoginPayload,
+} from "@/components/auth/telegram-login-button"
 import { Button } from "@/components/ui/button"
 import { GlassButton } from "@/components/ui/glass-button"
 import { GlassCard } from "@/components/ui/glass-card"
 import { Input } from "@/components/ui/input"
 import { apiClient } from "@/lib/api"
+import { getApiErrorMessage, NETWORK_ERROR_MESSAGES } from "@/lib/api/errors"
 import { APP_NAME } from "@/lib/constants/api"
 import { useAuthStore } from "@/lib/store"
 import { cn } from "@/lib/utils"
 import {
   authCredentialsSchema,
-  otpAuthSchema,
+  otpCodeSchema,
+  otpEmailSchema,
   type AuthCredentialsValues,
   type AuthMode,
-  type OtpAuthValues,
+  type OtpCodeValues,
+  type OtpEmailValues,
 } from "@/lib/validators/auth"
 
 type AuthSessionResponse = {
   user: { id: string; email: string }
   tokens: { access_token: string; refresh_token: string }
+}
+
+type OtpRequestResponse = {
+  ok: boolean
+  expires_in: number
+  message: string
+  dev_code?: string | null
 }
 
 type AuthFormProps = {
@@ -37,6 +50,8 @@ type AuthFormProps = {
   className?: string
   onSuccess?: () => void
   onModeChange?: (mode: AuthMode) => void
+  /** Hide built-in home link when parent already shows one */
+  hideHomeLink?: boolean
 }
 
 function persistSession(tokens: AuthSessionResponse["tokens"]) {
@@ -58,11 +73,16 @@ function AuthForm({
   className,
   onSuccess,
   onModeChange,
+  hideHomeLink = false,
 }: AuthFormProps) {
   const router = useRouter()
   const [mode, setMode] = useState<AuthMode>(initialMode)
+  const [otpStep, setOtpStep] = useState<1 | 2>(1)
+  const [otpEmail, setOtpEmail] = useState("")
+  const [resendIn, setResendIn] = useState(0)
   const [isPending, startTransition] = useTransition()
   const [formError, setFormError] = useState<string | null>(null)
+  const [sendingOtp, setSendingOtp] = useState(false)
 
   const credentialsForm = useForm<AuthCredentialsValues>({
     resolver: zodResolver(authCredentialsSchema),
@@ -70,15 +90,31 @@ function AuthForm({
     mode: "onSubmit",
   })
 
-  const otpForm = useForm<OtpAuthValues>({
-    resolver: zodResolver(otpAuthSchema),
-    defaultValues: { email: "", code: "" },
+  const otpEmailForm = useForm<OtpEmailValues>({
+    resolver: zodResolver(otpEmailSchema),
+    defaultValues: { email: "" },
     mode: "onSubmit",
   })
+
+  const otpCodeForm = useForm<OtpCodeValues>({
+    resolver: zodResolver(otpCodeSchema),
+    defaultValues: { code: "" },
+    mode: "onSubmit",
+  })
+
+  useEffect(() => {
+    if (resendIn <= 0) return
+    const id = window.setInterval(() => {
+      setResendIn((s) => Math.max(0, s - 1))
+    }, 1000)
+    return () => window.clearInterval(id)
+  }, [resendIn])
 
   const switchMode = (next: AuthMode) => {
     setFormError(null)
     setMode(next)
+    setOtpStep(1)
+    setResendIn(0)
     onModeChange?.(next)
   }
 
@@ -91,84 +127,162 @@ function AuthForm({
     })
   }
 
+  const mapAuthError = (err: unknown, fallback: string) => {
+    if (
+      typeof err === "object" &&
+      err !== null &&
+      "code" in err &&
+      (err as { code?: string }).code === "ERR_NETWORK"
+    ) {
+      return `${NETWORK_ERROR_MESSAGES.offline}. Проверьте, что API запущен и NEXT_PUBLIC_API_BASE_URL указывает на /api/v1`
+    }
+    return getApiErrorMessage(err, fallback)
+  }
+
   const onCredentialsSubmit = credentialsForm.handleSubmit(async (values) => {
     setFormError(null)
     const endpoint = mode === "register" ? "/auth/register" : "/auth/login"
     try {
       const { data } = await apiClient.post<AuthSessionResponse>(
         endpoint,
-        values
+        values,
+        { skipErrorToast: true }
       )
       persistSession(data.tokens)
       finishAuth(
         mode === "register" ? "Аккаунт создан" : "Вы вошли в аккаунт"
       )
     } catch (err: unknown) {
-      const detail =
-        (err as { response?: { data?: { detail?: string } } })?.response?.data
-          ?.detail ??
-        (mode === "register"
-          ? "Не удалось зарегистрироваться"
-          : "Неверный email или пароль")
-      setFormError(typeof detail === "string" ? detail : "Ошибка авторизации")
+      setFormError(
+        mapAuthError(
+          err,
+          mode === "register"
+            ? "Не удалось зарегистрироваться"
+            : "Неверный email или пароль"
+        )
+      )
     }
   })
 
-  const onOtpSubmit = otpForm.handleSubmit(async (values) => {
+  const requestOtp = async (email: string) => {
+    setSendingOtp(true)
+    setFormError(null)
+    try {
+      const { data } = await apiClient.post<OtpRequestResponse>(
+        "/auth/otp/request",
+        { email },
+        { skipErrorToast: true }
+      )
+      setOtpEmail(email)
+      setOtpStep(2)
+      setResendIn(60)
+      otpCodeForm.reset({ code: "" })
+      toast.success(data.message || "Код отправлен на email")
+      if (data.dev_code) {
+        toast.message("Dev OTP", { description: data.dev_code })
+      }
+    } catch (err: unknown) {
+      setFormError(mapAuthError(err, "Не удалось отправить код"))
+    } finally {
+      setSendingOtp(false)
+    }
+  }
+
+  const onOtpEmailSubmit = otpEmailForm.handleSubmit(async (values) => {
+    await requestOtp(values.email.trim().toLowerCase())
+  })
+
+  const onOtpCodeSubmit = otpCodeForm.handleSubmit(async (values) => {
     setFormError(null)
     try {
       const { data } = await apiClient.post<AuthSessionResponse>(
         "/auth/otp/verify",
-        values
+        { email: otpEmail, code: values.code },
+        { skipErrorToast: true }
       )
       persistSession(data.tokens)
       finishAuth("Вы вошли по коду")
     } catch (err: unknown) {
-      const detail =
-        (err as { response?: { data?: { detail?: string } } })?.response?.data
-          ?.detail ?? "Неверный или просроченный код"
-      setFormError(typeof detail === "string" ? detail : "Ошибка входа по коду")
+      setFormError(mapAuthError(err, "Неверный или просроченный код"))
     }
   })
 
-  const handleTelegram = () => {
-    setFormError(null)
-    const bot = process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME
-    if (bot) {
-      window.open(`https://t.me/${bot}?start=auth`, "_blank", "noopener,noreferrer")
-      return
-    }
-    toast.message("Telegram-вход", {
-      description: "Скоро будет доступен. Пока войдите по email.",
-    })
-  }
+  const handleTelegramAuth = useCallback(
+    async (user: TelegramLoginPayload) => {
+      setFormError(null)
+      try {
+        const { data } = await apiClient.post<AuthSessionResponse>(
+          "/auth/telegram",
+          {
+            id: user.id,
+            first_name: user.first_name,
+            last_name: user.last_name || "",
+            username: user.username || "",
+            photo_url: user.photo_url || "",
+            auth_date: user.auth_date,
+            hash: user.hash,
+          },
+          { skipErrorToast: true }
+        )
+        persistSession(data.tokens)
+        finishAuth("Вы вошли через Telegram")
+      } catch (err: unknown) {
+        setFormError(mapAuthError(err, "Не удалось войти через Telegram"))
+      }
+    },
+    // finishAuth closes over router/onSuccess — intentional
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  )
 
   const busy =
     isPending ||
+    sendingOtp ||
     credentialsForm.formState.isSubmitting ||
-    otpForm.formState.isSubmitting
+    otpEmailForm.formState.isSubmitting ||
+    otpCodeForm.formState.isSubmitting
 
   const title =
     mode === "register"
       ? "Регистрация"
       : mode === "otp"
-        ? "Вход по коду"
+        ? otpStep === 1
+          ? "Вход по коду"
+          : "Подтверждение"
         : "Вход"
 
   const subtitle =
     mode === "register"
       ? "Создайте аккаунт и соберите первую карточку"
       : mode === "otp"
-        ? "Введите email и одноразовый код из письма"
+        ? otpStep === 1
+          ? "Укажите email — отправим 6-значный код"
+          : `Код отправлен на ${otpEmail}`
         : `Добро пожаловать в ${APP_NAME}`
 
   return (
     <GlassCard
       hoverLift={false}
       padding="lg"
-      className={cn("w-full border-white/10 copper-border", className)}
+      className={cn("relative w-full border-white/10 copper-border", className)}
     >
-      <div className={cn("mb-6", compact ? "space-y-1" : "space-y-2")}>
+      {!hideHomeLink ? (
+        <Link
+          href="/landing"
+          className="absolute top-4 left-4 inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground"
+        >
+          <ArrowLeft className="size-3.5" aria-hidden />
+          Назад на главную
+        </Link>
+      ) : null}
+
+      <div
+        className={cn(
+          "mb-6",
+          !hideHomeLink ? "mt-4" : "",
+          compact ? "space-y-1" : "space-y-2"
+        )}
+      >
         <p className="font-heading text-xs font-medium tracking-[0.18em] text-copper uppercase">
           {APP_NAME}
         </p>
@@ -183,8 +297,8 @@ function AuthForm({
         <p className="text-sm text-muted-foreground">{subtitle}</p>
       </div>
 
-      {mode === "otp" ? (
-        <form onSubmit={onOtpSubmit} className="space-y-4" noValidate>
+      {mode === "otp" && otpStep === 1 ? (
+        <form onSubmit={onOtpEmailSubmit} className="space-y-4" noValidate>
           <div>
             <label
               htmlFor="otp-email"
@@ -197,31 +311,11 @@ function AuthForm({
               type="email"
               autoComplete="email"
               placeholder="you@example.com"
-              aria-invalid={!!otpForm.formState.errors.email}
-              className="h-10 bg-loft-surface/60"
-              {...otpForm.register("email")}
+              aria-invalid={!!otpEmailForm.formState.errors.email}
+              className="h-12 bg-loft-surface/60 text-base"
+              {...otpEmailForm.register("email")}
             />
-            <FieldError message={otpForm.formState.errors.email?.message} />
-          </div>
-
-          <div>
-            <label
-              htmlFor="otp-code"
-              className="mb-1.5 block text-sm font-medium text-foreground/90"
-            >
-              One-Time Code
-            </label>
-            <Input
-              id="otp-code"
-              type="text"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              placeholder="123456"
-              aria-invalid={!!otpForm.formState.errors.code}
-              className="h-10 bg-loft-surface/60 tracking-[0.2em]"
-              {...otpForm.register("code")}
-            />
-            <FieldError message={otpForm.formState.errors.code?.message} />
+            <FieldError message={otpEmailForm.formState.errors.email?.message} />
           </div>
 
           {formError ? (
@@ -230,9 +324,13 @@ function AuthForm({
             </p>
           ) : null}
 
-          <GlassButton type="submit" className="w-full" disabled={busy}>
+          <GlassButton
+            type="submit"
+            className="h-12 w-full text-base"
+            disabled={busy}
+          >
             {busy ? <Loader2 className="size-4 animate-spin" /> : null}
-            Подтвердить код
+            Отправить код
           </GlassButton>
 
           <Button
@@ -245,7 +343,75 @@ function AuthForm({
             Назад к входу по паролю
           </Button>
         </form>
-      ) : (
+      ) : null}
+
+      {mode === "otp" && otpStep === 2 ? (
+        <form onSubmit={onOtpCodeSubmit} className="space-y-4" noValidate>
+          <div>
+            <label
+              htmlFor="otp-code"
+              className="mb-1.5 block text-sm font-medium text-foreground/90"
+            >
+              6-значный код
+            </label>
+            <Input
+              id="otp-code"
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              placeholder="••••••"
+              maxLength={6}
+              aria-invalid={!!otpCodeForm.formState.errors.code}
+              className="h-12 bg-loft-surface/60 text-center text-xl tracking-[0.35em]"
+              {...otpCodeForm.register("code")}
+            />
+            <FieldError message={otpCodeForm.formState.errors.code?.message} />
+          </div>
+
+          {formError ? (
+            <p className="text-sm text-destructive" role="alert">
+              {formError}
+            </p>
+          ) : null}
+
+          <GlassButton
+            type="submit"
+            className="h-12 w-full text-base"
+            disabled={busy}
+          >
+            {busy ? <Loader2 className="size-4 animate-spin" /> : null}
+            Подтвердить
+          </GlassButton>
+
+          <div className="flex flex-col gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              className="h-10 w-full border-white/10 bg-transparent"
+              disabled={busy || resendIn > 0}
+              onClick={() => void requestOtp(otpEmail)}
+            >
+              {resendIn > 0
+                ? `Отправить снова через ${resendIn} с`
+                : "Отправить код снова"}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              className="w-full"
+              disabled={busy}
+              onClick={() => {
+                setOtpStep(1)
+                setFormError(null)
+              }}
+            >
+              Изменить email
+            </Button>
+          </div>
+        </form>
+      ) : null}
+
+      {mode !== "otp" ? (
         <form onSubmit={onCredentialsSubmit} className="space-y-4" noValidate>
           <div>
             <label
@@ -333,7 +499,7 @@ function AuthForm({
             )}
           </div>
         </form>
-      )}
+      ) : null}
 
       {mode !== "otp" ? (
         <>
@@ -349,16 +515,10 @@ function AuthForm({
           </div>
 
           <div className="flex flex-col gap-2.5">
-            <Button
-              type="button"
-              variant="outline"
-              className="h-10 w-full gap-2 border-white/10 bg-[#229ED9]/10 text-foreground hover:bg-[#229ED9]/20"
+            <TelegramLoginButton
               disabled={busy}
-              onClick={handleTelegram}
-            >
-              <TelegramIcon className="size-4 text-[#229ED9]" />
-              Вход через Telegram
-            </Button>
+              onAuth={(user) => void handleTelegramAuth(user)}
+            />
             <Button
               type="button"
               variant="outline"

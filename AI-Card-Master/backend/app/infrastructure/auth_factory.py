@@ -11,6 +11,7 @@ from app.infrastructure.persistence.coin_wallet import SqlAlchemyCoinWallet
 from app.infrastructure.persistence.signup_trial_repository import (
     SignupTrialClaimRepository,
 )
+from app.infrastructure.security.otp_store import RedisOtpStore
 from app.infrastructure.security.proxy_detector import AsyncProxyDetector
 from app.infrastructure.security.silent_ban_store import RedisSilentBanStore
 from app.infrastructure.security.signup_trial_store import RedisSignupTrialStore
@@ -32,6 +33,10 @@ def build_auth_service(session: AsyncSession) -> AuthService:
         ),
         silent_ban_store=RedisSilentBanStore(),
         token_rotation=RefreshTokenRotationService(store=RedisTokenFamilyStore()),
+        otp_store=RedisOtpStore(
+            ttl_seconds=settings.otp_ttl_seconds,
+            code_length=settings.otp_code_length,
+        ),
         trial_coins=settings.signup_trial_coins,
         subnet_max_accounts=settings.signup_trial_subnet_max_accounts,
         subnet_ttl_seconds=settings.signup_trial_subnet_ttl_seconds,

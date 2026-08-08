@@ -1,0 +1,64 @@
+{
+  "generated_at": "2026-08-08T19:43:18.194711+00:00",
+  "overall_ok": true,
+  "stages": [
+    {
+      "name": "parser",
+      "ok": true,
+      "elapsed_ms": 188.10660000053758,
+      "detail": "source=fixture_fallback sku=146132199",
+      "artifact": "C:\\Users\\ADMIN\\Desktop\\my\\AI-Card-Master\\backend\\artifacts\\system_health\\parsed_data_test.json"
+    },
+    {
+      "name": "cutout",
+      "ok": true,
+      "elapsed_ms": 2342.218900000262,
+      "detail": "1144x764 clean",
+      "artifact": "C:\\Users\\ADMIN\\Desktop\\my\\AI-Card-Master\\backend\\artifacts\\system_health\\clean_cutout_test.png"
+    },
+    {
+      "name": "canvas",
+      "ok": true,
+      "elapsed_ms": 762.6647999995839,
+      "detail": "preset=ozon_top_seller 1080x1440",
+      "artifact": "C:\\Users\\ADMIN\\Desktop\\my\\AI-Card-Master\\backend\\artifacts\\system_health\\canvas_render_test.png"
+    },
+    {
+      "name": "softbox",
+      "ok": true,
+      "elapsed_ms": 642.9766000001109,
+      "detail": "1144x764 K=3200 angle=180.0",
+      "artifact": "C:\\Users\\ADMIN\\Desktop\\my\\AI-Card-Master\\backend\\artifacts\\system_health\\softbox_lighting_test.png"
+    },
+    {
+      "name": "api_routes_sync",
+      "ok": true,
+      "elapsed_ms": 1466.6627999995399,
+      "detail": "ok",
+      "artifact": null
+    },
+    {
+      "name": "security",
+      "ok": true,
+      "elapsed_ms": 0.5416000003606314,
+      "detail": "ok",
+      "artifact": null
+    }
+  ],
+  "api_routes_sync": {
+    "required": [
+      "POST /api/v1/canvas/render",
+      "POST /api/v1/relighting/custom",
+      "POST /api/v1/parser/parse",
+      "POST /api/v1/templates/prompt-to-json",
+      "POST /api/v1/tools/remove-bg"
+    ],
+    "ok": true,
+    "detail": "ok"
+  },
+  "security": {
+    "ok": true,
+    "detail": "ok"
+  },
+  "artifacts_dir": "C:\\Users\\ADMIN\\Desktop\\my\\AI-Card-Master\\backend\\artifacts\\system_health"
+}

@@ -13,19 +13,27 @@ export const authCredentialsSchema = z.object({
     .max(128, "Пароль слишком длинный"),
 })
 
-export const otpAuthSchema = z.object({
+export const otpEmailSchema = z.object({
   email: z
     .string()
     .trim()
     .min(1, "Укажите email")
     .email("Некорректный email"),
+})
+
+export const otpCodeSchema = z.object({
   code: z
     .string()
     .trim()
     .min(1, "Укажите код")
-    .regex(/^\d{4,8}$/, "Код — 4–8 цифр"),
+    .regex(/^\d{6}$/, "Код — 6 цифр"),
 })
 
+/** Combined schema kept for verify payload typing. */
+export const otpAuthSchema = otpEmailSchema.merge(otpCodeSchema)
+
 export type AuthCredentialsValues = z.infer<typeof authCredentialsSchema>
+export type OtpEmailValues = z.infer<typeof otpEmailSchema>
+export type OtpCodeValues = z.infer<typeof otpCodeSchema>
 export type OtpAuthValues = z.infer<typeof otpAuthSchema>
 export type AuthMode = "login" | "register" | "otp"

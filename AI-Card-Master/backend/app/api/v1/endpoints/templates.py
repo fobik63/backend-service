@@ -5,6 +5,7 @@ Routes
 Public presets
   GET  /api/v1/templates
   GET  /api/v1/templates/{template_id}
+  POST /api/v1/templates/prompt-to-json
 
 User designs (auth required)
   POST /api/v1/designs
@@ -19,7 +20,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.payments import get_current_user
@@ -49,6 +50,12 @@ from app.services.s3_storage import (
     S3StorageConfigurationError,
     S3StorageError,
     get_s3_storage,
+)
+from app.services.templates.prompt_parser import (
+    CanvasPromptParserConfigurationError,
+    CanvasPromptParserUpstreamError,
+    CanvasPromptParserValidationError,
+    get_canvas_prompt_parser,
 )
 from app.services.templates.renderer import get_canvas_server_renderer
 
@@ -110,6 +117,56 @@ async def get_template_service(
         renderer=get_canvas_server_renderer(),
         presign_ttl_seconds=settings.s3_presign_ttl_seconds,
     )
+
+
+# ---------------------------------------------------------------------------
+# Prompt → canvas JSON
+# ---------------------------------------------------------------------------
+
+
+class PromptToJsonRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    prompt: str = Field(..., min_length=1, max_length=8000)
+    base_canvas: CanvasStateDTO | None = Field(
+        default=None,
+        description="Optional existing canvas to edit instead of creating fresh.",
+    )
+
+
+@templates_router.post(
+    "/prompt-to-json",
+    response_model=CanvasStateDTO,
+    status_code=status.HTTP_200_OK,
+    summary="Natural-language prompt → CanvasStateDTO",
+    description=(
+        "Uses the canvas prompt LLM parser to convert a free-form instruction "
+        "into a validated ``CanvasStateDTO`` document for the editor."
+    ),
+)
+async def prompt_to_json(
+    body: PromptToJsonRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> CanvasStateDTO:
+    del current_user  # auth gate only
+    parser = get_canvas_prompt_parser()
+    try:
+        return await parser.parse(body.prompt, base_canvas=body.base_canvas)
+    except CanvasPromptParserValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except CanvasPromptParserConfigurationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    except CanvasPromptParserUpstreamError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
 
 
 # ---------------------------------------------------------------------------

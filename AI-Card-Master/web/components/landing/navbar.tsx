@@ -11,9 +11,8 @@ import { cn } from "@/lib/utils"
 
 const NAV_LINKS = [
   { href: "#features", label: "Возможности" },
-  { href: "#reviews", label: "Отзывы" },
-  { href: "#pricing", label: "Цены" },
-  { href: "#faq", label: "FAQ" },
+  { href: "#testimonials", label: "Отзывы" },
+  { href: "#cta", label: "Начать" },
 ] as const
 
 function CardLogoIcon({ className }: { className?: string }) {

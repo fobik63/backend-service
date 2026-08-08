@@ -103,7 +103,10 @@ class Settings(BaseSettings):
     # Comma-separated origins for Next.js / local frontends (CORS).
     # ALLOWED_ORIGINS is preferred; CORS_ORIGINS kept for backward compatibility.
     cors_origins: str = Field(
-        default="http://localhost:3000,http://127.0.0.1:3000",
+        default=(
+            "http://localhost:3000,http://127.0.0.1:3000,"
+            "http://localhost:3001,http://127.0.0.1:3001"
+        ),
         validation_alias=AliasChoices("ALLOWED_ORIGINS", "CORS_ORIGINS"),
     )
     # Explicit allowlists — never use wildcard methods/headers in production.
@@ -1403,6 +1406,32 @@ class Settings(BaseSettings):
         default=5.0,
         alias="TELEGRAM_USER_TIMEOUT_SECONDS",
     )
+    # Telegram Login Widget bot token (https://core.telegram.org/widgets/login).
+    # Falls back to TELEGRAM_USER_BOT_TOKEN → TELEGRAM_ERROR_BOT_TOKEN.
+    telegram_login_bot_token: SecretStr | None = Field(
+        default=None,
+        alias="TELEGRAM_LOGIN_BOT_TOKEN",
+    )
+    telegram_login_bot_username: str = Field(
+        default="",
+        alias="TELEGRAM_LOGIN_BOT_USERNAME",
+    )
+    telegram_login_max_age_seconds: int = Field(
+        default=86_400,
+        alias="TELEGRAM_LOGIN_MAX_AGE_SECONDS",
+    )
+
+    # --- Outbound email (OTP login) ---
+    # Prefer Resend when RESEND_API_KEY is set; otherwise SMTP.
+    resend_api_key: SecretStr | None = Field(default=None, alias="RESEND_API_KEY")
+    smtp_host: str = Field(default="", alias="SMTP_HOST")
+    smtp_port: int = Field(default=587, alias="SMTP_PORT")
+    smtp_username: str = Field(default="", alias="SMTP_USERNAME")
+    smtp_password: SecretStr | None = Field(default=None, alias="SMTP_PASSWORD")
+    smtp_from_email: str = Field(default="", alias="SMTP_FROM_EMAIL")
+    smtp_use_tls: bool = Field(default=True, alias="SMTP_USE_TLS")
+    otp_ttl_seconds: int = Field(default=600, alias="OTP_TTL_SECONDS")
+    otp_code_length: int = Field(default=6, alias="OTP_CODE_LENGTH")
 
     # Claude 4.7 Opus Vision & Reasoning Integration Layer
     claude_47_api_key: SecretStr | None = Field(

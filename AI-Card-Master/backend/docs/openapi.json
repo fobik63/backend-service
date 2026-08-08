@@ -192,6 +192,129 @@
         }
       }
     },
+    "/api/v1/auth/otp/request": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Send a 6-digit one-time code to email",
+        "operationId": "otp_request_api_v1_auth_otp_request_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OtpRequestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OtpRequestResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/otp/verify": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Verify email OTP and obtain JWT session",
+        "operationId": "otp_verify_api_v1_auth_otp_verify_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OtpVerifyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSessionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/telegram": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Login via Telegram Login Widget",
+        "operationId": "telegram_login_api_v1_auth_telegram_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TelegramLoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSessionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/auth/refresh": {
       "post": {
         "tags": [
@@ -566,6 +689,53 @@
         ]
       }
     },
+    "/api/v1/templates/prompt-to-json": {
+      "post": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Natural-language prompt → CanvasStateDTO",
+        "description": "Uses the canvas prompt LLM parser to convert a free-form instruction into a validated ``CanvasStateDTO`` document for the editor.",
+        "operationId": "prompt_to_json_api_v1_templates_prompt_to_json_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromptToJsonRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CanvasStateDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/templates": {
       "get": {
         "tags": [
@@ -836,6 +1006,118 @@
             }
           }
         }
+      }
+    },
+    "/api/v1/canvas/render": {
+      "post": {
+        "tags": [
+          "canvas"
+        ],
+        "summary": "Render CanvasStateDTO to PNG/WebP bytes",
+        "description": "Composites the submitted canvas document server-side (Pillow) and returns raw image bytes. Prefer this for editor live preview; use POST /api/v1/designs/{id}/render to persist + upload to S3.",
+        "operationId": "render_canvas_api_v1_canvas_render_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "output_format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "png",
+                "webp"
+              ],
+              "type": "string",
+              "description": "Output image codec",
+              "default": "png",
+              "title": "Output Format"
+            },
+            "description": "Output image codec"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CanvasStateDTO"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Rendered card image",
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "image/png": {},
+              "image/webp": {}
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/parser/parse": {
+      "post": {
+        "tags": [
+          "parser"
+        ],
+        "summary": "Parse Ozon / Wildberries product URL",
+        "description": "Fetches mobile JSON stock snapshot + deep card scrape (title, specs, gallery) for a public WB/Ozon product page.",
+        "operationId": "parse_product_api_v1_parser_parse_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ParseProductRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ParsedProductResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/api/v1/legal/terms": {
@@ -1240,6 +1522,271 @@
             "HTTPBearer": []
           }
         ]
+      }
+    },
+    "/api/v1/relighting/process": {
+      "post": {
+        "tags": [
+          "relighting"
+        ],
+        "summary": "Relight a product image with a studio preset",
+        "description": "Downloads ``image_url``, estimates depth/normal maps, applies a lighting preset with contact+cast shadows, uploads the PNG to S3, and charges 5 AI-coins via BillingService.",
+        "operationId": "process_relighting_api_v1_relighting_process_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional durable billing idempotency key",
+              "title": "X-Idempotency-Key"
+            },
+            "description": "Optional durable billing idempotency key"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RelightProcessRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RelightProcessResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/relighting/custom": {
+      "post": {
+        "tags": [
+          "relighting"
+        ],
+        "summary": "Relight with a parametric softbox (StudioLightDTO)",
+        "description": "Downloads ``image_url``, applies a parametric softbox (angle / elevation / color temperature / intensity / diffusion) with a soft contact shadow opposite the key, uploads PNG to S3, and charges 5 AI-coins.",
+        "operationId": "process_custom_relighting_api_v1_relighting_custom_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional durable billing idempotency key",
+              "title": "X-Idempotency-Key"
+            },
+            "description": "Optional durable billing idempotency key"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RelightCustomRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RelightProcessResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/relighting/parse-instruction": {
+      "post": {
+        "tags": [
+          "relighting"
+        ],
+        "summary": "Convert a lighting phrase into StudioLightDTO",
+        "description": "Maps cues like \"мягкий тёплый свет слева сверху\" to parametric softbox fields (no billing).",
+        "operationId": "parse_relighting_instruction_api_v1_relighting_parse_instruction_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RelightParseInstructionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RelightParseInstructionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/relighting/presets": {
+      "get": {
+        "tags": [
+          "relighting"
+        ],
+        "summary": "List available lighting presets",
+        "operationId": "list_relighting_presets_api_v1_relighting_presets_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response List Relighting Presets Api V1 Relighting Presets Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tools/remove-bg": {
+      "post": {
+        "tags": [
+          "tools"
+        ],
+        "summary": "Remove product background (rembg)",
+        "description": "Accepts a multipart image upload **or** ``image_url``, runs rembg (ONNX) to produce a transparent PNG, uploads it to S3, and charges 1 AI-coin via BillingService. Returns ``cdn_url``.",
+        "operationId": "remove_background_endpoint_api_v1_tools_remove_bg_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional durable billing idempotency key",
+              "title": "X-Idempotency-Key"
+            },
+            "description": "Optional durable billing idempotency key"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_remove_background_endpoint_api_v1_tools_remove_bg_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RemoveBgResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/winback/cancel-intent": {
@@ -6456,6 +7003,38 @@
         ],
         "title": "Body_enqueue_competitor_analysis_api_v1_claude_reasoning_analyze_post"
       },
+      "Body_remove_background_endpoint_api_v1_tools_remove_bg_post": {
+        "properties": {
+          "file": {
+            "anyOf": [
+              {
+                "type": "string",
+                "contentMediaType": "application/octet-stream"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File",
+            "description": "Product image (JPEG/PNG/WebP)"
+          },
+          "image_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Url",
+            "description": "Public HTTP(S) URL of the product image (alternative to file)"
+          }
+        },
+        "type": "object",
+        "title": "Body_remove_background_endpoint_api_v1_tools_remove_bg_post"
+      },
       "Body_upload_font_api_v1_fonts_upload_post": {
         "properties": {
           "file": {
@@ -10433,6 +11012,80 @@
         ],
         "title": "OrdersMetricsResponse"
       },
+      "OtpRequestBody": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "maxLength": 320,
+            "minLength": 3,
+            "title": "Email"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "title": "OtpRequestBody"
+      },
+      "OtpRequestResponse": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok",
+            "default": true
+          },
+          "expires_in": {
+            "type": "integer",
+            "title": "Expires In"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "default": "Код отправлен на email"
+          },
+          "dev_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dev Code"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expires_in"
+        ],
+        "title": "OtpRequestResponse"
+      },
+      "OtpVerifyBody": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "maxLength": 320,
+            "minLength": 3,
+            "title": "Email"
+          },
+          "code": {
+            "type": "string",
+            "maxLength": 8,
+            "minLength": 4,
+            "title": "Code"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "email",
+          "code"
+        ],
+        "title": "OtpVerifyBody"
+      },
       "PainAnalysisBody": {
         "properties": {
           "product_name": {
@@ -10725,6 +11378,152 @@
         "title": "PainAnalysisResult",
         "description": "Strict JSON output matching plan §71 schema."
       },
+      "ParseProductRequest": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "maxLength": 2048,
+            "minLength": 12,
+            "title": "Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "title": "ParseProductRequest"
+      },
+      "ParsedCharacteristicDTO": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "value": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Value"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "value"
+        ],
+        "title": "ParsedCharacteristicDTO"
+      },
+      "ParsedProductResponse": {
+        "properties": {
+          "marketplace": {
+            "type": "string",
+            "enum": [
+              "wildberries",
+              "ozon"
+            ],
+            "title": "Marketplace"
+          },
+          "sku": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Sku"
+          },
+          "product_url": {
+            "type": "string",
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Product Url"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "price_kopecks": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Kopecks"
+          },
+          "price_before_discount_kopecks": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Before Discount Kopecks"
+          },
+          "currency": {
+            "type": "string",
+            "maxLength": 8,
+            "minLength": 3,
+            "title": "Currency",
+            "default": "RUB"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "characteristics": {
+            "items": {
+              "$ref": "#/components/schemas/ParsedCharacteristicDTO"
+            },
+            "type": "array",
+            "title": "Characteristics"
+          },
+          "image_urls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Image Urls"
+          },
+          "total_stock": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Stock"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "marketplace",
+          "sku",
+          "product_url",
+          "title"
+        ],
+        "title": "ParsedProductResponse"
+      },
       "PhotoLimitsResponse": {
         "properties": {
           "min_count": {
@@ -10823,6 +11622,33 @@
           "orders"
         ],
         "title": "PlatformSliceResponse"
+      },
+      "PromptToJsonRequest": {
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Prompt"
+          },
+          "base_canvas": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CanvasStateDTO"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional existing canvas to edit instead of creating fresh."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "prompt"
+        ],
+        "title": "PromptToJsonRequest"
       },
       "PushNotificationResponse": {
         "properties": {
@@ -11014,6 +11840,252 @@
           "password"
         ],
         "title": "RegisterRequest"
+      },
+      "RelightCustomRequest": {
+        "properties": {
+          "image_url": {
+            "type": "string",
+            "maxLength": 2048,
+            "minLength": 8,
+            "title": "Image Url",
+            "description": "Public HTTP(S) URL of the product image"
+          },
+          "studio_light": {
+            "$ref": "#/components/schemas/StudioLightDTO",
+            "description": "Parametric softbox: light_angle, light_elevation, color_temp_k, intensity, softbox_diffusion"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "image_url",
+          "studio_light"
+        ],
+        "title": "RelightCustomRequest"
+      },
+      "RelightParseInstructionRequest": {
+        "properties": {
+          "instruction": {
+            "type": "string",
+            "maxLength": 512,
+            "minLength": 2,
+            "title": "Instruction",
+            "description": "Natural-language cue, e.g. \"мягкий тёплый свет слева сверху\""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "instruction"
+        ],
+        "title": "RelightParseInstructionRequest"
+      },
+      "RelightParseInstructionResponse": {
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "title": "Success",
+            "default": true
+          },
+          "studio_light": {
+            "$ref": "#/components/schemas/StudioLightDTO"
+          },
+          "instruction": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Instruction"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "studio_light",
+          "instruction"
+        ],
+        "title": "RelightParseInstructionResponse"
+      },
+      "RelightProcessRequest": {
+        "properties": {
+          "image_url": {
+            "type": "string",
+            "maxLength": 2048,
+            "minLength": 8,
+            "title": "Image Url",
+            "description": "Public HTTP(S) URL of the product image"
+          },
+          "preset_name": {
+            "$ref": "#/components/schemas/RelightingPresetName",
+            "description": "Lighting preset: golden_hour | cyberpunk_neon | dramatic_studio | soft_commercial"
+          },
+          "shadow_intensity": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Shadow Intensity",
+            "description": "Scales contact + cast shadow blur/opacity (0 = none, 1 = full)",
+            "default": 0.7
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "image_url",
+          "preset_name"
+        ],
+        "title": "RelightProcessRequest"
+      },
+      "RelightProcessResponse": {
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "title": "Success",
+            "default": true
+          },
+          "result_url": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Result Url"
+          },
+          "object_key": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Object Key"
+          },
+          "preset_name": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RelightingPresetName"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "studio_light": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StudioLightDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "coins_charged": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Coins Charged"
+          },
+          "new_balance": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "New Balance"
+          },
+          "width": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Width"
+          },
+          "height": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Height"
+          },
+          "content_type": {
+            "type": "string",
+            "title": "Content Type",
+            "default": "image/png"
+          },
+          "cost_coins": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Cost Coins",
+            "default": 5
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "result_url",
+          "object_key",
+          "coins_charged",
+          "new_balance",
+          "width",
+          "height"
+        ],
+        "title": "RelightProcessResponse"
+      },
+      "RelightingPresetName": {
+        "type": "string",
+        "enum": [
+          "golden_hour",
+          "cyberpunk_neon",
+          "dramatic_studio",
+          "soft_commercial"
+        ],
+        "title": "RelightingPresetName",
+        "description": "Named 2D studio lighting looks for product cards."
+      },
+      "RemoveBgResponse": {
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "title": "Success",
+            "default": true
+          },
+          "cdn_url": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Cdn Url"
+          },
+          "object_key": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Object Key"
+          },
+          "coins_charged": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Coins Charged"
+          },
+          "new_balance": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "New Balance"
+          },
+          "width": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Width"
+          },
+          "height": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Height"
+          },
+          "content_type": {
+            "type": "string",
+            "title": "Content Type",
+            "default": "image/png"
+          },
+          "cost_coins": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Cost Coins",
+            "default": 1
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "cdn_url",
+          "object_key",
+          "coins_charged",
+          "new_balance",
+          "width",
+          "height"
+        ],
+        "title": "RemoveBgResponse"
       },
       "RenderSettingsBody": {
         "properties": {
@@ -12242,6 +13314,54 @@
         ],
         "title": "StrategyPlanRequest"
       },
+      "StudioLightDTO": {
+        "properties": {
+          "light_angle": {
+            "type": "number",
+            "maximum": 360.0,
+            "minimum": 0.0,
+            "title": "Light Angle",
+            "description": "Azimuth degrees: 0=right, 90=front(+Z), 180=left, 270=back.",
+            "default": 45.0
+          },
+          "light_elevation": {
+            "type": "number",
+            "maximum": 90.0,
+            "minimum": 10.0,
+            "title": "Light Elevation",
+            "description": "Elevation above horizon (10=side, 90=overhead).",
+            "default": 55.0
+          },
+          "color_temp_k": {
+            "type": "integer",
+            "maximum": 7500.0,
+            "minimum": 2700.0,
+            "title": "Color Temp K",
+            "description": "Softbox color temperature in Kelvin.",
+            "default": 5500
+          },
+          "intensity": {
+            "type": "number",
+            "maximum": 2.0,
+            "minimum": 0.0,
+            "title": "Intensity",
+            "description": "Key softbox intensity multiplier.",
+            "default": 1.0
+          },
+          "softbox_diffusion": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Softbox Diffusion",
+            "description": "0=hard softbox edge, 1=fully diffused wrap.",
+            "default": 0.65
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "StudioLightDTO",
+        "description": "Parametric softbox light for custom virtual-studio relighting."
+      },
       "StyleAiInsightResponse": {
         "properties": {
           "code": {
@@ -12625,6 +13745,59 @@
         ],
         "title": "TariffResponse",
         "description": "Public tariff card for the frontend pricing page."
+      },
+      "TelegramLoginRequest": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Id"
+          },
+          "first_name": {
+            "type": "string",
+            "maxLength": 256,
+            "title": "First Name",
+            "default": ""
+          },
+          "last_name": {
+            "type": "string",
+            "maxLength": 256,
+            "title": "Last Name",
+            "default": ""
+          },
+          "username": {
+            "type": "string",
+            "maxLength": 256,
+            "title": "Username",
+            "default": ""
+          },
+          "photo_url": {
+            "type": "string",
+            "maxLength": 1024,
+            "title": "Photo Url",
+            "default": ""
+          },
+          "auth_date": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Auth Date"
+          },
+          "hash": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 32,
+            "title": "Hash"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "auth_date",
+          "hash"
+        ],
+        "title": "TelegramLoginRequest",
+        "description": "Telegram Login Widget callback payload (verified server-side)."
       },
       "TemplateDetailDTO": {
         "properties": {

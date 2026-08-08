@@ -25,12 +25,19 @@ class AuthRepository:
     async def get_by_id(self, user_id: UUID) -> User | None:
         return await self._session.get(User, user_id)
 
+    async def get_by_telegram_id(self, telegram_id: int) -> User | None:
+        result = await self._session.scalar(
+            select(User).where(User.telegram_id == int(telegram_id))
+        )
+        return result
+
     async def create_user(
         self,
         *,
         email: str,
         hashed_password: str,
         fingerprint_hash: str | None = None,
+        telegram_id: int | None = None,
     ) -> User:
         normalized_fp = (fingerprint_hash or "").strip() or None
         if normalized_fp is not None:
@@ -42,8 +49,23 @@ class AuthRepository:
             ai_coins=0,
             referral_code=generate_referral_code(),
             fingerprint_hash=normalized_fp,
+            telegram_id=int(telegram_id) if telegram_id is not None else None,
         )
         self._session.add(user)
+        await self._session.commit()
+        await self._session.refresh(user)
+        return user
+
+    async def link_telegram_id(
+        self,
+        user_id: UUID,
+        *,
+        telegram_id: int,
+    ) -> User | None:
+        user = await self._session.get(User, user_id)
+        if user is None:
+            return None
+        user.telegram_id = int(telegram_id)
         await self._session.commit()
         await self._session.refresh(user)
         return user

@@ -13,13 +13,26 @@ class AuthRepositoryPort(Protocol):
 
     async def get_by_id(self, user_id: UUID) -> User | None: ...
 
+    async def get_by_telegram_id(self, telegram_id: int) -> User | None: ...
+
     async def create_user(
         self,
         *,
         email: str,
         hashed_password: str,
         fingerprint_hash: str | None = None,
+        telegram_id: int | None = None,
     ) -> User: ...
+
+    async def link_telegram_id(
+        self,
+        user_id: UUID,
+        *,
+        telegram_id: int,
+    ) -> User | None:
+        """Bind Telegram user id to an existing account."""
+
+        ...
 
     async def update_fingerprint_hash(
         self,

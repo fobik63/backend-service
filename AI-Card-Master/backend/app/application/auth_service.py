@@ -26,6 +26,8 @@ from app.domain.auth import (
     AuthTokens,
     AuthUserView,
     LoginCommand,
+    OtpRequestCommand,
+    OtpVerifyCommand,
     RegisterCommand,
 )
 from app.services.auth import (
@@ -100,6 +102,18 @@ class AuthTokenStoreError(AuthError):
     """RTR security store (Redis) unavailable."""
 
 
+class AuthOtpError(AuthError):
+    """OTP request or verification failed."""
+
+
+class AuthOtpStoreError(AuthError):
+    """OTP Redis store unavailable."""
+
+
+class AuthTelegramError(AuthError):
+    """Telegram Login Widget authentication failed."""
+
+
 def _to_view(user: User) -> AuthUserView:
     return AuthUserView(
         id=user.id,
@@ -127,6 +141,7 @@ class AuthService:
         proxy_detector: ProxyDetectorPort | None = None,
         silent_ban_store: SilentBanStorePort | None = None,
         token_rotation: RefreshTokenRotationService | None = None,
+        otp_store: object | None = None,
         trial_coins: int = 5,
         subnet_max_accounts: int = 3,
         subnet_ttl_seconds: int = 86_400,
@@ -141,6 +156,7 @@ class AuthService:
         self._proxy_detector = proxy_detector
         self._silent_ban_store = silent_ban_store
         self._token_rotation = token_rotation or get_refresh_token_rotation_service()
+        self._otp_store = otp_store
         self._trial_coins = max(0, int(trial_coins))
         self._subnet_max_accounts = max(1, int(subnet_max_accounts))
         self._subnet_ttl_seconds = max(60, int(subnet_ttl_seconds))
@@ -543,3 +559,163 @@ class AuthService:
                 "Failed to persist signup trial claim for user %s",
                 user.id,
             )
+
+    async def request_otp(self, command: OtpRequestCommand) -> tuple[str, int]:
+        """Issue a fresh OTP and return ``(plain_code, ttl_seconds)``.
+
+        The plain code must be delivered out-of-band (email BackgroundTask).
+        Never include it in an HTTP response body in production.
+        """
+
+        if is_disposable_email(command.email):
+            raise AuthDisposableEmailError(
+                "Использование временных почт запрещено"
+            )
+        if self._otp_store is None:
+            raise AuthOtpStoreError("OTP store is not configured.")
+
+        from app.infrastructure.security.otp_store import (
+            OtpStoreUnavailableError,
+        )
+
+        try:
+            issued = await self._otp_store.issue(command.email)  # type: ignore[union-attr]
+        except OtpStoreUnavailableError as exc:
+            raise AuthOtpStoreError(str(exc)) from exc
+        return issued.code, int(issued.ttl_seconds)
+
+    async def verify_otp(
+        self,
+        command: OtpVerifyCommand,
+        *,
+        abuse_context: SignupAbuseContext | None = None,
+    ) -> tuple[AuthUserView, AuthTokens]:
+        """Verify OTP and return a session (creates account on first success)."""
+
+        if is_disposable_email(command.email):
+            raise AuthDisposableEmailError(
+                "Использование временных почт запрещено"
+            )
+        if self._otp_store is None:
+            raise AuthOtpStoreError("OTP store is not configured.")
+
+        from app.infrastructure.security.otp_store import (
+            OtpStoreUnavailableError,
+        )
+
+        try:
+            ok = await self._otp_store.verify_and_consume(  # type: ignore[union-attr]
+                command.email,
+                command.code,
+            )
+        except OtpStoreUnavailableError as exc:
+            raise AuthOtpStoreError(str(exc)) from exc
+        if not ok:
+            raise AuthOtpError("Неверный или просроченный код")
+
+        user = await self._repository.get_by_email(command.email)
+        if user is None:
+            import secrets
+
+            fingerprint_hash: str | None = None
+            if abuse_context is not None:
+                fingerprint_hash = self._compute_fingerprint_hash(abuse_context)
+                if (
+                    self._trial_store is not None
+                    and self._trial_claims is not None
+                ):
+                    await self._assert_registration_allowed(
+                        fingerprint_hash=fingerprint_hash,
+                        context=abuse_context,
+                    )
+            user = await self._repository.create_user(
+                email=command.email,
+                hashed_password=hash_password(secrets.token_urlsafe(48)),
+                fingerprint_hash=fingerprint_hash,
+            )
+            if (
+                self._trial_enabled
+                and self._trial_coins > 0
+                and abuse_context is not None
+                and self._coin_wallet is not None
+                and self._trial_store is not None
+                and self._trial_claims is not None
+                and self._proxy_detector is not None
+            ):
+                await self._maybe_grant_signup_trial(
+                    user=user,
+                    context=abuse_context,
+                )
+                refreshed = await self._repository.get_by_id(user.id)
+                if refreshed is not None:
+                    user = refreshed
+        elif user.is_banned:
+            raise AuthCredentialsError("User is banned for abuse.")
+
+        return _to_view(user), self._issue_tokens(user.id)
+
+    async def login_with_telegram(
+        self,
+        *,
+        telegram_id: int,
+        username: str | None = None,
+        first_name: str | None = None,
+        abuse_context: SignupAbuseContext | None = None,
+    ) -> tuple[AuthUserView, AuthTokens]:
+        """Authenticate (or provision) a user from a verified Telegram payload."""
+
+        user = await self._repository.get_by_telegram_id(telegram_id)
+        if user is None:
+            import secrets
+
+            # Stable synthetic mailbox — unique + not disposable.
+            handle = (username or first_name or "user").strip().lower()
+            safe = "".join(ch for ch in handle if ch.isalnum() or ch in "._-")[:24]
+            email = f"tg_{telegram_id}_{safe or 'user'}@telegram.local"
+
+            fingerprint_hash: str | None = None
+            if abuse_context is not None:
+                fingerprint_hash = self._compute_fingerprint_hash(abuse_context)
+                if (
+                    self._trial_store is not None
+                    and self._trial_claims is not None
+                ):
+                    await self._assert_registration_allowed(
+                        fingerprint_hash=fingerprint_hash,
+                        context=abuse_context,
+                    )
+            # Collision-safe: if synthetic email exists, just link telegram_id.
+            existing_email = await self._repository.get_by_email(email)
+            if existing_email is not None:
+                linked = await self._repository.link_telegram_id(
+                    existing_email.id,
+                    telegram_id=telegram_id,
+                )
+                user = linked or existing_email
+            else:
+                user = await self._repository.create_user(
+                    email=email,
+                    hashed_password=hash_password(secrets.token_urlsafe(48)),
+                    fingerprint_hash=fingerprint_hash,
+                    telegram_id=telegram_id,
+                )
+                if (
+                    self._trial_enabled
+                    and self._trial_coins > 0
+                    and abuse_context is not None
+                    and self._coin_wallet is not None
+                    and self._trial_store is not None
+                    and self._trial_claims is not None
+                    and self._proxy_detector is not None
+                ):
+                    await self._maybe_grant_signup_trial(
+                        user=user,
+                        context=abuse_context,
+                    )
+                    refreshed = await self._repository.get_by_id(user.id)
+                    if refreshed is not None:
+                        user = refreshed
+        elif user.is_banned:
+            raise AuthCredentialsError("User is banned for abuse.")
+
+        return _to_view(user), self._issue_tokens(user.id)

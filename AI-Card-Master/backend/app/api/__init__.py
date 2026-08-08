@@ -11,10 +11,12 @@ from app.api.bg_removal import router as bg_removal_router
 from app.api.brand_loras import router as brand_loras_router
 from app.api.brand_dna import router as brand_dna_router
 from app.api.bulk_generations import router as bulk_generations_router
+from app.api.canvas import router as canvas_router
 from app.api.captcha import router as captcha_router
 from app.api.claude_analyses import router as claude_analyses_router
 from app.api.claude_reasoning import router as claude_reasoning_router
 from app.api.exports import router as exports_router
+from app.api.parser import router as parser_router
 from app.api.generations import router as generations_router
 from app.api.health import router as health_router
 from app.api.images import router as images_router
@@ -49,6 +51,7 @@ __all__ = [
     "brand_loras_router",
     "brand_dna_router",
     "bulk_generations_router",
+    "canvas_router",
     "captcha_router",
     "claude_analyses_router",
     "claude_reasoning_router",
@@ -63,6 +66,7 @@ __all__ = [
     "midjourney_webhook_router",
     "oracle_router",
     "pain_analysis_router",
+    "parser_router",
     "payments_router",
     "referrals_router",
     "relighting_router",

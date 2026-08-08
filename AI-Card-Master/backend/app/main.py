@@ -38,6 +38,7 @@ from app.api import (
     brand_dna_router,
     brand_loras_router,
     bulk_generations_router,
+    canvas_router,
     captcha_router,
     claude_analyses_router,
     claude_reasoning_router,
@@ -53,6 +54,7 @@ from app.api import (
     midjourney_webhook_router,
     oracle_router,
     pain_analysis_router,
+    parser_router,
     payments_router,
     referrals_router,
     bg_removal_router,
@@ -388,6 +390,8 @@ app.include_router(images_router)
 app.include_router(fonts_router)
 app.include_router(templates_router)
 app.include_router(designs_router)
+app.include_router(canvas_router)
+app.include_router(parser_router)
 app.include_router(legal_router)
 app.include_router(account_router)
 app.include_router(captcha_router)

@@ -17,7 +17,7 @@ const TELEGRAM_SUPPORT_URL = "https://t.me/cardai_support"
 
 function Footer() {
   return (
-    <footer className="relative isolate border-t border-white/8 bg-loft">
+    <footer className="relative isolate bg-gradient-to-b from-[#0f1115] via-[#141b17] to-[#0f1115]">
       <div
         className="pointer-events-none absolute inset-0 -z-10"
         aria-hidden

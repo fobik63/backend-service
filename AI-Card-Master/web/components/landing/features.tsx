@@ -31,8 +31,8 @@ type Feature = {
 
 function SoftboxDemo() {
   const ref = useRef<HTMLDivElement>(null)
-  const [angle, setAngle] = useState(-28)
-  const [warmth, setWarmth] = useState(0.35)
+  const [angle, setAngle] = useState(-32)
+  const [warmth, setWarmth] = useState(0.32)
   const dragging = useRef(false)
 
   const updateFromPointer = useCallback((clientX: number, clientY: number) => {
@@ -63,13 +63,16 @@ function SoftboxDemo() {
     }
   }
 
+  const rad = (angle * Math.PI) / 180
+  const lx = 50 + Math.cos(rad) * 36
+  const ly = 42 + Math.sin(rad) * 32
   const lightColor = `color-mix(in srgb, #f8fafc ${Math.round((1 - warmth) * 100)}%, #f59e0b ${Math.round(warmth * 100)}%)`
   const soft = 18 + warmth * 28
 
   return (
     <div
       ref={ref}
-      className="relative aspect-[16/10] w-full cursor-crosshair touch-none overflow-hidden rounded-lg bg-loft select-none"
+      className="relative aspect-[16/10] w-full cursor-crosshair touch-none overflow-hidden rounded-lg bg-[#0c0e12] select-none"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -77,35 +80,60 @@ function SoftboxDemo() {
       role="img"
       aria-label="Демо виртуального софтбокса: перетащите курсор, чтобы менять угол и температуру света"
     >
+      {/* Studio floor + backdrop */}
+      <div className="absolute inset-0 bg-[linear-gradient(180deg,#151821_0%,#0f1115_55%,#0a0b0e_100%)]" />
+      <div className="absolute inset-x-0 bottom-0 h-[42%] bg-[linear-gradient(180deg,transparent,rgba(27,62,43,0.25))]" />
+
+      {/* Softbox key light bloom */}
       <div
-        className="absolute inset-0 transition-[background] duration-150"
+        className="absolute size-16 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-white/30"
         style={{
-          background: `
-            radial-gradient(
-              circle at ${50 + Math.cos((angle * Math.PI) / 180) * 38}% ${50 + Math.sin((angle * Math.PI) / 180) * 38}%,
-              ${lightColor} 0%,
-              transparent ${soft}%
-            ),
-            linear-gradient(160deg, #1a1d24 0%, #0f1115 100%)
+          left: `${lx}%`,
+          top: `${ly}%`,
+          background: `linear-gradient(135deg, ${lightColor}, rgba(255,255,255,0.35))`,
+          boxShadow: `0 0 ${soft}px ${lightColor}`,
+        }}
+      />
+
+      {/* Vector light rays (SVG) */}
+      <svg className="pointer-events-none absolute inset-0 h-full w-full" aria-hidden>
+        {[0, 1, 2, 3, 4].map((i) => {
+          const spread = (i - 2) * 7
+          const tx = 50 + Math.cos(rad + (spread * Math.PI) / 180) * 8
+          const ty = 58 + Math.sin(rad + (spread * Math.PI) / 180) * 6
+          return (
+            <line
+              key={i}
+              x1={`${lx}%`}
+              y1={`${ly}%`}
+              x2={`${tx}%`}
+              y2={`${ty}%`}
+              stroke={lightColor}
+              strokeOpacity={0.12 + (2 - Math.abs(i - 2)) * 0.08}
+              strokeWidth={1.2}
+            />
+          )
+        })}
+      </svg>
+
+      {/* Product silhouette under soft light */}
+      <div
+        className="absolute left-1/2 top-[58%] h-16 w-[4.5rem] -translate-x-1/2 -translate-y-1/2 rounded-md border border-white/12 bg-gradient-to-b from-[#d6c4b0] to-[#8a9a84]"
+        style={{
+          boxShadow: `
+            ${Math.cos(rad) * 14}px ${10 + Math.sin(rad) * 8}px ${soft}px rgba(0,0,0,0.55),
+            inset ${-Math.cos(rad) * 6}px ${-Math.sin(rad) * 4}px 14px rgba(255,255,255,0.18)
           `,
         }}
       />
+      {/* Contact shadow */}
       <div
-        className="absolute left-1/2 top-[58%] h-14 w-20 -translate-x-1/2 -translate-y-1/2 rounded-md border border-white/15 bg-gradient-to-b from-copper/40 to-sage/50"
-        style={{
-          boxShadow: `${Math.cos((angle * Math.PI) / 180) * 18}px ${8 + Math.sin((angle * Math.PI) / 180) * 10}px ${soft}px rgba(0,0,0,0.55)`,
-        }}
+        className="absolute left-1/2 top-[72%] h-3 w-24 -translate-x-1/2 rounded-[100%] bg-black/45 blur-md"
+        style={{ opacity: 0.45 + warmth * 0.25 }}
       />
-      <div
-        className="absolute size-3 rounded-full border border-white/40 shadow-[0_0_16px_rgba(16,185,129,0.45)]"
-        style={{
-          left: `calc(50% + ${Math.cos((angle * Math.PI) / 180) * 38}% - 6px)`,
-          top: `calc(50% + ${Math.sin((angle * Math.PI) / 180) * 38}% - 6px)`,
-          background: lightColor,
-        }}
-      />
+
       <span className="absolute bottom-2 left-2 font-heading text-[10px] tracking-wide text-text-muted uppercase">
-        Угол · температура · тень
+        Источник · товар · лучи
       </span>
     </div>
   )
@@ -262,48 +290,49 @@ function Rotate360Demo() {
 function InfographicDemo() {
   return (
     <div
-      className="relative aspect-[16/10] w-full overflow-hidden rounded-lg bg-loft select-none"
+      className="relative aspect-[16/10] w-full overflow-hidden rounded-lg bg-[#0c0e12] select-none"
       role="img"
       aria-label="Демо готовой инфографики: плашки и скидки"
     >
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_70%_40%,rgba(46,74,56,0.45),transparent_60%)]" />
-      <div className="absolute left-1/2 top-[55%] h-14 w-16 -translate-x-1/2 -translate-y-1/2 rounded-md bg-gradient-to-b from-copper/50 to-sage/60" />
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_70%_35%,rgba(27,62,43,0.55),transparent_60%)]" />
 
-      <motion.div
-        className="absolute top-3 left-3 rounded-md bg-[#1b3e2b] px-2 py-1 font-heading text-[10px] font-semibold text-emerald"
-        initial={{ opacity: 0, x: -12 }}
-        animate={{ opacity: 1, x: 0 }}
-        transition={{ delay: 0.2, duration: 0.45 }}
-      >
-        −35%
-      </motion.div>
-      <motion.div
-        className="absolute top-3 right-3 rounded-md border border-copper/40 bg-loft-surface/90 px-2 py-1 font-heading text-[10px] text-copper"
-        initial={{ opacity: 0, y: -10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.45, duration: 0.45 }}
-      >
-        Хит продаж
-      </motion.div>
-      <motion.div
-        className="absolute bottom-3 left-3 max-w-[55%] rounded-md border border-white/10 bg-loft-surface/90 px-2 py-1.5"
-        initial={{ opacity: 0, y: 12 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.7, duration: 0.45 }}
-      >
-        <p className="font-heading text-[10px] font-semibold text-foreground">
-          Быстрая доставка
-        </p>
-        <p className="text-[9px] text-text-muted">Гарантия 12 мес.</p>
-      </motion.div>
-      <motion.div
-        className="absolute right-3 bottom-3 rounded-full bg-emerald px-2 py-1 font-heading text-[10px] font-semibold text-loft"
-        initial={{ opacity: 0, scale: 0.8 }}
-        animate={{ opacity: 1, scale: 1 }}
-        transition={{ delay: 0.95, duration: 0.4 }}
-      >
-        NEW
-      </motion.div>
+      {/* Marketplace card mock */}
+      <div className="absolute inset-3 overflow-hidden rounded-xl border border-white/10 bg-gradient-to-b from-[#1a1d24] to-[#12141a] copper-border shadow-[0_16px_40px_rgba(0,0,0,0.4)]">
+        <div className="relative h-[58%] bg-[radial-gradient(ellipse_at_center,rgba(16,185,129,0.12),transparent_70%)]">
+          <div className="absolute left-1/2 top-[55%] h-14 w-16 -translate-x-1/2 -translate-y-1/2 rounded-md bg-gradient-to-b from-[#e8d5c0] to-[#7d8f78] shadow-[0_10px_24px_rgba(0,0,0,0.45)]" />
+          <motion.div
+            className="absolute top-2 left-2 rounded-md bg-[#1b3e2b] px-2 py-1 font-heading text-[10px] font-semibold text-emerald"
+            initial={{ opacity: 0, x: -10 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ delay: 0.15, duration: 0.4 }}
+          >
+            −35%
+          </motion.div>
+          <motion.div
+            className="absolute top-2 right-2 rounded-md border border-copper/50 bg-loft/80 px-2 py-1 font-heading text-[10px] text-copper"
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.35, duration: 0.4 }}
+          >
+            Хит продаж
+          </motion.div>
+        </div>
+        <div className="space-y-1.5 border-t border-white/8 px-3 py-2.5">
+          <div className="h-1.5 w-3/4 rounded-full bg-white/15" />
+          <div className="h-1.5 w-1/2 rounded-full bg-white/10" />
+          <motion.p
+            className="pt-0.5 font-heading text-sm font-semibold text-foreground"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.55 }}
+          >
+            4 990 ₽{" "}
+            <span className="text-[11px] font-normal text-text-muted line-through">
+              7 690 ₽
+            </span>
+          </motion.p>
+        </div>
+      </div>
     </div>
   )
 }
@@ -360,11 +389,13 @@ function FeaturesSection() {
     <section
       id="features"
       ref={sectionRef}
-      className="relative isolate scroll-mt-24 py-20 sm:py-28"
+      className="relative isolate scroll-mt-24 bg-gradient-to-b from-[#0f1115] via-[#141b17] to-[#0f1115] py-20 sm:py-28"
     >
       <div className="pointer-events-none absolute inset-0 -z-10" aria-hidden>
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_60%_40%_at_50%_0%,rgba(16,185,129,0.08),transparent_55%)]" />
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_40%_30%_at_10%_80%,rgba(194,166,140,0.06),transparent_50%)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_40%_30%_at_8%_70%,rgba(27,62,43,0.35),transparent_50%)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_35%_28%_at_92%_40%,rgba(16,185,129,0.07),transparent_50%)]" />
+        <div className="absolute inset-0 opacity-[0.035] noise-texture" />
       </div>
 
       <div className="mx-auto max-w-6xl px-5">
@@ -386,7 +417,7 @@ function FeaturesSection() {
                 initial="hidden"
                 animate={inView ? "show" : "hidden"}
               >
-                <GlassCard className="group flex h-full flex-col gap-4" padding="md">
+                <GlassCard className="group flex h-full flex-col gap-4 copper-border" padding="md">
                   <div className="overflow-hidden rounded-lg border border-white/5">
                     {feature.demo}
                   </div>

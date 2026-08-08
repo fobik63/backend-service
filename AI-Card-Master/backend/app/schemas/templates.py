@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 LayerAlignment = Literal["left", "center", "right"]
@@ -42,6 +42,17 @@ class BaseLayerDTO(StrictTemplateModel):
     )
     opacity: float = Field(default=1.0, ge=0.0, le=1.0)
     z_index: int = 0
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def _coerce_layer_id(cls, value: object) -> object:
+        """Accept JSON UUID strings while keeping ``strict`` for other fields."""
+
+        if isinstance(value, UUID):
+            return value
+        if isinstance(value, str):
+            return UUID(value)
+        return value
 
 
 class ImageLayerDTO(BaseLayerDTO):

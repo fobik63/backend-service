@@ -1,11 +1,11 @@
-"""Auth API: register, login, refresh, and current-user profile."""
+"""Auth API: register, login, refresh, OTP, Telegram, and current-user profile."""
 
 from __future__ import annotations
 
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,16 +15,25 @@ from app.application.auth_service import (
     AuthCredentialsError,
     AuthDisposableEmailError,
     AuthNotFoundError,
+    AuthOtpError,
+    AuthOtpStoreError,
     AuthRefreshError,
     AuthRegistrationBlockedError,
     AuthService,
+    AuthTelegramError,
     AuthTokenFamilyRevokedError,
     AuthTokenStoreError,
 )
+from app.core.config import get_settings
 from app.core.rate_limit import auth_bruteforce_limit
-from app.domain.auth import LoginCommand, RegisterCommand
+from app.domain.auth import LoginCommand, OtpRequestCommand, OtpVerifyCommand, RegisterCommand
 from app.domain.signup_trial import SignupAbuseContext
 from app.infrastructure.auth_factory import build_auth_service
+from app.infrastructure.email.mailer import send_otp_email
+from app.infrastructure.security.telegram_login import (
+    TelegramAuthError,
+    verify_telegram_login,
+)
 from app.models.database import get_db_session
 from app.models.user import User
 
@@ -49,6 +58,27 @@ class RefreshRequest(StrictAPIModel):
     refresh_token: str = Field(..., min_length=20, max_length=4096)
 
 
+class OtpRequestBody(StrictAPIModel):
+    email: str = Field(..., min_length=3, max_length=320)
+
+
+class OtpVerifyBody(StrictAPIModel):
+    email: str = Field(..., min_length=3, max_length=320)
+    code: str = Field(..., min_length=4, max_length=8)
+
+
+class TelegramLoginRequest(StrictAPIModel):
+    """Telegram Login Widget callback payload (verified server-side)."""
+
+    id: int = Field(..., gt=0)
+    first_name: str = Field(default="", max_length=256)
+    last_name: str = Field(default="", max_length=256)
+    username: str = Field(default="", max_length=256)
+    photo_url: str = Field(default="", max_length=1024)
+    auth_date: int = Field(..., gt=0)
+    hash: str = Field(..., min_length=32, max_length=128)
+
+
 class TokenResponse(StrictAPIModel):
     access_token: str
     refresh_token: str
@@ -67,6 +97,14 @@ class AuthUserResponse(StrictAPIModel):
 class AuthSessionResponse(StrictAPIModel):
     user: AuthUserResponse
     tokens: TokenResponse
+
+
+class OtpRequestResponse(StrictAPIModel):
+    ok: bool = True
+    expires_in: int
+    message: str = "Код отправлен на email"
+    # Only populated in non-production when mail is not configured (local QA).
+    dev_code: str | None = None
 
 
 def get_auth_service(
@@ -188,6 +226,155 @@ async def login(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(exc),
             headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+    return _session_response(view, tokens)
+
+
+@router.post(
+    "/otp/request",
+    response_model=OtpRequestResponse,
+    summary="Send a 6-digit one-time code to email",
+)
+@auth_bruteforce_limit
+async def otp_request(
+    payload: OtpRequestBody,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    auth: AuthService = Depends(get_auth_service),
+) -> OtpRequestResponse:
+    settings = get_settings()
+    try:
+        command = OtpRequestCommand(email=payload.email)
+        code, ttl = await auth.request_otp(command)
+    except (ValueError, ValidationError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    except AuthDisposableEmailError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except AuthOtpStoreError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+
+    background_tasks.add_task(send_otp_email, command.email, code)
+
+    mail_configured = bool(
+        (settings.resend_api_key and settings.resend_api_key.get_secret_value().strip())
+        or (settings.smtp_host or "").strip()
+    )
+    dev_code = (
+        code
+        if settings.app_env == "development" and not mail_configured
+        else None
+    )
+    return OtpRequestResponse(
+        ok=True,
+        expires_in=ttl,
+        message="Код отправлен на email",
+        dev_code=dev_code,
+    )
+
+
+@router.post(
+    "/otp/verify",
+    response_model=AuthSessionResponse,
+    summary="Verify email OTP and obtain JWT session",
+)
+@auth_bruteforce_limit
+async def otp_verify(
+    payload: OtpVerifyBody,
+    request: Request,
+    auth: AuthService = Depends(get_auth_service),
+) -> AuthSessionResponse:
+    try:
+        command = OtpVerifyCommand(email=payload.email, code=payload.code)
+        view, tokens = await auth.verify_otp(
+            command,
+            abuse_context=_device_abuse_context(request),
+        )
+    except (ValueError, ValidationError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    except AuthDisposableEmailError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except AuthRegistrationBlockedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from exc
+    except AuthOtpError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+        ) from exc
+    except AuthCredentialsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+    except AuthOtpStoreError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    return _session_response(view, tokens)
+
+
+@router.post(
+    "/telegram",
+    response_model=AuthSessionResponse,
+    summary="Login via Telegram Login Widget",
+)
+@auth_bruteforce_limit
+async def telegram_login(
+    payload: TelegramLoginRequest,
+    request: Request,
+    auth: AuthService = Depends(get_auth_service),
+) -> AuthSessionResponse:
+    settings = get_settings()
+    try:
+        verified = verify_telegram_login(
+            payload.model_dump(exclude_none=True),
+            max_age_seconds=settings.telegram_login_max_age_seconds,
+        )
+        view, tokens = await auth.login_with_telegram(
+            telegram_id=int(verified["id"]),
+            username=str(verified.get("username") or "") or None,
+            first_name=str(verified.get("first_name") or "") or None,
+            abuse_context=_device_abuse_context(request),
+        )
+    except TelegramAuthError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+        ) from exc
+    except AuthRegistrationBlockedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from exc
+    except AuthCredentialsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+    except AuthTelegramError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
         ) from exc
     return _session_response(view, tokens)
 

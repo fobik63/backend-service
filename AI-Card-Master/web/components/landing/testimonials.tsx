@@ -1,8 +1,14 @@
 "use client"
 
 import { Star } from "lucide-react"
-import { useRef } from "react"
-import { motion, useInView } from "framer-motion"
+import { useEffect, useRef, useState } from "react"
+import {
+  motion,
+  useAnimationFrame,
+  useInView,
+  useMotionValue,
+  useReducedMotion,
+} from "framer-motion"
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { GlassCard } from "@/components/ui/glass-card"
@@ -75,7 +81,7 @@ function Stars({ rating }: { rating: number }) {
 function TestimonialCard({ testimonial }: { testimonial: Testimonial }) {
   return (
     <GlassCard
-      className="w-[min(100vw-2.5rem,320px)] shrink-0 sm:w-[340px]"
+      className="w-[min(100vw-2.5rem,320px)] shrink-0 copper-border sm:w-[340px]"
       padding="md"
       hoverLift={false}
     >
@@ -124,32 +130,71 @@ function MarqueeRow({
   durationSec: number
 }) {
   const loop = [...items, ...items]
+  const trackRef = useRef<HTMLDivElement>(null)
+  const x = useMotionValue(0)
+  const [paused, setPaused] = useState(false)
+  const reduceMotion = useReducedMotion()
+  const halfWidthRef = useRef(0)
+
+  useEffect(() => {
+    const measure = () => {
+      const el = trackRef.current
+      if (!el) return
+      halfWidthRef.current = el.scrollWidth / 2
+      if (direction === "right" && x.get() === 0) {
+        x.set(-halfWidthRef.current)
+      }
+    }
+    measure()
+    window.addEventListener("resize", measure)
+    return () => window.removeEventListener("resize", measure)
+  }, [direction, items, x])
+
+  useAnimationFrame((_, delta) => {
+    if (paused || reduceMotion) return
+    const half = halfWidthRef.current
+    if (half <= 0) return
+
+    const pxPerMs = half / (durationSec * 1000)
+    const current = x.get()
+
+    if (direction === "left") {
+      let next = current - pxPerMs * delta
+      if (next <= -half) next += half
+      x.set(next)
+    } else {
+      let next = current + pxPerMs * delta
+      if (next >= 0) next -= half
+      x.set(next)
+    }
+  })
 
   return (
-    <div className="relative overflow-hidden">
+    <div
+      className="relative overflow-hidden"
+      onMouseEnter={() => setPaused(true)}
+      onMouseLeave={() => setPaused(false)}
+      onFocusCapture={() => setPaused(true)}
+      onBlurCapture={() => setPaused(false)}
+    >
       <div
-        className="pointer-events-none absolute inset-y-0 left-0 z-10 w-12 bg-gradient-to-r from-loft to-transparent sm:w-20"
+        className="pointer-events-none absolute inset-y-0 left-0 z-10 w-16 bg-gradient-to-r from-[#0f1115] via-[#0f1115]/85 to-transparent sm:w-28"
         aria-hidden
       />
       <div
-        className="pointer-events-none absolute inset-y-0 right-0 z-10 w-12 bg-gradient-to-l from-loft to-transparent sm:w-20"
+        className="pointer-events-none absolute inset-y-0 right-0 z-10 w-16 bg-gradient-to-l from-[#0f1115] via-[#0f1115]/85 to-transparent sm:w-28"
         aria-hidden
       />
 
-      <div
-        className={cn(
-          "flex w-max gap-4 py-1 will-change-transform",
-          direction === "left" ? "animate-marquee-left" : "animate-marquee-right"
-        )}
-        style={{ ["--marquee-duration" as string]: `${durationSec}s` }}
+      <motion.div
+        ref={trackRef}
+        className="flex w-max gap-4 py-1 will-change-transform"
+        style={{ x }}
       >
         {loop.map((item, index) => (
-          <TestimonialCard
-            key={`${item.id}-${index}`}
-            testimonial={item}
-          />
+          <TestimonialCard key={`${item.id}-${index}`} testimonial={item} />
         ))}
-      </div>
+      </motion.div>
     </div>
   )
 }
@@ -165,11 +210,12 @@ function TestimonialsSection() {
     <section
       id="testimonials"
       ref={sectionRef}
-      className="relative isolate scroll-mt-24 py-20 sm:py-28"
+      className="relative isolate scroll-mt-24 bg-gradient-to-b from-[#0f1115] via-[#141b17] to-[#0f1115] py-20 sm:py-28"
     >
       <div className="pointer-events-none absolute inset-0 -z-10" aria-hidden>
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_50%_35%_at_50%_100%,rgba(16,185,129,0.07),transparent_55%)]" />
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_35%_30%_at_90%_20%,rgba(194,166,140,0.06),transparent_50%)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_35%_30%_at_90%_20%,rgba(27,62,43,0.3),transparent_50%)]" />
+        <div className="absolute inset-0 opacity-[0.035] noise-texture" />
       </div>
 
       <div className="mx-auto max-w-6xl px-5">
@@ -188,7 +234,7 @@ function TestimonialsSection() {
       </div>
 
       <motion.div
-        className="group/marquee flex flex-col gap-4"
+        className="flex flex-col gap-4"
         initial={{ opacity: 0 }}
         animate={inView ? { opacity: 1 } : { opacity: 0 }}
         transition={{ delay: 0.15, duration: 0.55 }}

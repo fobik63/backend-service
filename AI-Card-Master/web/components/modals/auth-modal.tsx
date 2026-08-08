@@ -1,5 +1,7 @@
 "use client"
 
+import Link from "next/link"
+import { ArrowLeft } from "lucide-react"
 import { useState } from "react"
 
 import { AuthForm } from "@/components/auth/auth-form"
@@ -52,9 +54,21 @@ function AuthModal({
           </DialogDescription>
         </DialogHeader>
 
+        <div className="mb-2 flex items-center justify-between px-1">
+          <Link
+            href="/landing"
+            onClick={() => onOpenChange(false)}
+            className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground"
+          >
+            <ArrowLeft className="size-3.5" aria-hidden />
+            Назад на главную
+          </Link>
+        </div>
+
         <AuthForm
           key={open ? `open-${initialMode}` : "closed"}
           compact
+          hideHomeLink
           initialMode={initialMode}
           onModeChange={setMode}
           onSuccess={() => onOpenChange(false)}

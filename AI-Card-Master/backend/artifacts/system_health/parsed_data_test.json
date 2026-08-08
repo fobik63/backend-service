@@ -1,0 +1,39 @@
+{
+  "marketplace": "wildberries",
+  "sku": "146132199",
+  "product_url": "https://www.wildberries.ru/catalog/146132199/detail.aspx",
+  "title": "Кроссовки мужские для бега Air Flex Pro",
+  "price_kopecks": 899000,
+  "price_before_discount_kopecks": 1499000,
+  "currency": "RUB",
+  "description": "Fixture WB card for system health verification.",
+  "characteristics": [
+    {
+      "name": "Бренд",
+      "value": "Air Flex"
+    },
+    {
+      "name": "Цвет",
+      "value": "чёрный"
+    },
+    {
+      "name": "Материал верха",
+      "value": "текстиль / синтетика"
+    },
+    {
+      "name": "Сезон",
+      "value": "демисезон"
+    },
+    {
+      "name": "Пол",
+      "value": "Мужской"
+    }
+  ],
+  "image_urls": [],
+  "total_stock": 27,
+  "source": "fixture_fallback",
+  "warnings": [
+    "ParserHttpError: HTTP 403 from https://card.wb.ru/cards/v1/detail: <html>\r\n<head><title>403 Forbidden</title></head>\r\n<body>\r\n<center><h1>403 Forbidden</h1></center>\r\n<hr><center>Angie</center>\r\n</body>\r\n</html>\r\n"
+  ],
+  "inspected_at": "2026-08-08T19:43:12.978104+00:00"
+}
