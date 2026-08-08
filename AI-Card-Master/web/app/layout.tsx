@@ -1,5 +1,10 @@
 import type { Metadata } from "next";
-import { Inter, Space_Grotesk } from "next/font/google";
+import {
+  Inter,
+  Montserrat,
+  Roboto,
+  Space_Grotesk,
+} from "next/font/google";
 
 import { AppProviders } from "@/components/providers/app-providers";
 
@@ -8,6 +13,19 @@ import "./globals.css";
 const inter = Inter({
   subsets: ["latin", "cyrillic"],
   variable: "--font-inter",
+  display: "swap",
+});
+
+const montserrat = Montserrat({
+  subsets: ["latin", "cyrillic"],
+  variable: "--font-montserrat",
+  display: "swap",
+});
+
+const roboto = Roboto({
+  subsets: ["latin", "cyrillic"],
+  variable: "--font-roboto",
+  weight: ["400", "500", "700"],
   display: "swap",
 });
 
@@ -30,7 +48,7 @@ export default function RootLayout({
   return (
     <html lang="ru" className="dark" suppressHydrationWarning>
       <body
-        className={`${inter.variable} ${spaceGrotesk.variable} font-sans antialiased`}
+        className={`${inter.variable} ${montserrat.variable} ${roboto.variable} ${spaceGrotesk.variable} font-sans antialiased`}
       >
         <AppProviders>{children}</AppProviders>
       </body>

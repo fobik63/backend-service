@@ -1,1 +1,7 @@
-export {};
+export { EditorWorkspace } from "./editor-workspace"
+export { EditorLeftPanel } from "./left-panel"
+export { EditorCanvasStage } from "./canvas-stage"
+export { EditorRightPanel } from "./right-panel"
+export { PromptBar } from "./prompt-bar"
+export { StudioLightControl } from "./studio-light-control"
+export { TextLayerControl, ColorPicker } from "./text-layer-control"

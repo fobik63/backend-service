@@ -1,18 +1,11 @@
-import type { ReactNode } from "react";
+import type { ReactNode } from "react"
+
+import { DashboardShell } from "@/components/dashboard/dashboard-shell"
 
 type DashboardLayoutProps = {
-  children: ReactNode;
-};
+  children: ReactNode
+}
 
 export default function DashboardLayout({ children }: DashboardLayoutProps) {
-  return (
-    <div className="min-h-screen bg-background">
-      <header className="border-b border-border px-6 py-4">
-        <h1 className="font-heading text-lg font-semibold tracking-tight">
-          AI Card Master
-        </h1>
-      </header>
-      <main className="px-6 py-8">{children}</main>
-    </div>
-  );
+  return <DashboardShell>{children}</DashboardShell>
 }
