@@ -193,11 +193,24 @@ class FontManagerService:
             requested,
             self._fallback_family,
         )
-        # Ensure fallback itself is marked known when available.
+        # Ensure Inter / Montserrat / Roboto are on disk before rendering.
         if not self.has_family(self._fallback_family):
-            logger.warning(
-                "Fallback font family %r is also unavailable; "
-                "Pillow default bitmap font will be used at render time",
+            try:
+                from app.services.templates.download_default_fonts import (
+                    ensure_default_fonts,
+                )
+
+                ensure_default_fonts(self._assets_dir)
+                self._scan_and_register_system_fonts()
+            except Exception:
+                logger.exception(
+                    "Failed to auto-download fallback font family %r",
+                    self._fallback_family,
+                )
+        if not self.has_family(self._fallback_family):
+            logger.error(
+                "Fallback font family %r is unavailable after CDN bootstrap; "
+                "canvas rendering will raise if no TrueType file can be resolved",
                 self._fallback_family,
             )
         return FontResolveResult(

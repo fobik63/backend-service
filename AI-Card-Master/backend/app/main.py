@@ -55,6 +55,8 @@ from app.api import (
     pain_analysis_router,
     payments_router,
     referrals_router,
+    bg_removal_router,
+    relighting_router,
     smart_variants_router,
     templates_router,
     text_generation_router,
@@ -391,6 +393,8 @@ app.include_router(account_router)
 app.include_router(captcha_router)
 app.include_router(payments_router)
 app.include_router(referrals_router)
+app.include_router(relighting_router)
+app.include_router(bg_removal_router)
 app.include_router(winback_router)
 app.include_router(workspaces_router)
 app.include_router(exports_router)

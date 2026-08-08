@@ -1,8 +1,8 @@
 """Download default Cyrillic-capable TTFs into ``app/assets/fonts``.
 
 Fetches OFL / Apache-licensed Google Fonts upstream files via the jsDelivr
-CDN mirror of the official Google Fonts / upstream repos when they are missing
-locally. Safe to call repeatedly (no-op when files already exist).
+CDN when they are missing locally. Safe to call repeatedly (no-op when files
+already exist). Never falls back to Pillow's bitmap ``load_default()``.
 """
 
 from __future__ import annotations
@@ -20,11 +20,22 @@ _APP_ASSETS_FONTS_DIR: Final[Path] = (
     Path(__file__).resolve().parents[2] / "assets" / "fonts"
 )
 
-# Legal Google Fonts upstream (OFL / Apache 2.0) via jsDelivr CDN.
+# Legal Google Fonts / upstream (OFL / Apache 2.0) via jsDelivr CDN.
+# Inter ships as a variable TTF (opsz+wght); Bold/Medium are selected via
+# FreeType variation axes in FontRegistry (Pillow), not separate static files.
 DEFAULT_FONT_DOWNLOADS: Final[dict[str, str]] = {
     "Inter-Regular.ttf": (
         "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/inter/"
         "Inter%5Bopsz%2Cwght%5D.ttf"
+    ),
+    "Inter-Bold.ttf": (
+        # Same variable master — FontRegistry sets wght=700 at render time.
+        "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/inter/"
+        "Inter%5Bopsz%2Cwght%5D.ttf"
+    ),
+    "Montserrat-Regular.ttf": (
+        "https://cdn.jsdelivr.net/gh/JulietaUla/Montserrat@master/fonts/ttf/"
+        "Montserrat-Regular.ttf"
     ),
     "Montserrat-Bold.ttf": (
         "https://cdn.jsdelivr.net/gh/JulietaUla/Montserrat@master/fonts/ttf/"
@@ -33,6 +44,10 @@ DEFAULT_FONT_DOWNLOADS: Final[dict[str, str]] = {
     "Roboto-Regular.ttf": (
         "https://cdn.jsdelivr.net/gh/googlefonts/roboto@main/src/hinted/"
         "Roboto-Regular.ttf"
+    ),
+    "Roboto-Bold.ttf": (
+        "https://cdn.jsdelivr.net/gh/googlefonts/roboto@main/src/hinted/"
+        "Roboto-Bold.ttf"
     ),
 }
 
@@ -72,13 +87,21 @@ def ensure_default_fonts(
             existing = [
                 dest / name
                 for name in DEFAULT_FONT_DOWNLOADS
-                if (dest / name).is_file()
+                if (dest / name).is_file() and (dest / name).stat().st_size > 1024
             ]
             if len(existing) == len(DEFAULT_FONT_DOWNLOADS):
                 return []
         written = _download_missing(dest, force=force)
         _ensured = True
         return written
+
+
+def reset_default_fonts_cache() -> None:
+    """Test helper: allow ``ensure_default_fonts`` to re-check disk."""
+
+    global _ensured
+    with _lock:
+        _ensured = False
 
 
 def _download_missing(dest: Path, *, force: bool) -> list[Path]:
@@ -145,4 +168,5 @@ __all__ = [
     "DEFAULT_FONT_DOWNLOADS",
     "default_fonts_dir",
     "ensure_default_fonts",
+    "reset_default_fonts_cache",
 ]

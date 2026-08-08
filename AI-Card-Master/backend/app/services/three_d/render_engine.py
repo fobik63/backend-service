@@ -43,11 +43,9 @@ from app.services.three_d.styles import (
     LightingPresetDTO,
     LightingPresetName,
     RenderSettingsDTO,
-    ShadowCatcherFloorMesh,
     ShadowCatcherFloorSettings,
     build_shadow_catcher_floor,
     get_lighting_preset,
-    sample_shadow_catcher_shade,
     shade_surface_lambert,
 )
 
@@ -154,6 +152,11 @@ class RenderEngineConfig(BaseModel):
         default_factory=ShadowCatcherFloorSettings
     )
     studio_settings: RenderSettingsDTO | None = None
+    # SSAA: render frames at ``ssaa_factor``× resolution then LANCZOS-downsample.
+    # 2 ≈ practical supersampling; higher values mimic 4×/8× AA at CPU cost.
+    ssaa_factor: int = Field(default=2, ge=1, le=4)
+    # Optional Loop-style midpoint subdivision after load (0 = leave as-is).
+    mesh_subdivisions: int = Field(default=0, ge=0, le=6)
 
     @classmethod
     def from_studio_settings(
@@ -232,11 +235,20 @@ class MeshGeometry:
     bounds: MeshBounds
     source_format: MeshFormat
     source_digest: str
+    # Per-vertex unit normals for smooth (Gouraud) shading. Always populated
+    # by ``load_mesh_bytes`` / ``compute_vertex_normals``.
+    normals: list[tuple[float, float, float]] | None = None
 
     @property
     def centered_vertices(self) -> list[tuple[float, float, float]]:
         cx, cy, cz = self.bounds.center
         return [(x - cx, y - cy, z - cz) for x, y, z in self.vertices]
+
+    @property
+    def resolved_normals(self) -> list[tuple[float, float, float]]:
+        if self.normals is not None and len(self.normals) == len(self.vertices):
+            return self.normals
+        return compute_vertex_normals(self.vertices, self.faces)
 
 
 # ---------------------------------------------------------------------------
@@ -420,8 +432,120 @@ def mesh_cache_path(cache_dir: Path, digest: str, fmt: MeshFormat) -> Path:
     return cache_dir / f"{digest}.{fmt}"
 
 
-def load_mesh_bytes(data: bytes, *, source_name: str = "mesh.glb") -> MeshGeometry:
-    """Decode mesh bytes into CPU geometry (trimesh preferred)."""
+def compute_vertex_normals(
+    vertices: Sequence[tuple[float, float, float]],
+    faces: Sequence[tuple[int, int, int]],
+) -> list[tuple[float, float, float]]:
+    """Area-weighted smooth vertex normals (force Smooth Shading)."""
+
+    accum = [[0.0, 0.0, 0.0] for _ in range(len(vertices))]
+    for a, b, c in faces:
+        if a < 0 or b < 0 or c < 0:
+            continue
+        if a >= len(vertices) or b >= len(vertices) or c >= len(vertices):
+            continue
+        n = _triangle_normal(vertices[a], vertices[b], vertices[c])
+        # Weight by triangle area proxy (unnormalized cross length already in n
+        # unit form — re-accumulate unit face normals equally for stability).
+        for idx in (a, b, c):
+            accum[idx][0] += n[0]
+            accum[idx][1] += n[1]
+            accum[idx][2] += n[2]
+    return [_normalize((x, y, z)) for x, y, z in accum]
+
+
+def subdivide_mesh_geometry(
+    mesh: MeshGeometry,
+    *,
+    levels: int = 5,
+    project_to_sphere: bool = False,
+) -> MeshGeometry:
+    """Midpoint-subdivide triangles for a high-poly smooth look.
+
+    Each level splits every triangle into 4. ``levels >= 5`` yields studio-grade
+    density on generated primitives (icosphere / blob fallbacks).
+
+    When ``project_to_sphere`` is True (icosphere path), new vertices are
+    re-projected onto the bounding sphere so the surface stays round.
+    """
+
+    if levels <= 0:
+        normals = compute_vertex_normals(mesh.vertices, mesh.faces)
+        return MeshGeometry(
+            vertices=list(mesh.vertices),
+            faces=list(mesh.faces),
+            bounds=mesh.bounds,
+            source_format=mesh.source_format,
+            source_digest=mesh.source_digest,
+            normals=normals,
+        )
+
+    verts: list[tuple[float, float, float]] = list(mesh.vertices)
+    faces: list[tuple[int, int, int]] = list(mesh.faces)
+    cx, cy, cz = mesh.bounds.center
+    radius = max(mesh.bounds.radius, 1e-6)
+
+    def _maybe_project(v: tuple[float, float, float]) -> tuple[float, float, float]:
+        if not project_to_sphere:
+            return v
+        dx, dy, dz = v[0] - cx, v[1] - cy, v[2] - cz
+        length = math.sqrt(dx * dx + dy * dy + dz * dz) or 1e-9
+        scale = radius / length
+        return (cx + dx * scale, cy + dy * scale, cz + dz * scale)
+
+    for _ in range(levels):
+        midpoint_cache: dict[tuple[int, int], int] = {}
+
+        def _midpoint(i: int, j: int) -> int:
+            key = (i, j) if i < j else (j, i)
+            cached = midpoint_cache.get(key)
+            if cached is not None:
+                return cached
+            a, b = verts[i], verts[j]
+            mid = _maybe_project(
+                ((a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5, (a[2] + b[2]) * 0.5)
+            )
+            idx = len(verts)
+            verts.append(mid)
+            midpoint_cache[key] = idx
+            return idx
+
+        next_faces: list[tuple[int, int, int]] = []
+        for i, j, k in faces:
+            a = _midpoint(i, j)
+            b = _midpoint(j, k)
+            c = _midpoint(k, i)
+            next_faces.extend(((i, a, c), (j, b, a), (k, c, b), (a, b, c)))
+        faces = next_faces
+
+    xs = [v[0] for v in verts]
+    ys = [v[1] for v in verts]
+    zs = [v[2] for v in verts]
+    normals = compute_vertex_normals(verts, faces)
+    return MeshGeometry(
+        vertices=verts,
+        faces=faces,
+        bounds=MeshBounds(
+            min_xyz=(min(xs), min(ys), min(zs)),
+            max_xyz=(max(xs), max(ys), max(zs)),
+        ),
+        source_format=mesh.source_format,
+        source_digest=mesh.source_digest,
+        normals=normals,
+    )
+
+
+def load_mesh_bytes(
+    data: bytes,
+    *,
+    source_name: str = "mesh.glb",
+    subdivisions: int = 0,
+) -> MeshGeometry:
+    """Decode mesh bytes into CPU geometry (trimesh preferred).
+
+    Always attaches smooth ``compute_vertex_normals()``. Optional
+    ``subdivisions`` (≥5 for studio primitives) densifies the mesh.
+    """
 
     if not data:
         raise MeshLoadError("Mesh payload is empty.")
@@ -436,7 +560,18 @@ def load_mesh_bytes(data: bytes, *, source_name: str = "mesh.glb") -> MeshGeomet
                 "trimesh is required to load GLB/GLTF. Install backend extras "
                 "or provide a plain Wavefront OBJ for the software path."
             ) from None
-        return _load_obj_fallback(data, digest=digest)
+        mesh = _load_obj_fallback(data, digest=digest)
+        if subdivisions > 0:
+            return subdivide_mesh_geometry(mesh, levels=subdivisions)
+        normals = compute_vertex_normals(mesh.vertices, mesh.faces)
+        return MeshGeometry(
+            vertices=mesh.vertices,
+            faces=mesh.faces,
+            bounds=mesh.bounds,
+            source_format=mesh.source_format,
+            source_digest=mesh.source_digest,
+            normals=normals,
+        )
 
     try:
         loaded = trimesh.load(
@@ -454,29 +589,40 @@ def load_mesh_bytes(data: bytes, *, source_name: str = "mesh.glb") -> MeshGeomet
         ]
         if not geometries:
             raise MeshLoadError("GLTF/GLB scene contains no triangle meshes.")
-        mesh = trimesh.util.concatenate(geometries)
+        tri = trimesh.util.concatenate(geometries)
     elif isinstance(loaded, trimesh.Trimesh):
-        mesh = loaded
+        tri = loaded
     else:
         raise MeshLoadError(f"Unsupported trimesh payload type: {type(loaded)!r}")
 
-    if mesh.vertices is None or len(mesh.vertices) == 0:
+    if tri.vertices is None or len(tri.vertices) == 0:
         raise MeshLoadError("Mesh has no vertices.")
-    faces = mesh.faces
+    faces = tri.faces
     if faces is None or len(faces) == 0:
         raise MeshLoadError("Mesh has no faces.")
 
-    vmin = tuple(float(x) for x in mesh.bounds[0])
-    vmax = tuple(float(x) for x in mesh.bounds[1])
-    vertices = [tuple(float(c) for c in row) for row in mesh.vertices]
+    # Force smooth vertex normals via trimesh when available.
+    try:
+        tri.fix_normals()
+    except Exception:  # noqa: BLE001
+        logger.debug("trimesh.fix_normals failed; using CPU path", exc_info=True)
+
+    vmin = tuple(float(x) for x in tri.bounds[0])
+    vmax = tuple(float(x) for x in tri.bounds[1])
+    vertices = [tuple(float(c) for c in row) for row in tri.vertices]
     tri_faces = [tuple(int(i) for i in face) for face in faces]
-    return MeshGeometry(
+    mesh = MeshGeometry(
         vertices=vertices,  # type: ignore[arg-type]
         faces=tri_faces,  # type: ignore[arg-type]
         bounds=MeshBounds(min_xyz=vmin, max_xyz=vmax),  # type: ignore[arg-type]
         source_format=fmt,
         source_digest=digest,
+        normals=None,
     )
+    if subdivisions > 0:
+        return subdivide_mesh_geometry(mesh, levels=subdivisions)
+    mesh.normals = compute_vertex_normals(mesh.vertices, mesh.faces)
+    return mesh
 
 
 def _load_obj_fallback(data: bytes, *, digest: str) -> MeshGeometry:
@@ -503,6 +649,7 @@ def _load_obj_fallback(data: bytes, *, digest: str) -> MeshGeometry:
     xs = [v[0] for v in vertices]
     ys = [v[1] for v in vertices]
     zs = [v[2] for v in vertices]
+    normals = compute_vertex_normals(vertices, faces)
     return MeshGeometry(
         vertices=vertices,
         faces=faces,
@@ -512,6 +659,7 @@ def _load_obj_fallback(data: bytes, *, digest: str) -> MeshGeometry:
         ),
         source_format="obj",
         source_digest=digest,
+        normals=normals,
     )
 
 
@@ -546,7 +694,11 @@ class FrameRendererBackend(ABC):
 
 
 class SoftwareRasterBackend(FrameRendererBackend):
-    """Dependency-light CPU rasteriser (tests / last-resort Docker fallback)."""
+    """Dependency-light CPU rasteriser (tests / last-resort Docker fallback).
+
+    Features: smooth vertex normals, elliptical Gaussian contact shadow, and
+    2× SSAA (supersample → LANCZOS downsample) for studio-grade edges.
+    """
 
     name = "software"
 
@@ -554,31 +706,50 @@ class SoftwareRasterBackend(FrameRendererBackend):
         self._mesh: MeshGeometry | None = None
         self._config: RenderEngineConfig | None = None
         self._verts: list[tuple[float, float, float]] = []
+        self._normals: list[tuple[float, float, float]] = []
         self._lighting: LightingPresetDTO | None = None
-        self._shadow_floor: ShadowCatcherFloorMesh | None = None
         self._mesh_radius: float = 1.0
+        self._centered_min_y: float = -0.5
 
     def setup(self, mesh: MeshGeometry, config: RenderEngineConfig) -> None:
         self._mesh = mesh
         self._config = config
         self._verts = mesh.centered_vertices
+        self._normals = mesh.resolved_normals
         self._lighting = config.resolved_lighting()
-        # Centred mesh: min Y is -extent_y / 2.
-        centered_min_y = -0.5 * mesh.bounds.extents[1]
+        self._centered_min_y = -0.5 * mesh.bounds.extents[1]
         self._mesh_radius = mesh.bounds.radius
-        self._shadow_floor = build_shadow_catcher_floor(
-            mesh_min_y=centered_min_y,
-            mesh_radius=mesh.bounds.radius,
-            settings=config.resolved_shadow_catcher(),
-        )
 
     def render_frame(self, pose: OrbitCameraPose) -> bytes:
         if self._mesh is None or self._config is None or self._lighting is None:
             raise RenderEngineError("Software backend is not initialised.")
         cfg = self._config
+        ssaa = max(1, int(cfg.ssaa_factor))
+        raw = self._render_frame_at(pose, width=cfg.width * ssaa, height=cfg.height * ssaa)
+        if ssaa == 1:
+            return raw
+        from PIL import Image
+
+        try:
+            resampling = Image.Resampling.LANCZOS
+        except AttributeError:  # pragma: no cover
+            resampling = Image.LANCZOS  # type: ignore[attr-defined]
+        img = Image.frombytes("RGB", (cfg.width * ssaa, cfg.height * ssaa), raw)
+        img = img.resize((cfg.width, cfg.height), resampling)
+        return img.tobytes()
+
+    def _render_frame_at(
+        self,
+        pose: OrbitCameraPose,
+        *,
+        width: int,
+        height: int,
+    ) -> bytes:
+        assert self._mesh is not None and self._config is not None
+        assert self._lighting is not None
+        cfg = self._config
         lighting = self._lighting
-        w, h = cfg.width, cfg.height
-        # Z-buffer + flat shading into a raw RGB bytearray.
+        w, h = width, height
         depth = [float("inf")] * (w * h)
         pixels = bytearray(w * h * RGB24_BYTES_PER_PIXEL)
         bg = cfg.background_rgb
@@ -593,53 +764,20 @@ class SoftwareRasterBackend(FrameRendererBackend):
         )
         mvp = _matmul4(proj, view)
 
-        # Shadow-catcher floor first (under the product).
-        if self._shadow_floor is not None:
-            floor = self._shadow_floor
-            key = lighting.lights[0]
-            key_dir = _normalize(key.position)
-            for face in floor.faces:
-                tri = [floor.vertices[i] for i in face]
-                clip = [_transform_point(mvp, v) for v in tri]
-                if any(p is None for p in clip):
-                    continue
-                ndc = [p for p in clip if p is not None]
-                screen: list[tuple[float, float, float]] = []
-                for x, y, z in ndc:
-                    sx = (x * 0.5 + 0.5) * (w - 1)
-                    sy = (1.0 - (y * 0.5 + 0.5)) * (h - 1)
-                    screen.append((sx, sy, z))
-                # Approximate soft umbra at triangle centroid in XZ.
-                cx = (tri[0][0] + tri[1][0] + tri[2][0]) / 3.0
-                cz = (tri[0][2] + tri[1][2] + tri[2][2]) / 3.0
-                shade = sample_shadow_catcher_shade(
-                    world_xz=(cx, cz),
-                    mesh_radius=self._mesh_radius,
-                    light_direction=key_dir,
-                    settings=floor.settings,
-                )
-                albedo = floor.settings.albedo_rgb
-                opacity = floor.settings.opacity
-                # Blend catcher towards background so transparent/gradient plates
-                # still show a soft contact shadow without a solid grey slab.
-                color = (
-                    int(
-                        bg[0] * (1.0 - opacity)
-                        + (albedo[0] * 255.0 * shade) * opacity
-                    ),
-                    int(
-                        bg[1] * (1.0 - opacity)
-                        + (albedo[1] * 255.0 * shade) * opacity
-                    ),
-                    int(
-                        bg[2] * (1.0 - opacity)
-                        + (albedo[2] * 255.0 * shade) * opacity
-                    ),
-                )
-                _fill_triangle(pixels, depth, w, h, screen, color)
+        # Soft elliptical contact shadow (Gaussian-blurred) under the product.
+        # Tessellated catcher mesh is skipped on the CPU path — a solid floor
+        # slab reads as a hard horizon; the blurred ellipse grounds the object.
+        self._composite_gaussian_contact_shadow(
+            pixels,
+            mvp=mvp,
+            width=w,
+            height=h,
+        )
 
+        normals = self._normals
         for face in self._mesh.faces:
-            tri = [self._verts[i] for i in face]
+            i0, i1, i2 = face
+            tri = [self._verts[i0], self._verts[i1], self._verts[i2]]
             clip = [_transform_point(mvp, v) for v in tri]
             if any(p is None for p in clip):
                 continue
@@ -649,24 +787,89 @@ class SoftwareRasterBackend(FrameRendererBackend):
                 sx = (x * 0.5 + 0.5) * (w - 1)
                 sy = (1.0 - (y * 0.5 + 0.5)) * (h - 1)
                 screen.append((sx, sy, z))
-            # Multi-light Lambert from the active Studio Style preset.
-            n = _triangle_normal(tri[0], tri[1], tri[2])
-            shaded = shade_surface_lambert(n, lighting)
-            color = (
-                int(210 * shaded[0]),
-                int(220 * shaded[1]),
-                int(235 * shaded[2]),
-            )
-            _fill_triangle(pixels, depth, w, h, screen, color)
+            # True Gouraud: shade each vertex with smooth normals, then interpolate.
+            colors: list[tuple[int, int, int]] = []
+            for ni in (i0, i1, i2):
+                shaded = shade_surface_lambert(normals[ni], lighting)
+                colors.append(
+                    (
+                        int(min(255, 235 * shaded[0])),
+                        int(min(255, 240 * shaded[1])),
+                        int(min(255, 248 * shaded[2])),
+                    )
+                )
+            _fill_triangle_gouraud(pixels, depth, w, h, screen, colors)
         return bytes(pixels)
+
+    def _composite_gaussian_contact_shadow(
+        self,
+        pixels: bytearray,
+        *,
+        mvp: Mat4,
+        width: int,
+        height: int,
+    ) -> None:
+        """Elliptical soft shadow under the mesh, Gaussian-blurred via Pillow."""
+
+        if self._config is None:
+            return
+        catcher = self._config.resolved_shadow_catcher()
+        if not catcher.enabled or not catcher.receive_shadows:
+            return
+
+        from PIL import Image, ImageDraw, ImageFilter
+
+        # Contact point at mesh bottom centre in centred coordinates.
+        contact = (0.0, self._centered_min_y - catcher.y_offset, 0.0)
+        projected = _transform_point(mvp, contact)
+        if projected is None:
+            return
+        px = (projected[0] * 0.5 + 0.5) * (width - 1)
+        py = (1.0 - (projected[1] * 0.5 + 0.5)) * (height - 1)
+
+        # Ellipse size scales with mesh radius projected roughly to screen.
+        rim = (self._mesh_radius * 0.85, self._centered_min_y, 0.0)
+        rim_p = _transform_point(mvp, rim)
+        if rim_p is None:
+            radius_x = max(8.0, width * 0.12)
+        else:
+            rx = (rim_p[0] * 0.5 + 0.5) * (width - 1)
+            radius_x = max(8.0, abs(rx - px) * (1.1 + catcher.shadow_softness))
+        radius_y = max(4.0, radius_x * 0.38)
+
+        shadow = Image.new("L", (width, height), 0)
+        draw = ImageDraw.Draw(shadow)
+        strength = int(round(255 * catcher.shadow_strength * catcher.opacity))
+        draw.ellipse(
+            (
+                px - radius_x,
+                py - radius_y,
+                px + radius_x,
+                py + radius_y,
+            ),
+            fill=strength,
+        )
+        blur_radius = max(2.0, min(width, height) * 0.018 * (0.5 + catcher.shadow_softness))
+        shadow = shadow.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+        alpha = shadow.tobytes()
+        for i, a in enumerate(alpha):
+            if a == 0:
+                continue
+            t = a / 255.0
+            off = i * 3
+            # Soft dark umbra — grounds the product on the studio plate.
+            pixels[off] = int(pixels[off] * (1.0 - 0.72 * t))
+            pixels[off + 1] = int(pixels[off + 1] * (1.0 - 0.72 * t))
+            pixels[off + 2] = int(pixels[off + 2] * (1.0 - 0.72 * t))
 
     def close(self) -> None:
         self._mesh = None
         self._config = None
         self._verts = []
+        self._normals = []
         self._lighting = None
-        self._shadow_floor = None
         self._mesh_radius = 1.0
+        self._centered_min_y = -0.5
 
 
 class PyVistaOffscreenBackend(FrameRendererBackend):
@@ -695,10 +898,32 @@ class PyVistaOffscreenBackend(FrameRendererBackend):
             faces_flat.extend((3, a, b, c))
         faces = np.asarray(faces_flat, dtype=np.int64)
         poly = pv.PolyData(verts, faces)
+        # Force smooth shading normals (equivalent to compute_vertex_normals).
+        try:
+            poly = poly.compute_normals(
+                cell_normals=False,
+                point_normals=True,
+                consistent_normals=True,
+                inplace=False,
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("PyVista compute_normals failed", exc_info=True)
+
+        ssaa = max(1, int(config.ssaa_factor))
         plotter = pv.Plotter(
             off_screen=True,
-            window_size=(config.width, config.height),
+            window_size=(config.width * ssaa, config.height * ssaa),
         )
+        # Multi-sample AA when the VTK backend exposes it (≈ 8×).
+        try:
+            ren_win = getattr(plotter, "ren_win", None) or getattr(
+                plotter, "render_window", None
+            )
+            if ren_win is not None and hasattr(ren_win, "SetMultiSamples"):
+                ren_win.SetMultiSamples(8 if ssaa >= 2 else 0)
+        except Exception:  # noqa: BLE001
+            logger.debug("VTK SetMultiSamples unavailable", exc_info=True)
+
         plotter.set_background(
             [
                 config.background_rgb[0] / 255.0,
@@ -756,14 +981,30 @@ class PyVistaOffscreenBackend(FrameRendererBackend):
         # screenshot returns HxWx3/4 uint8
         if img.shape[2] == 4:
             img = img[:, :, :3]
+        ssaa = max(1, int(self._config.ssaa_factor))
         expected = self._config.width * self._config.height * RGB24_BYTES_PER_PIXEL
-        raw = memoryview(img).tobytes() if hasattr(img, "tobytes") else bytes(img)
-        if len(raw) != expected:
-            # Contiguous copy via numpy if strides differ.
+        if ssaa > 1:
+            from PIL import Image
             import numpy as np
 
             arr = np.ascontiguousarray(img[:, :, :3], dtype=np.uint8)
-            raw = arr.tobytes()
+            pil = Image.fromarray(arr, mode="RGB")
+            try:
+                resampling = Image.Resampling.LANCZOS
+            except AttributeError:  # pragma: no cover
+                resampling = Image.LANCZOS  # type: ignore[attr-defined]
+            pil = pil.resize(
+                (self._config.width, self._config.height),
+                resampling,
+            )
+            raw = pil.tobytes()
+        else:
+            raw = memoryview(img).tobytes() if hasattr(img, "tobytes") else bytes(img)
+            if len(raw) != expected:
+                import numpy as np
+
+                arr = np.ascontiguousarray(img[:, :, :3], dtype=np.uint8)
+                raw = arr.tobytes()
         if len(raw) != expected:
             raise RenderEngineError(
                 f"Unexpected frame size {len(raw)} (expected {expected})."
@@ -936,7 +1177,19 @@ def _fill_triangle(
     pts: Sequence[tuple[float, float, float]],
     color: tuple[int, int, int],
 ) -> None:
+    _fill_triangle_gouraud(pixels, depth, width, height, pts, (color, color, color))
+
+
+def _fill_triangle_gouraud(
+    pixels: bytearray,
+    depth: list[float],
+    width: int,
+    height: int,
+    pts: Sequence[tuple[float, float, float]],
+    colors: Sequence[tuple[int, int, int]],
+) -> None:
     (x0, y0, z0), (x1, y1, z1), (x2, y2, z2) = pts
+    c0, c1, c2 = colors
     min_x = max(0, int(math.floor(min(x0, x1, x2))))
     max_x = min(width - 1, int(math.ceil(max(x0, x1, x2))))
     min_y = max(0, int(math.floor(min(y0, y1, y2))))
@@ -946,7 +1199,6 @@ def _fill_triangle(
         return
     for y in range(min_y, max_y + 1):
         for x in range(min_x, max_x + 1):
-            # Barycentric weights via edge functions.
             w0 = ((x1 - x) * (y2 - y) - (x2 - x) * (y1 - y)) / area
             w1 = ((x2 - x) * (y0 - y) - (x0 - x) * (y2 - y)) / area
             w2 = 1.0 - w0 - w1
@@ -958,9 +1210,9 @@ def _fill_triangle(
                 continue
             depth[idx] = z
             off = idx * 3
-            pixels[off] = color[0]
-            pixels[off + 1] = color[1]
-            pixels[off + 2] = color[2]
+            pixels[off] = int(w0 * c0[0] + w1 * c1[0] + w2 * c2[0])
+            pixels[off + 1] = int(w0 * c0[1] + w1 * c1[1] + w2 * c2[1])
+            pixels[off + 2] = int(w0 * c0[2] + w1 * c1[2] + w2 * c2[2])
 
 
 # ---------------------------------------------------------------------------
@@ -1361,7 +1613,11 @@ class Offscreen3DRenderer:
 
     def load_mesh_bytes(self, data: bytes, *, source_name: str = "mesh.glb") -> MeshGeometry:
         self._ensure_open()
-        mesh = load_mesh_bytes(data, source_name=source_name)
+        mesh = load_mesh_bytes(
+            data,
+            source_name=source_name,
+            subdivisions=self._config.mesh_subdivisions,
+        )
         # Persist a content-addressed local cache copy for subsequent jobs.
         try:
             write_mesh_cache(self._cache_dir, data, mesh.source_format)
@@ -1571,10 +1827,12 @@ __all__ = [
     "build_orbit_poses",
     "build_preview_ffmpeg_argv",
     "compute_fit_distance",
+    "compute_vertex_normals",
     "configure_headless_opengl",
     "create_frame_backend",
     "detect_mesh_format",
     "ffmpeg_mp4_movflags",
     "ffmpeg_supports_hide_banner",
     "load_mesh_bytes",
+    "subdivide_mesh_geometry",
 ]

@@ -144,15 +144,18 @@ class ModernglOffscreenBackend:
         )
 
         verts = mesh.centered_vertices
-        # Area-weighted face normals → vertex normals.
-        accum = [[0.0, 0.0, 0.0] for _ in verts]
-        for a, b, c in mesh.faces:
-            n = _triangle_normal(verts[a], verts[b], verts[c])
-            for idx in (a, b, c):
-                accum[idx][0] += n[0]
-                accum[idx][1] += n[1]
-                accum[idx][2] += n[2]
-        normals = [_normalize((x, y, z)) for x, y, z in accum]
+        # Prefer precomputed smooth normals; fall back to area-weighted CPU path.
+        if mesh.normals is not None and len(mesh.normals) == len(verts):
+            normals = list(mesh.normals)
+        else:
+            accum = [[0.0, 0.0, 0.0] for _ in verts]
+            for a, b, c in mesh.faces:
+                n = _triangle_normal(verts[a], verts[b], verts[c])
+                for idx in (a, b, c):
+                    accum[idx][0] += n[0]
+                    accum[idx][1] += n[1]
+                    accum[idx][2] += n[2]
+            normals = [_normalize((x, y, z)) for x, y, z in accum]
 
         interleaved: list[float] = []
         indices: list[int] = []

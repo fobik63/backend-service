@@ -15,6 +15,9 @@ from app.services.templates.image_cache import (
     get_image_asset_cache,
 )
 from app.services.templates.renderer import (
+    BADGE_FONT_HEIGHT_RATIO,
+    CANVAS_SUPERSAMPLE_SCALE,
+    DEFAULT_BADGE_FONT_FAMILY,
     DEFAULT_EXPORT_HEIGHT,
     DEFAULT_EXPORT_WIDTH,
     PREVIEW_HEIGHT,
@@ -28,6 +31,9 @@ from app.services.templates.renderer import (
 )
 
 __all__ = [
+    "BADGE_FONT_HEIGHT_RATIO",
+    "CANVAS_SUPERSAMPLE_SCALE",
+    "DEFAULT_BADGE_FONT_FAMILY",
     "DEFAULT_EXPORT_HEIGHT",
     "DEFAULT_EXPORT_WIDTH",
     "DEFAULT_FALLBACK_FAMILY",

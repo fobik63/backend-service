@@ -29,6 +29,7 @@ _IMAGE_UPLOAD_PREFIXES = (
     "/api/v1/brand-loras",
     "/api/v1/brand-dna",
     "/api/v1/visual-audit",
+    "/api/v1/tools/remove-bg",
 )
 
 _BULK_UPLOAD_PREFIX = "/api/v1/bulk-generations"

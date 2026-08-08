@@ -132,33 +132,35 @@ def _light(
     )
 
 
-# Soft Key / Fill / Back — neutral e-commerce product demo.
+# Soft Key / Fill / Rim — warm studio key, cool fill, silhouette rim.
 _STUDIO_SOFT = LightingPresetDTO(
     name=LightingPresetName.STUDIO_SOFT,
-    description="Three soft lights (Key, Fill, Back) for neutral product showcase.",
-    ambient_rgb=(0.12, 0.12, 0.14),
-    ambient_intensity=0.28,
+    description=(
+        "Three-point studio: warm Key (1.2), cool Fill (0.6), Rim silhouette."
+    ),
+    ambient_rgb=(0.10, 0.11, 0.14),
+    ambient_intensity=0.24,
     lights=(
         _light(
             LightRole.KEY,
-            (2.4, 3.2, 2.0),
-            color=(1.0, 0.98, 0.95),
-            intensity=1.35,
-            softness=0.75,
+            (2.6, 3.4, 1.8),  # warm upper-right key
+            color=(1.0, 0.94, 0.86),
+            intensity=1.2,
+            softness=0.72,
         ),
         _light(
             LightRole.FILL,
-            (-2.6, 1.8, 1.2),
-            color=(0.92, 0.95, 1.0),
-            intensity=0.55,
-            softness=0.85,
+            (-2.8, 1.6, 1.4),  # soft cool fill from the left
+            color=(0.78, 0.88, 1.0),
+            intensity=0.6,
+            softness=0.90,
         ),
         _light(
-            LightRole.BACK,
-            (0.2, 2.6, -3.0),
-            color=(1.0, 1.0, 1.0),
-            intensity=0.70,
-            softness=0.65,
+            LightRole.RIM,
+            (0.15, 2.4, -3.2),  # back rim for silhouette / volume
+            color=(1.0, 0.98, 0.95),
+            intensity=0.85,
+            softness=0.55,
         ),
     ),
 )
@@ -357,40 +359,32 @@ def sample_shadow_catcher_shade(
     light_direction: tuple[float, float, float],
     settings: ShadowCatcherFloorSettings,
 ) -> float:
-    """Approximate soft contact-shadow factor in [0, 1] (1 = fully lit).
+    """Approximate soft elliptical contact-shadow factor in [0, 1] (1 = lit).
 
-    Used by the CPU software rasteriser; GL backends prefer real shadow maps /
-    VTK shadow catcher materials when available.
+    Uses a Gaussian radial falloff so the umbra reads as a soft oval under the
+    product (CPU software path). GL backends prefer real shadow maps.
     """
 
     if not settings.enabled or not settings.receive_shadows:
         return 1.0
 
     lx, ly, lz = light_direction
-    # Project a unit disc under the mesh along the key light (ignore Y).
     length_xz = math.hypot(lx, lz)
     if length_xz < 1e-6:
         offset_x, offset_z = 0.0, 0.0
     else:
-        # Soft bias opposite to light so the umbra sits under the object.
         bias = 0.15 * max(mesh_radius, 1e-6)
         offset_x = -(lx / length_xz) * bias
         offset_z = -(lz / length_xz) * bias
 
     dx = world_xz[0] - offset_x
     dz = world_xz[1] - offset_z
-    dist = math.hypot(dx, dz)
-    core = max(mesh_radius, 1e-6) * (0.55 + 0.35 * (1.0 - settings.shadow_softness))
-    penumbra = max(mesh_radius, 1e-6) * (1.2 + 2.5 * settings.shadow_softness)
-    if dist <= core:
-        shade = 1.0 - settings.shadow_strength
-    elif dist >= penumbra:
-        shade = 1.0
-    else:
-        t = (dist - core) / max(penumbra - core, 1e-6)
-        # Smoothstep falloff.
-        t = t * t * (3.0 - 2.0 * t)
-        shade = (1.0 - settings.shadow_strength) + settings.shadow_strength * t
+    # Elliptical metric: slightly elongated along X for a natural contact oval.
+    dist = math.hypot(dx * 1.05, dz * 0.92)
+    sigma = max(mesh_radius, 1e-6) * (0.55 + 0.85 * settings.shadow_softness)
+    # Gaussian: e^(-d² / 2σ²)
+    falloff = math.exp(-(dist * dist) / max(2.0 * sigma * sigma, 1e-9))
+    shade = 1.0 - settings.shadow_strength * falloff
     return max(0.0, min(1.0, shade))
 
 

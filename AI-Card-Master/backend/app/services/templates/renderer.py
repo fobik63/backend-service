@@ -41,6 +41,12 @@ DEFAULT_EXPORT_WIDTH = 1080
 DEFAULT_EXPORT_HEIGHT = 1440
 PREVIEW_WIDTH = 300
 PREVIEW_HEIGHT = 400
+# Internal supersample factor — render at 2× then LANCZOS-downsample for crisp
+# rotated text / soft shadows (1080×1440 → 2160×2880 working buffer).
+CANVAS_SUPERSAMPLE_SCALE = 2
+# Badge type tracks height; slightly under 0.5 leaves room for padding.
+BADGE_FONT_HEIGHT_RATIO = 0.48
+DEFAULT_BADGE_FONT_FAMILY = "Inter"
 
 try:
     LANCZOS = Image.Resampling.LANCZOS
@@ -211,12 +217,18 @@ class CanvasServerRenderer:
     ) -> RenderedCanvas:
         src_w = max(1, int(canvas.width))
         src_h = max(1, int(canvas.height))
-        scale_x = target_width / src_w
-        scale_y = target_height / src_h
+
+        # Supersample working buffer, then LANCZOS-downsample to the export size.
+        # Previews stay 1× (small catalog thumbs don't need the extra cost).
+        ss = 1 if is_preview else CANVAS_SUPERSAMPLE_SCALE
+        work_w = max(1, int(target_width * ss))
+        work_h = max(1, int(target_height * ss))
+        scale_x = work_w / src_w
+        scale_y = work_h / src_h
 
         canvas_img = Image.new(
             "RGBA",
-            (target_width, target_height),
+            (work_w, work_h),
             color=_parse_hex_color(canvas.background_color),
         )
 
@@ -225,7 +237,7 @@ class CanvasServerRenderer:
             if bg_bytes:
                 try:
                     bg = _decode_image(bg_bytes).resize(
-                        (target_width, target_height),
+                        (work_w, work_h),
                         LANCZOS,
                     )
                     canvas_img = Image.alpha_composite(canvas_img, bg)
@@ -259,6 +271,14 @@ class CanvasServerRenderer:
             except CanvasRenderError as exc:
                 logger.warning("Skipping layer %s (%s): %s", layer.id, layer.name, exc)
                 continue
+            except FileNotFoundError as exc:
+                logger.warning(
+                    "Skipping layer %s (%s): missing TrueType font: %s",
+                    layer.id,
+                    layer.name,
+                    exc,
+                )
+                continue
 
             if fragment is None:
                 continue
@@ -272,6 +292,9 @@ class CanvasServerRenderer:
                 rotation=layer.rotation,
                 opacity=layer.opacity,
             )
+
+        if ss > 1 and (work_w, work_h) != (target_width, target_height):
+            canvas_img = canvas_img.resize((target_width, target_height), LANCZOS)
 
         encoded = _encode_image(
             canvas_img,
@@ -411,22 +434,25 @@ class CanvasServerRenderer:
         except AttributeError:  # pragma: no cover
             draw.rectangle((0, 0, box_w - 1, box_h - 1), fill=bg)
 
-        padding_x = max(4, box_w // 12)
-        padding_y = max(2, box_h // 10)
+        # Comfortable inner padding so price text never kisses the badge edge.
+        padding_x = max(12, int(round(box_w * 0.14)))
+        padding_y = max(8, int(round(box_h * 0.18)))
         max_text_w = max(8, box_w - padding_x * 2)
         max_text_h = max(8, box_h - padding_y * 2)
 
+        # Adaptive type: primary size tracks badge height (font_size ≈ h * 0.5).
         font, text = self._fit_badge_text(
             draw,
             text=layer.text,
             max_width=max_text_w,
             max_height=max_text_h,
-            scale=(scale_x + scale_y) / 2.0,
+            badge_height=box_h,
         )
         text_color = _parse_hex_color(layer.text_color)
         bbox = draw.textbbox((0, 0), text, font=font)
         text_w = bbox[2] - bbox[0]
         text_h = bbox[3] - bbox[1]
+        # Center on both axes (compensate FreeType glyph bearing via bbox origin).
         text_x = (box_w - text_w) / 2.0 - bbox[0]
         text_y = (box_h - text_h) / 2.0 - bbox[1]
         draw.text((text_x, text_y), text, font=font, fill=text_color)
@@ -471,17 +497,21 @@ class CanvasServerRenderer:
         text: str,
         max_width: int,
         max_height: int,
-        scale: float,
-    ) -> tuple[ImageFont.ImageFont | ImageFont.FreeTypeFont, str]:
-        start = max(10, int(round(max_height * 0.72)))
-        min_size = max(8, int(round(10 * scale)))
+        badge_height: int,
+    ) -> tuple[ImageFont.FreeTypeFont, str]:
+        target = max(10, int(round(badge_height * BADGE_FONT_HEIGHT_RATIO)))
+        start = min(target, max_height)
+        min_size = max(8, int(round(badge_height * 0.28)))
+        resolved = self._font_manager.resolve_family(DEFAULT_BADGE_FONT_FAMILY)
+        family = resolved.resolved_family
+
         for size in range(start, min_size - 1, -1):
-            font = self._fonts.get_font("DejaVuSans", size, "bold")
+            font = self._fonts.get_font(family, size, "bold")
             bbox = draw.textbbox((0, 0), text, font=font)
             if (bbox[2] - bbox[0]) <= max_width and (bbox[3] - bbox[1]) <= max_height:
                 return font, text
 
-        font = self._fonts.get_font("DejaVuSans", min_size, "bold")
+        font = self._fonts.get_font(family, min_size, "bold")
         # Truncate with ellipsis if still too wide.
         if not text:
             return font, text
@@ -528,6 +558,8 @@ def _paste_layer(
         layer = holder
 
     if abs(rotation) > 1e-6:
+        # Pillow affine rotate accepts NEAREST/BILINEAR/BICUBIC only; 2×
+        # supersample + final LANCZOS downsample removes residual stair-steps.
         layer = layer.rotate(-rotation, resample=BICUBIC, expand=True)
 
     # Position: top-left of unrotated box → center stays fixed under rotation.

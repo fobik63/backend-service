@@ -64,8 +64,12 @@ def test_lighting_presets_cover_required_looks() -> None:
     roles = {light.role for light in soft.lights}
     assert LightRole.KEY in roles
     assert LightRole.FILL in roles
-    assert LightRole.BACK in roles
+    assert LightRole.RIM in roles
     assert len(soft.lights) == 3
+    key = next(light for light in soft.lights if light.role == LightRole.KEY)
+    fill = next(light for light in soft.lights if light.role == LightRole.FILL)
+    assert key.intensity == pytest.approx(1.2)
+    assert fill.intensity == pytest.approx(0.6)
 
     dramatic = get_lighting_preset(LightingPresetName.DRAMATIC_CONTRAST)
     assert dramatic.ambient_intensity < soft.ambient_intensity

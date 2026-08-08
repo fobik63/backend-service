@@ -7,6 +7,7 @@ from app.api.ab_tests import router as ab_tests_router
 from app.api.ai_strategy import router as ai_strategy_router
 from app.api.analytics import router as analytics_router
 from app.api.auth import router as auth_router
+from app.api.bg_removal import router as bg_removal_router
 from app.api.brand_loras import router as brand_loras_router
 from app.api.brand_dna import router as brand_dna_router
 from app.api.bulk_generations import router as bulk_generations_router
@@ -24,6 +25,7 @@ from app.api.oracle import router as oracle_router
 from app.api.pain_analysis import router as pain_analysis_router
 from app.api.payments import router as payments_router
 from app.api.referrals import router as referrals_router
+from app.api.relighting import router as relighting_router
 from app.api.smart_variants import router as smart_variants_router
 from app.api.templates import designs_router, templates_router
 from app.api.text_generation import router as text_generation_router
@@ -43,6 +45,7 @@ __all__ = [
     "ai_strategy_router",
     "analytics_router",
     "auth_router",
+    "bg_removal_router",
     "brand_loras_router",
     "brand_dna_router",
     "bulk_generations_router",
@@ -62,6 +65,7 @@ __all__ = [
     "pain_analysis_router",
     "payments_router",
     "referrals_router",
+    "relighting_router",
     "smart_variants_router",
     "templates_router",
     "text_generation_router",

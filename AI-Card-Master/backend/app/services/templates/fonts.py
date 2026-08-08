@@ -66,17 +66,9 @@ _FAMILY_FILES: Final[dict[str, dict[str, tuple[str, ...]]]] = {
         "semibold": ("Helvetica-Bold.ttf", "arialbd.ttf", "DejaVuSans-Bold.ttf"),
         "black": ("Helvetica-Bold.ttf", "ariblk.ttf", "DejaVuSans-Bold.ttf"),
     },
-    "roboto": {
-        "regular": ("Roboto-Regular.ttf", "DejaVuSans.ttf", "arial.ttf"),
-        "bold": ("Roboto-Bold.ttf", "DejaVuSans-Bold.ttf", "arialbd.ttf"),
-        "light": ("Roboto-Light.ttf", "DejaVuSans.ttf", "arial.ttf"),
-        "medium": ("Roboto-Medium.ttf", "DejaVuSans.ttf", "arial.ttf"),
-        "semibold": ("Roboto-Medium.ttf", "DejaVuSans-Bold.ttf", "arialbd.ttf"),
-        "black": ("Roboto-Black.ttf", "DejaVuSans-Bold.ttf", "arialbd.ttf"),
-    },
     "inter": {
         "regular": ("Inter-Regular.ttf", "Inter.ttf", "DejaVuSans.ttf"),
-        "bold": ("Inter-Bold.ttf", "DejaVuSans-Bold.ttf"),
+        "bold": ("Inter-Bold.ttf", "Inter-Regular.ttf", "DejaVuSans-Bold.ttf"),
         "light": ("Inter-Light.ttf", "Inter-Regular.ttf", "DejaVuSans.ttf"),
         "medium": ("Inter-Medium.ttf", "Inter-Regular.ttf", "DejaVuSans.ttf"),
         "semibold": ("Inter-SemiBold.ttf", "Inter-Bold.ttf", "DejaVuSans-Bold.ttf"),
@@ -84,7 +76,7 @@ _FAMILY_FILES: Final[dict[str, dict[str, tuple[str, ...]]]] = {
     },
     "montserrat": {
         "regular": ("Montserrat-Regular.ttf", "Montserrat.ttf", "DejaVuSans.ttf"),
-        "bold": ("Montserrat-Bold.ttf", "DejaVuSans-Bold.ttf"),
+        "bold": ("Montserrat-Bold.ttf", "Montserrat-Regular.ttf", "DejaVuSans-Bold.ttf"),
         "light": ("Montserrat-Light.ttf", "Montserrat-Regular.ttf", "DejaVuSans.ttf"),
         "medium": ("Montserrat-Medium.ttf", "Montserrat-Regular.ttf", "DejaVuSans.ttf"),
         "semibold": (
@@ -93,6 +85,14 @@ _FAMILY_FILES: Final[dict[str, dict[str, tuple[str, ...]]]] = {
             "DejaVuSans-Bold.ttf",
         ),
         "black": ("Montserrat-Black.ttf", "Montserrat-Bold.ttf", "DejaVuSans-Bold.ttf"),
+    },
+    "roboto": {
+        "regular": ("Roboto-Regular.ttf", "DejaVuSans.ttf", "arial.ttf"),
+        "bold": ("Roboto-Bold.ttf", "Roboto-Regular.ttf", "DejaVuSans-Bold.ttf"),
+        "light": ("Roboto-Light.ttf", "Roboto-Regular.ttf", "DejaVuSans.ttf"),
+        "medium": ("Roboto-Medium.ttf", "Roboto-Regular.ttf", "DejaVuSans.ttf"),
+        "semibold": ("Roboto-Medium.ttf", "Roboto-Bold.ttf", "arialbd.ttf"),
+        "black": ("Roboto-Black.ttf", "Roboto-Bold.ttf", "DejaVuSans-Bold.ttf"),
     },
     "oswald": {
         "regular": ("Oswald-Regular.ttf", "Oswald.ttf", "DejaVuSans.ttf"),
@@ -154,6 +154,16 @@ _WEIGHT_ALIASES: Final[dict[str, str]] = {
     "heavy": "black",
 }
 
+# Variable-font weight axis values (wght) for Inter / similar VF masters.
+_WEIGHT_AXIS_VALUES: Final[dict[str, int]] = {
+    "light": 300,
+    "regular": 400,
+    "medium": 500,
+    "semibold": 600,
+    "bold": 700,
+    "black": 900,
+}
+
 
 class FontRegistry:
     """Process-wide cache of TTF bytes and Pillow ``FreeTypeFont`` instances."""
@@ -162,9 +172,9 @@ class FontRegistry:
         self._lock = threading.RLock()
         # Absolute path → raw TTF/OTF bytes (loaded once).
         self._file_bytes: dict[str, bytes] = {}
-        # (resolved_path | sentinel, size_px) → font instance
+        # (resolved_path, size_px, weight_bucket) → FreeType font instance
         self._font_objects: dict[
-            tuple[str, int], ImageFont.ImageFont | ImageFont.FreeTypeFont
+            tuple[str, int, str], ImageFont.FreeTypeFont
         ] = {}
         # (normalized_family, weight_bucket) → absolute path
         self._family_index: dict[tuple[str, str], str] = {}
@@ -202,36 +212,88 @@ class FontRegistry:
         font_family: str,
         font_size: int,
         font_weight: str = "regular",
-    ) -> ImageFont.ImageFont | ImageFont.FreeTypeFont:
-        """Resolve and return a cached Pillow font for the given style."""
+    ) -> ImageFont.FreeTypeFont:
+        """Resolve and return a cached Pillow FreeType font for the given style.
+
+        Always returns ``ImageFont.truetype`` — never Pillow's bitmap
+        ``load_default()``, which cannot render Cyrillic (tofu □□□).
+        Missing default families trigger an automatic CDN download into
+        ``app/assets/fonts`` before a second resolution pass.
+        """
 
         size = max(1, int(font_size))
         path = self.resolve_path(font_family, font_weight)
         if path is None:
-            logger.debug(
-                "Font fallback to default for family=%s weight=%s",
-                font_family,
-                font_weight,
+            path = self._ensure_defaults_and_resolve(font_family, font_weight)
+        if path is None:
+            # Last Unicode-capable system fallbacks (still TrueType).
+            for fallback_family, fallback_weight in (
+                ("Inter", font_weight),
+                ("Inter", "regular"),
+                ("DejaVuSans", font_weight),
+                ("DejaVuSans", "regular"),
+                ("Arial", font_weight),
+                ("Arial", "regular"),
+            ):
+                path = self.resolve_path(fallback_family, fallback_weight)
+                if path is not None:
+                    logger.warning(
+                        "Font family=%s weight=%s missing; using %s/%s at %s",
+                        font_family,
+                        font_weight,
+                        fallback_family,
+                        fallback_weight,
+                        path,
+                    )
+                    break
+        if path is None:
+            raise FileNotFoundError(
+                f"No TrueType font available for family={font_family!r} "
+                f"weight={font_weight!r}. Place Inter/Montserrat/Roboto under "
+                f"{_APP_ASSETS_FONTS_DIR} or allow CDN bootstrap."
             )
-            key = ("__pillow_default__", size)
-            with self._lock:
-                cached = self._font_objects.get(key)
-                if cached is not None:
-                    return cached
-                font = ImageFont.load_default()
-                # load_default ignores size on older Pillow; still memoize identity.
-                self._font_objects[key] = font
-                return font
 
-        key = (str(path), size)
+        key = (str(path), size, _normalize_weight(font_weight))
         with self._lock:
             cached = self._font_objects.get(key)
             if cached is not None:
-                return cached
+                return cached  # type: ignore[return-value]
             payload = self._load_bytes_unlocked(path)
             font = ImageFont.truetype(font=BytesIO(payload), size=size)
+            _apply_variable_weight(font, _normalize_weight(font_weight))
             self._font_objects[key] = font
             return font
+
+    def _ensure_defaults_and_resolve(
+        self,
+        font_family: str,
+        font_weight: str,
+    ) -> Path | None:
+        """Download default Cyrillic TTFs when a requested family is missing."""
+
+        try:
+            from app.services.templates.download_default_fonts import (
+                ensure_default_fonts,
+            )
+
+            written = ensure_default_fonts(_APP_ASSETS_FONTS_DIR)
+            if written:
+                logger.info(
+                    "Auto-downloaded %s font file(s) before canvas render",
+                    len(written),
+                )
+                # Drop path memoisation so newly written files are discoverable.
+                with self._lock:
+                    stale = [
+                        key
+                        for key in self._family_index
+                        if key[0] == _normalize_family(font_family)
+                    ]
+                    for key in stale:
+                        self._family_index.pop(key, None)
+        except Exception:
+            logger.exception("Auto-download of default fonts failed")
+        return self.resolve_path(font_family, font_weight)
 
     def resolve_path(
         self,
@@ -429,6 +491,37 @@ def normalize_font_weight(font_weight: str) -> str:
     """Public helper: map CSS / numeric weights onto registry buckets."""
 
     return _normalize_weight(font_weight)
+
+
+def _apply_variable_weight(font: ImageFont.FreeTypeFont, weight_key: str) -> None:
+    """Select Bold/Medium/etc. on variable TTFs (e.g. Inter opsz+wght)."""
+
+    target = _WEIGHT_AXIS_VALUES.get(weight_key)
+    if target is None:
+        return
+    try:
+        axes = font.get_variation_axes()  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 — non-variable fonts raise here
+        return
+    if not axes:
+        return
+
+    values: list[float] = []
+    for axis in axes:
+        name = axis.get("name", b"")
+        if isinstance(name, bytes):
+            name_l = name.decode("ascii", errors="ignore").lower()
+        else:
+            name_l = str(name).lower()
+        default = float(axis.get("default", 400))
+        if "weight" in name_l or name_l == "wght":
+            values.append(float(target))
+        else:
+            values.append(default)
+    try:
+        font.set_variation_by_axes(values)  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        logger.debug("Variable font weight axis apply failed", exc_info=True)
 
 
 def _normalize_family(font_family: str) -> str:
