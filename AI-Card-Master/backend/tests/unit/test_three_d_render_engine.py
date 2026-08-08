@@ -121,6 +121,8 @@ def test_offscreen_renderer_context_cleanup(tmp_path: Path) -> None:
 
 
 def test_ffmpeg_argv_builders() -> None:
+    from app.services.three_d.render_engine import ffmpeg_supports_hide_banner
+
     mp4 = build_mp4_ffmpeg_argv(
         ffmpeg_bin="ffmpeg",
         width=1280,
@@ -136,6 +138,11 @@ def test_ffmpeg_argv_builders() -> None:
     assert "20" in mp4
     assert "pipe:0" in mp4
     assert "pipe:1" in mp4
+    assert "-loglevel" in mp4
+    assert "-y" in mp4
+    # Windows builds may reject -hide_banner; builders probe and omit safely.
+    if shutil.which("ffmpeg") is not None:
+        assert ("-hide_banner" in mp4) is ffmpeg_supports_hide_banner("ffmpeg")
 
     webp = build_preview_ffmpeg_argv(
         ffmpeg_bin="ffmpeg",
@@ -228,9 +235,14 @@ def test_render_orbit_video_with_fake_ffmpeg(tmp_path: Path, monkeypatch: pytest
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
 def test_ffmpeg_pipe_encoder_roundtrip_smoke() -> None:
-    """Optional smoke: real FFmpeg accepts one tiny RGB frame into MP4."""
+    """Optional smoke: real FFmpeg accepts one tiny RGB frame into MP4.
+
+    Argv builders probe ``-hide_banner`` via subprocess so Windows builds that
+    reject the flag still produce a usable command line.
+    """
 
     from app.services.three_d.errors import FFmpegEncodeError
+    from app.services.three_d.render_engine import ffmpeg_supports_hide_banner
 
     width, height = 64, 64
     argv = build_mp4_ffmpeg_argv(
@@ -241,6 +253,8 @@ def test_ffmpeg_pipe_encoder_roundtrip_smoke() -> None:
         crf=28,
         preset="ultrafast",
     )
+    if not ffmpeg_supports_hide_banner("ffmpeg"):
+        assert "-hide_banner" not in argv
     frame = bytes([40, 80, 120]) * (width * height)
     try:
         with FFmpegPipeEncoder(argv=argv, width=width, height=height, label="smoke") as enc:

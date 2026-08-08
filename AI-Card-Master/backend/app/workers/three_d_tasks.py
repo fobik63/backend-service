@@ -124,6 +124,12 @@ def _fail_active_video_sync(error_detail: str) -> None:
         _set_active_video_task(None)
 
 
+def fail_active_video_on_shutdown(*, error_detail: str) -> None:
+    """Public hook for Celery ``worker_shutting_down`` graceful settlement."""
+
+    _fail_active_video_sync(error_detail)
+
+
 def _install_video_render_signal_handlers() -> None:
     """Capture SIGTERM so OOM-adjacent kills can still refund held coins."""
 

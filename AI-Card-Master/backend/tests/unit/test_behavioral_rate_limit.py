@@ -207,6 +207,10 @@ def test_shape_http_exception_promotes_captcha_code() -> None:
     assert body["success"] is False
     assert body["code"] == "CAPTCHA_REQUIRED"
     assert body["detail"] == "Solve CAPTCHA."
+    assert body["error"] == {
+        "code": "CAPTCHA_REQUIRED",
+        "message": "Solve CAPTCHA.",
+    }
 
 
 def test_captcha_required_json_via_test_client() -> None:

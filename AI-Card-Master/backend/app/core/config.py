@@ -1285,6 +1285,14 @@ class Settings(BaseSettings):
 
     # Production pool / logging knobs.
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    log_json_enabled: bool = Field(
+        default=False,
+        alias="LOG_JSON_ENABLED",
+        description=(
+            "Emit one-line JSON logs with request_id/correlation_id "
+            "(enable in staging/production for ELK/Loki)."
+        ),
+    )
     db_pool_size: int = Field(default=20, alias="DB_POOL_SIZE")
     db_max_overflow: int = Field(default=10, alias="DB_MAX_OVERFLOW")
     db_pool_timeout_seconds: int = Field(default=30, alias="DB_POOL_TIMEOUT_SECONDS")
@@ -1296,6 +1304,24 @@ class Settings(BaseSettings):
     telegram_error_alert_cooldown_seconds: int = Field(
         default=60,
         alias="TELEGRAM_ERROR_ALERT_COOLDOWN_SECONDS",
+    )
+    # Orphan / temp cleanup (Celery beat).
+    orphan_cleanup_scan_seconds: float = Field(
+        default=300.0,
+        alias="ORPHAN_CLEANUP_SCAN_SECONDS",
+        description="How often to sweep orphaned holds and local temp dirs.",
+    )
+    orphan_coin_hold_max_age_hours: int = Field(
+        default=6,
+        ge=1,
+        alias="ORPHAN_COIN_HOLD_MAX_AGE_HOURS",
+        description="Refund coin_holds stuck in 'held' longer than this.",
+    )
+    orphan_temp_max_age_hours: int = Field(
+        default=24,
+        ge=1,
+        alias="ORPHAN_TEMP_MAX_AGE_HOURS",
+        description="Delete local temp files under ai-card-master older than this.",
     )
 
     # YooKassa payments
@@ -1771,6 +1797,8 @@ class Settings(BaseSettings):
         "db_pool_timeout_seconds",
         "db_pool_recycle_seconds",
         "telegram_error_alert_cooldown_seconds",
+        "orphan_coin_hold_max_age_hours",
+        "orphan_temp_max_age_hours",
         "stable_diffusion_max_connections",
         "stable_diffusion_max_keepalive_connections",
         "stable_diffusion_max_parallel_requests",
@@ -1882,6 +1910,7 @@ class Settings(BaseSettings):
         "winback_inactivity_scan_seconds",
         "winback_style_update_scan_seconds",
         "source_retention_scan_seconds",
+        "orphan_cleanup_scan_seconds",
         "audit_log_archive_scan_seconds",
         "bulk_generation_poll_seconds",
         "smart_variant_poll_seconds",

@@ -35,7 +35,7 @@ class CloudflareProtectionMiddleware(BaseHTTPMiddleware):
         path = request.url.path
 
         if settings.cloudflare_enabled and settings.cloudflare_enforce_edge:
-            if path not in {"/health", "/health/live", "/healthz", "/readyz"}:
+            if path not in {"/health", "/health/live", "/healthz", "/healthz/deep", "/readyz"}:
                 peer = request.client.host if request.client is not None else ""
                 vpn_ok = get_dead_mans_switch().peer_is_vpn_allowlisted(peer or None)
                 if not vpn_ok:

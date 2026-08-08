@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from celery import Celery
 from celery.schedules import crontab
-from celery.signals import task_failure, worker_process_shutdown
+from celery.signals import task_failure, worker_process_shutdown, worker_shutting_down
 
 from app.core.config import get_settings
 
@@ -28,6 +28,7 @@ _celery_includes = [
     "app.workers.competitor_audit_tasks",
     "app.workers.source_retention_tasks",
     "app.workers.audit_log_tasks",
+    "app.workers.orphan_cleanup_tasks",
 ]
 if settings.enable_three_d:
     _celery_includes.append("app.workers.three_d_tasks")
@@ -123,6 +124,7 @@ celery_app.conf.update(
         "claude.run_competitor_deep_analysis": {"queue": "claude.reasoning"},
         "privacy.purge_expired_sources": {"queue": "privacy.retention"},
         "audit.archive_old_events": {"queue": "privacy.retention"},
+        "maintenance.cleanup_orphans": {"queue": "privacy.retention"},
         # Long-running 3D mesh / texture / video-render style jobs.
         "three_d.process_generation_task": {"queue": CELERY_THREE_D_HEAVY_QUEUE},
         "three_d.poll_active_tasks": {"queue": CELERY_THREE_D_HEAVY_QUEUE},
@@ -191,6 +193,11 @@ celery_app.conf.update(
             "task": "audit.archive_old_events",
             "schedule": settings.audit_log_archive_scan_seconds,
         },
+        # Orphaned Safe-Spend holds + local /tmp artefacts after worker crashes.
+        "maintenance-cleanup-orphans": {
+            "task": "maintenance.cleanup_orphans",
+            "schedule": settings.orphan_cleanup_scan_seconds,
+        },
         **(
             {
                 "three-d-poll-active-tasks": {
@@ -215,6 +222,30 @@ def _shutdown_worker_shared_resources(**_kwargs: object) -> None:
     from app.workers.async_runtime import shutdown_worker_resources
 
     shutdown_worker_resources()
+
+
+@worker_shutting_down.connect
+def _on_worker_shutting_down(sig: object = None, how: object = None, **_kwargs: object) -> None:
+    """Graceful shutdown: settle in-flight billable work before process death.
+
+    Video render registers a process-local active task id; we fail+refund it
+    immediately. Broader orphaned HELD holds are swept by
+    ``maintenance.cleanup_orphans`` after the age threshold.
+    """
+
+    import logging
+
+    log = logging.getLogger(__name__)
+    log.warning("Celery worker shutting down sig=%s how=%s — settling active work", sig, how)
+    try:
+        if settings.enable_three_d:
+            from app.workers.three_d_tasks import fail_active_video_on_shutdown
+
+            fail_active_video_on_shutdown(
+                error_detail=f"Worker graceful shutdown (sig={sig}, how={how})"
+            )
+    except Exception:
+        log.exception("Graceful shutdown settlement failed")
 
 
 # --- Operator alerts: Celery task failures → Telegram with file:line ---

@@ -8,12 +8,13 @@ Design goals
 * Docker-safe offscreen GL (``vtkEGLRenderWindow`` → OSMesa → CPU software).
 * Zero per-frame temp files — RGB24 frames stream through memory into FFmpeg
   ``stdin`` pipes.
-* Dual encode in one pass: HQ H.264 MP4 + animated GIF/WebP preview.
+* Dual encode (sequential): HQ H.264 MP4 first, then GIF/WebP after RAM release.
 * Context-manager lifecycle that always tears down VRAM / subprocesses.
 """
 
 from __future__ import annotations
 
+import gc
 import hashlib
 import io
 import logging
@@ -26,6 +27,7 @@ import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Protocol, Self
 
@@ -816,147 +818,6 @@ def _apply_pyvista_lighting(plotter: object, preset: LightingPresetDTO) -> None:
         plotter.add_light(light)  # type: ignore[attr-defined]
 
 
-class ModernglOffscreenBackend(FrameRendererBackend):
-    """Optional moderngl FBO path (EGL/OSMesa via ``PYOPENGL_PLATFORM``)."""
-
-    name = "moderngl"
-
-    def __init__(self) -> None:
-        self._ctx = None
-        self._fbo = None
-        self._vao = None
-        self._prog = None
-        self._config: RenderEngineConfig | None = None
-        self._verts: list[tuple[float, float, float]] = []
-        self._faces: list[tuple[int, int, int]] = []
-
-    def setup(self, mesh: MeshGeometry, config: RenderEngineConfig) -> None:
-        try:
-            import moderngl
-            import numpy as np
-        except ImportError as exc:
-            raise HeadlessGLError("moderngl/numpy are required for this backend.") from exc
-
-        configure_headless_opengl()
-        ctx = moderngl.create_context(standalone=True, require=330)
-        prog = ctx.program(
-            vertex_shader="""
-                #version 330
-                uniform mat4 mvp;
-                in vec3 in_pos;
-                in vec3 in_n;
-                out vec3 v_n;
-                void main() {
-                    v_n = in_n;
-                    gl_Position = mvp * vec4(in_pos, 1.0);
-                }
-            """,
-            fragment_shader="""
-                #version 330
-                in vec3 v_n;
-                out vec4 f_color;
-                void main() {
-                    vec3 n = normalize(v_n);
-                    float l = max(dot(n, normalize(vec3(-0.35, 0.8, 0.45))), 0.0);
-                    float shade = 0.2 + 0.8 * l;
-                    f_color = vec4(vec3(0.82, 0.86, 0.92) * shade, 1.0);
-                }
-            """,
-        )
-        verts = mesh.centered_vertices
-        normals = [(0.0, 1.0, 0.0)] * len(verts)
-        # Area-weighted face normals → vertex normals.
-        accum = [[0.0, 0.0, 0.0] for _ in verts]
-        for a, b, c in mesh.faces:
-            n = _triangle_normal(verts[a], verts[b], verts[c])
-            for idx in (a, b, c):
-                accum[idx][0] += n[0]
-                accum[idx][1] += n[1]
-                accum[idx][2] += n[2]
-        normals = [_normalize((x, y, z)) for x, y, z in accum]
-        interleaved: list[float] = []
-        indices: list[int] = []
-        for i, (v, n) in enumerate(zip(verts, normals)):
-            interleaved.extend((v[0], v[1], v[2], n[0], n[1], n[2]))
-        for a, b, c in mesh.faces:
-            indices.extend((a, b, c))
-        vbo = ctx.buffer(np.asarray(interleaved, dtype="f4").tobytes())
-        ibo = ctx.buffer(np.asarray(indices, dtype="i4").tobytes())
-        vao = ctx.vertex_array(
-            prog,
-            [(vbo, "3f 3f", "in_pos", "in_n")],
-            index_buffer=ibo,
-        )
-        fbo = ctx.framebuffer(
-            color_attachments=[ctx.texture((config.width, config.height), 3)],
-            depth_attachment=ctx.depth_renderbuffer((config.width, config.height)),
-        )
-        bg = config.background_rgb
-        ctx.clear(
-            bg[0] / 255.0,
-            bg[1] / 255.0,
-            bg[2] / 255.0,
-            framebuffer=fbo,
-        )
-        self._ctx = ctx
-        self._fbo = fbo
-        self._vao = vao
-        self._prog = prog
-        self._config = config
-        self._verts = verts
-        self._faces = list(mesh.faces)
-
-    def render_frame(self, pose: OrbitCameraPose) -> bytes:
-        if not self._ctx or not self._fbo or not self._vao or not self._prog or not self._config:
-            raise RenderEngineError("moderngl backend is not initialised.")
-        import struct
-
-        cfg = self._config
-        view = _look_at_matrix(pose.eye, pose.target, pose.up)
-        proj = _perspective_matrix(
-            math.radians(cfg.fov_degrees),
-            cfg.width / max(cfg.height, 1),
-            0.01,
-            pose.distance * 20.0,
-        )
-        mvp = _matmul4(proj, view)
-        # Column-major for OpenGL.
-        flat = [mvp[c][r] for r in range(4) for c in range(4)]
-        self._prog["mvp"].write(struct.pack("16f", *flat))
-        self._fbo.use()
-        bg = cfg.background_rgb
-        self._ctx.clear(bg[0] / 255.0, bg[1] / 255.0, bg[2] / 255.0)
-        self._vao.render()
-        raw = self._fbo.read(components=3, alignment=1)
-        expected = cfg.width * cfg.height * RGB24_BYTES_PER_PIXEL
-        if len(raw) != expected:
-            raise RenderEngineError(
-                f"Unexpected moderngl frame size {len(raw)} (expected {expected})."
-            )
-        # FBO origin is bottom-left — flip vertically for video top-left origin.
-        w, h = cfg.width, cfg.height
-        row = w * 3
-        rows = [raw[i * row : (i + 1) * row] for i in range(h)]
-        rows.reverse()
-        return b"".join(rows)
-
-    def close(self) -> None:
-        for obj in (self._fbo, self._vao, self._ctx):
-            if obj is None:
-                continue
-            try:
-                release = getattr(obj, "release", None)
-                if callable(release):
-                    release()
-            except Exception:  # noqa: BLE001
-                logger.debug("moderngl release failed", exc_info=True)
-        self._ctx = None
-        self._fbo = None
-        self._vao = None
-        self._prog = None
-        self._config = None
-
-
 def create_frame_backend(
     preferred: RenderBackendName,
     *,
@@ -983,6 +844,11 @@ def create_frame_backend(
             if name == "pyvista":
                 return PyVistaOffscreenBackend()
             if name == "moderngl":
+                # Lambert + shadow-plane implementation (separate module).
+                from app.services.three_d.moderngl_renderer import (
+                    ModernglOffscreenBackend,
+                )
+
                 return ModernglOffscreenBackend()
             return SoftwareRasterBackend()
         except Exception as exc:  # noqa: BLE001
@@ -1221,6 +1087,99 @@ class FFmpegPipeEncoder:
             self._stdout_chunks.append(chunk)
 
 
+def _ffmpeg_global_flags(ffmpeg_bin: str) -> list[str]:
+    """Return portable global flags; omit ``-hide_banner`` when unsupported."""
+
+    flags = ["-loglevel", "error", "-y"]
+    if ffmpeg_supports_hide_banner(ffmpeg_bin):
+        return ["-hide_banner", *flags]
+    return flags
+
+
+@lru_cache(maxsize=16)
+def ffmpeg_supports_hide_banner(ffmpeg_bin: str) -> bool:
+    """Probe whether ``ffmpeg_bin`` accepts ``-hide_banner`` (Windows builds vary)."""
+
+    resolved = shutil.which(ffmpeg_bin) or ffmpeg_bin
+    try:
+        proc = subprocess.run(
+            [resolved, "-hide_banner", "-version"],
+            capture_output=True,
+            timeout=8,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError, FileNotFoundError):
+        return False
+    err = (proc.stderr or b"").decode("utf-8", errors="replace").lower()
+    out = (proc.stdout or b"").decode("utf-8", errors="replace").lower()
+    combined = f"{err}\n{out}"
+    if "unrecognized option" in combined and "hide_banner" in combined:
+        return False
+    if "option not found" in combined and "hide_banner" in combined:
+        return False
+    return proc.returncode == 0
+
+
+@lru_cache(maxsize=16)
+def ffmpeg_mp4_movflags(ffmpeg_bin: str) -> str:
+    """Pick MP4 ``-movflags`` compatible with pipe output on this FFmpeg build.
+
+    Modern builds prefer ``frag_keyframe+empty_moov+default_base_moof``; older
+    Windows nightlies (e.g. N-55702) reject ``default_base_moof`` and need the
+    shorter ``frag_keyframe+empty_moov`` form.
+    """
+
+    preferred = "frag_keyframe+empty_moov+default_base_moof"
+    fallback = "frag_keyframe+empty_moov"
+    resolved = shutil.which(ffmpeg_bin) or ffmpeg_bin
+    # Tiny 2x2 RGB frame — enough to exercise the muxer header path.
+    probe_frame = bytes([0, 0, 0]) * 4
+    for flags in (preferred, fallback):
+        argv = [
+            resolved,
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-s",
+            "2x2",
+            "-r",
+            "1",
+            "-i",
+            "pipe:0",
+            "-an",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-preset",
+            "ultrafast",
+            "-crf",
+            "28",
+            "-movflags",
+            flags,
+            "-f",
+            "mp4",
+            "pipe:1",
+        ]
+        try:
+            proc = subprocess.run(
+                argv,
+                input=probe_frame,
+                capture_output=True,
+                timeout=12,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError, FileNotFoundError):
+            continue
+        if proc.returncode == 0 and proc.stdout:
+            return flags
+    return fallback
+
+
 def build_mp4_ffmpeg_argv(
     *,
     ffmpeg_bin: str,
@@ -1232,10 +1191,7 @@ def build_mp4_ffmpeg_argv(
 ) -> list[str]:
     return [
         ffmpeg_bin,
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-y",
+        *_ffmpeg_global_flags(ffmpeg_bin),
         "-f",
         "rawvideo",
         "-pix_fmt",
@@ -1256,7 +1212,7 @@ def build_mp4_ffmpeg_argv(
         "-crf",
         str(crf),
         "-movflags",
-        "frag_keyframe+empty_moov+default_base_moof",
+        ffmpeg_mp4_movflags(ffmpeg_bin),
         "-f",
         "mp4",
         "pipe:1",
@@ -1281,10 +1237,7 @@ def build_preview_ffmpeg_argv(
     fps_filter = f"fps={preview_fps}"
     base = [
         ffmpeg_bin,
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-y",
+        *_ffmpeg_global_flags(ffmpeg_bin),
         "-f",
         "rawvideo",
         "-pix_fmt",
@@ -1491,11 +1444,12 @@ class Offscreen3DRenderer:
         *,
         on_frame: Callable[[int, int], None] | None = None,
     ) -> OrbitVideoResult:
-        """Render the orbit once and tee frames into MP4 + preview encoders.
+        """Render the orbit into MP4, release buffers, then encode GIF/WebP.
 
-        ``on_frame(frame_index, frame_count)`` is invoked after each RGB frame
-        is pushed to FFmpeg (used by Celery to publish Redis progress every N
-        frames without buffering frames on disk).
+        Dual-encode RAM shield: never run both FFmpeg pipes concurrently.
+        Pass 1 streams frames into H.264 MP4; after ``finish()`` the encoder and
+        frame scratch are dropped via ``del`` / ``gc.collect()``. Pass 2 re-renders
+        the orbit into the lightweight preview container only.
         """
 
         self._ensure_ready()
@@ -1515,6 +1469,25 @@ class Offscreen3DRenderer:
             height=cfg.height,
             label="ffmpeg-mp4",
         )
+        self._ffmpeg_procs.append(mp4)
+        mp4_buf: io.BytesIO
+        try:
+            mp4.start()
+            for frame_index, frame in enumerate(self.iter_orbit_frames()):
+                mp4.write_frame(frame)
+                if on_frame is not None:
+                    on_frame(frame_index, cfg.frame_count)
+            mp4_buf = mp4.finish()
+        except Exception:
+            mp4.close(abort=True)
+            raise
+        finally:
+            if mp4 in self._ffmpeg_procs:
+                self._ffmpeg_procs.remove(mp4)
+            # Drop MP4 encoder / stdin buffers before starting the preview pipe.
+            del mp4
+            gc.collect()
+
         preview = FFmpegPipeEncoder(
             argv=build_preview_ffmpeg_argv(
                 ffmpeg_bin=cfg.ffmpeg_bin,
@@ -1529,25 +1502,24 @@ class Offscreen3DRenderer:
             height=cfg.height,
             label=f"ffmpeg-{cfg.preview_format}",
         )
-        self._ffmpeg_procs.extend((mp4, preview))
+        self._ffmpeg_procs.append(preview)
         try:
-            mp4.start()
             preview.start()
             for frame_index, frame in enumerate(self.iter_orbit_frames()):
-                mp4.write_frame(frame)
                 preview.write_frame(frame)
-                if on_frame is not None:
-                    on_frame(frame_index, cfg.frame_count)
-            mp4_buf = mp4.finish()
+                # Preview pass does not advance Celery progress (already at 100%
+                # of orbit after MP4); keep hook available for diagnostics.
+                if on_frame is not None and frame_index == 0:
+                    on_frame(cfg.frame_count - 1, cfg.frame_count)
             preview_buf = preview.finish()
         except Exception:
-            mp4.close(abort=True)
             preview.close(abort=True)
             raise
         finally:
-            for enc in (mp4, preview):
-                if enc in self._ffmpeg_procs:
-                    self._ffmpeg_procs.remove(enc)
+            if preview in self._ffmpeg_procs:
+                self._ffmpeg_procs.remove(preview)
+            del preview
+            gc.collect()
 
         mime: Literal["image/gif", "image/webp"] = (
             "image/webp" if cfg.preview_format == "webp" else "image/gif"
@@ -1602,5 +1574,7 @@ __all__ = [
     "configure_headless_opengl",
     "create_frame_backend",
     "detect_mesh_format",
+    "ffmpeg_mp4_movflags",
+    "ffmpeg_supports_hide_banner",
     "load_mesh_bytes",
 ]

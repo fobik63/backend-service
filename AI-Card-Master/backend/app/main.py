@@ -66,7 +66,7 @@ from app.core.admin_middleware import AdminOnlyMiddleware
 from app.core.cloudflare_middleware import CloudflareProtectionMiddleware
 from app.core.config import get_settings
 from app.core.dead_mans_switch_middleware import DeadMansSwitchMiddleware
-from app.core.http_errors import shape_http_exception_body
+from app.core.http_errors import shape_error_envelope, shape_http_exception_body
 from app.core.idempotency_middleware import IdempotencyMiddleware
 from app.core.input_sanitization_middleware import InputSanitizationMiddleware
 from app.core.logging_config import configure_logging
@@ -462,6 +462,10 @@ async def request_validation_exception_handler(
             "success": False,
             "detail": "Request validation failed.",
             "errors": exc.errors(),
+            **shape_error_envelope(
+                code="request_validation_error",
+                message="Request validation failed.",
+            ),
         },
     )
 
@@ -477,11 +481,16 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     logger.exception("Unhandled server error: %s", exc)
     capture_unhandled_exception(exc, user_id=resolve_request_user_id(request))
     await notify_critical_500(request, exc)
+    # Never leak stack traces / exception strings to clients.
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={
             "success": False,
             "detail": "Internal server error.",
+            **shape_error_envelope(
+                code="internal_server_error",
+                message="Internal server error.",
+            ),
         },
     )
 

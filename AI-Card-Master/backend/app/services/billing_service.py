@@ -19,7 +19,7 @@ from decimal import Decimal
 from typing import Any, Mapping
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -641,9 +641,11 @@ class BillingService:
                 return locked_replay
 
         if amount > 0:
-            if int(user.ai_coins) < amount:
-                raise BillingValidationError("Insufficient AI-coin balance.")
-            user.ai_coins = int(user.ai_coins) - amount
+            await self._apply_balance_delta_locked(
+                user,
+                delta=-amount,
+                require_sufficient=True,
+            )
 
         body: dict[str, Any] = {
             "operation": operation,
@@ -666,7 +668,11 @@ class BillingService:
             except IntegrityError:
                 # Concurrent insert won; undo in-session debit and replay.
                 if amount > 0:
-                    user.ai_coins = int(user.ai_coins) + amount
+                    await self._apply_balance_delta_locked(
+                        user,
+                        delta=amount,
+                        require_sufficient=False,
+                    )
                 race_replay = await self._lookup_idempotency_postgres(
                     user_id=user_id,
                     idempotency_key=cleaned_key,
@@ -695,37 +701,160 @@ class BillingService:
             idempotency_key=cleaned_key,
         )
 
+    async def _apply_balance_delta_locked(
+        self,
+        user: User,
+        *,
+        delta: int,
+        require_sufficient: bool,
+    ) -> int:
+        """Mutate ``user.ai_coins`` under an already-held row lock.
+
+        Prefers atomic ``UPDATE … WHERE balance >= X RETURNING`` on real
+        SQLAlchemy ``AsyncSession`` connections. Lightweight test doubles keep
+        the ORM attribute path (still safe under ``with_for_update``).
+        """
+
+        if delta == 0:
+            return int(user.ai_coins)
+
+        if isinstance(self._session, AsyncSession):
+            if delta < 0 and require_sufficient:
+                amount = -delta
+                result = await self._session.execute(
+                    update(User)
+                    .where(User.id == user.id, User.ai_coins >= amount)
+                    .values(ai_coins=User.ai_coins + delta)
+                    .returning(User.ai_coins)
+                )
+                new_balance = result.scalar_one_or_none()
+                if new_balance is None:
+                    raise BillingValidationError("Insufficient AI-coin balance.")
+            else:
+                result = await self._session.execute(
+                    update(User)
+                    .where(User.id == user.id)
+                    .values(ai_coins=User.ai_coins + delta)
+                    .returning(User.ai_coins)
+                )
+                new_balance = result.scalar_one()
+            user.ai_coins = int(new_balance)
+            return int(new_balance)
+
+        if delta < 0 and require_sufficient and int(user.ai_coins) < -delta:
+            raise BillingValidationError("Insufficient AI-coin balance.")
+        user.ai_coins = int(user.ai_coins) + delta
+        return int(user.ai_coins)
+
     async def refund_coins_in_transaction(
-        self, *, user_id: UUID, amount: int
+        self,
+        *,
+        user_id: UUID,
+        amount: int,
+        idempotency_key: str | None = None,
+        response_body: Mapping[str, Any] | None = None,
+        response_code: int = 200,
     ) -> User:
-        """Refund ``amount`` AI-coins without committing (unit-of-work safe)."""
+        """Refund ``amount`` AI-coins without committing (unit-of-work safe).
+
+        Optional ``idempotency_key`` makes retries safe (no double-credit).
+        Prefer settling via ``coin_holds`` status when a hold exists.
+        """
 
         if amount < 0:
             raise BillingValidationError("Refund amount must be non-negative.")
+
+        cleaned_key = idempotency_key.strip() if idempotency_key else None
+        if cleaned_key:
+            replay = await self.lookup_idempotency(
+                user_id=user_id,
+                idempotency_key=cleaned_key,
+            )
+            if replay is not None:
+                return replay.user
+
         user = await self._session.get(User, user_id, with_for_update=True)
         if user is None:
             raise BillingNotFoundError(f"User {user_id} not found.")
-        if amount == 0:
+
+        if cleaned_key:
+            locked_replay = await self._lookup_idempotency_postgres(
+                user_id=user_id,
+                idempotency_key=cleaned_key,
+            )
+            if locked_replay is not None:
+                return locked_replay.user
+
+        if amount == 0 and not cleaned_key:
             return user
-        user.ai_coins = int(user.ai_coins) + amount
-        await self._session.flush()
+
+        if amount > 0:
+            await self._apply_balance_delta_locked(
+                user,
+                delta=amount,
+                require_sufficient=False,
+            )
+
+        body: dict[str, Any] = {
+            "operation": "refund",
+            "user_id": str(user_id),
+            "amount": int(amount),
+            "new_balance": int(user.ai_coins),
+        }
+        if response_body:
+            body.update(dict(response_body))
+
+        if cleaned_key:
+            try:
+                async with self._session.begin_nested():
+                    await self._persist_idempotency_in_transaction(
+                        user_id=user_id,
+                        idempotency_key=cleaned_key,
+                        response_code=response_code,
+                        response_body=body,
+                    )
+            except IntegrityError:
+                if amount > 0:
+                    await self._apply_balance_delta_locked(
+                        user,
+                        delta=-amount,
+                        require_sufficient=False,
+                    )
+                race_replay = await self._lookup_idempotency_postgres(
+                    user_id=user_id,
+                    idempotency_key=cleaned_key,
+                )
+                if race_replay is not None:
+                    return race_replay.user
+                raise BillingValidationError(
+                    "Idempotency key conflict could not be resolved."
+                ) from None
+            await self._cache_idempotency_redis(
+                user_id=user_id,
+                idempotency_key=cleaned_key,
+                response_code=response_code,
+                response_body=body,
+            )
+        else:
+            await self._session.flush()
         return user
 
     async def credit_coins_in_transaction(
-        self, *, user_id: UUID, amount: int
+        self,
+        *,
+        user_id: UUID,
+        amount: int,
+        idempotency_key: str | None = None,
     ) -> User:
         """Credit ``amount`` AI-coins without committing (unit-of-work safe)."""
 
-        if amount < 0:
-            raise BillingValidationError("Credit amount must be non-negative.")
-        user = await self._session.get(User, user_id, with_for_update=True)
-        if user is None:
-            raise BillingNotFoundError(f"User {user_id} not found.")
-        if amount == 0:
-            return user
-        user.ai_coins = int(user.ai_coins) + amount
-        await self._session.flush()
-        return user
+        # Credits share the idempotent refund path (atomic UPDATE + optional key).
+        return await self.refund_coins_in_transaction(
+            user_id=user_id,
+            amount=amount,
+            idempotency_key=idempotency_key,
+            response_body={"operation": "credit"},
+        )
 
     async def debit_coins(self, *, user_id: UUID, amount: int) -> int:
         """Debit coins and commit; return the new balance (``CoinWalletPort``)."""

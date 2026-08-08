@@ -59,7 +59,13 @@ def test_unknown_route_returns_json_404() -> None:
 
     biz = client.get("/biz-missing")
     assert biz.status_code == 404
-    assert biz.json() == {"success": False, "detail": "Payment not found."}
+    body = biz.json()
+    assert body["success"] is False
+    assert body["detail"] == "Payment not found."
+    assert body["error"] == {
+        "code": "http_404",
+        "message": "Payment not found.",
+    }
 
 
 def test_main_app_registers_starlette_http_exception_handler() -> None:

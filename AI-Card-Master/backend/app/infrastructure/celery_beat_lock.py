@@ -82,6 +82,20 @@ def acquire_beat_leader_lock(
         logger.info("Celery Beat acquired leadership lock key=%s", BEAT_LOCK_KEY)
         return True
     except Exception:
+        # Fail-closed in production so a second beat cannot double-fire crons
+        # when Redis is flapping. Dev/staging stay fail-open for local DX.
+        try:
+            from app.core.config import get_settings
+
+            if get_settings().app_env == "production":
+                logger.error(
+                    "Celery Beat Redis leadership lock unavailable in production; "
+                    "refusing to start (fail-closed).",
+                    exc_info=True,
+                )
+                return False
+        except Exception:
+            logger.warning("Could not resolve app_env for Beat lock policy", exc_info=True)
         logger.warning(
             "Celery Beat could not acquire Redis leadership lock; starting anyway",
             exc_info=True,

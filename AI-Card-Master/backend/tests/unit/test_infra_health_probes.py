@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi.testclient import TestClient
 
-from app.infrastructure.health.probes import ReadinessReport, check_readiness
+from app.infrastructure.health.probes import ReadinessReport, check_deep_health, check_readiness
 from app.main import app
 
 
@@ -70,6 +70,67 @@ async def test_check_readiness_all_ok(monkeypatch: pytest.MonkeyPatch) -> None:
         failed_service=None,
         checks={"postgres": True, "redis": True, "celery": True},
     )
+
+
+@pytest.mark.asyncio
+async def test_check_deep_health_includes_s3_and_ffmpeg(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.infrastructure.health.probes.postgres_healthcheck",
+        AsyncMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        "app.infrastructure.health.probes.redis_healthcheck",
+        AsyncMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        "app.infrastructure.health.probes.s3_healthcheck",
+        AsyncMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        "app.infrastructure.health.probes.ffmpeg_healthcheck",
+        AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        "app.infrastructure.health.probes.celery_workers_healthcheck",
+        AsyncMock(return_value=True),
+    )
+
+    report = await check_deep_health()
+
+    assert report.healthy is False
+    assert report.failed_service == "ffmpeg"
+    assert report.checks["s3"] is True
+    assert report.checks["ffmpeg"] is False
+
+
+def test_healthz_deep_unhealthy_returns_503(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _unhealthy() -> ReadinessReport:
+        return ReadinessReport(
+            healthy=False,
+            failed_service="s3",
+            checks={
+                "postgres": True,
+                "redis": True,
+                "s3": False,
+                "ffmpeg": True,
+                "celery": True,
+            },
+        )
+
+    monkeypatch.setattr("app.api.health.check_deep_health", _unhealthy)
+
+    response = client.get("/healthz/deep")
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["status"] == "unhealthy"
+    assert body["failed_service"] == "s3"
+    assert body["checks"]["s3"] is False
 
 
 def test_readyz_unhealthy_returns_503_with_failed_service(

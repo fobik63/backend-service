@@ -61,6 +61,7 @@ class SuspiciousActivityMiddleware(BaseHTTPMiddleware):
             "/health",
             "/health/live",
             "/healthz",
+            "/healthz/deep",
             "/health/ready",
             "/readyz",
         }:

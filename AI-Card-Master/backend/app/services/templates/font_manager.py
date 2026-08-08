@@ -234,6 +234,26 @@ class FontManagerService:
         but still refresh the in-memory known-family set from the registry.
         """
 
+        # Auto-fetch Inter / Montserrat / Roboto into assets/fonts when missing.
+        try:
+            from app.services.templates.download_default_fonts import (
+                ensure_default_fonts,
+            )
+
+            downloaded = await asyncio.to_thread(
+                ensure_default_fonts, self._assets_dir
+            )
+            if downloaded:
+                logger.info(
+                    "Downloaded %s default Cyrillic font file(s) into %s",
+                    len(downloaded),
+                    self._assets_dir,
+                )
+        except Exception:
+            logger.exception(
+                "Default font download helper failed; continuing with local assets"
+            )
+
         registered = await asyncio.to_thread(self._scan_and_register_system_fonts)
         if persist_system_fonts:
             try:

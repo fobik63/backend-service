@@ -18,7 +18,10 @@ engine: AsyncEngine = create_async_engine(
     max_overflow=settings.db_max_overflow,
     pool_timeout=settings.db_pool_timeout_seconds,
     pool_recycle=settings.db_pool_recycle_seconds,
+    # Reject stale connections after Postgres restarts / idle NAT drops.
     pool_pre_ping=True,
+    # Prefer recently-used connections under bursty API + Celery load.
+    pool_use_lifo=True,
 )
 
 

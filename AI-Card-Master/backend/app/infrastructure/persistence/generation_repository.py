@@ -539,18 +539,26 @@ class GenerationRepository:
             job.error_message = "Generation timed out before all providers completed."
             job.error_retryable = True
             job.completed_at = now
+
+        # Batch-load unfinished slides (avoid N+1 per expired job).
+        if jobs:
+            job_ids = [job.id for job in jobs]
             unfinished = await self._session.scalars(
                 select(GenerationSlide).where(
-                    GenerationSlide.job_id == job.id,
+                    GenerationSlide.job_id.in_(job_ids),
                     GenerationSlide.status != SlideStatus.COMPLETED.value,
                 )
             )
+            job_by_id = {job.id: job for job in jobs}
             for slide in unfinished:
+                job = job_by_id[slide.job_id]
                 slide.status = SlideStatus.FAILED.value
                 slide.error_code = job.error_code
                 slide.error_message = job.error_message
                 slide.error_retryable = True
                 slide.completed_at = now
+
+        for job in jobs:
             self._session.add(
                 GenerationErrorLog(
                     user_id=job.user_id,
