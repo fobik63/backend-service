@@ -1,4 +1,11 @@
-import { FeaturesSection, HeroSection, Navbar } from "@/components/landing"
+import {
+  CallToActionSection,
+  FeaturesSection,
+  Footer,
+  HeroSection,
+  Navbar,
+  TestimonialsSection,
+} from "@/components/landing"
 
 export default function LandingPage() {
   return (
@@ -7,7 +14,10 @@ export default function LandingPage() {
       <main>
         <HeroSection />
         <FeaturesSection />
+        <TestimonialsSection />
+        <CallToActionSection />
       </main>
+      <Footer />
     </div>
   )
 }

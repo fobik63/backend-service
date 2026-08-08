@@ -1,3 +1,6 @@
 export { Navbar } from "./navbar"
 export { HeroSection } from "./hero-section"
 export { FeaturesSection } from "./features"
+export { TestimonialsSection } from "./testimonials"
+export { CallToActionSection } from "./call-to-action"
+export { Footer } from "./footer"

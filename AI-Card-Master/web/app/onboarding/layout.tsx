@@ -1,12 +1,12 @@
 import type { ReactNode } from "react"
 
-type AuthLayoutProps = {
+type OnboardingLayoutProps = {
   children: ReactNode
 }
 
-export default function AuthLayout({ children }: AuthLayoutProps) {
+export default function OnboardingLayout({ children }: OnboardingLayoutProps) {
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-loft px-4 py-10">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-loft px-4 py-10 sm:px-6">
       <div className="pointer-events-none absolute inset-0" aria-hidden>
         <div className="absolute -left-24 top-1/4 size-72 rounded-full bg-emerald/15 blur-3xl" />
         <div className="absolute -right-20 bottom-1/4 size-80 rounded-full bg-sage/40 blur-3xl" />
@@ -20,7 +20,7 @@ export default function AuthLayout({ children }: AuthLayoutProps) {
         />
       </div>
 
-      <div className="relative z-10 w-full max-w-md">{children}</div>
+      <div className="relative z-10 w-full max-w-xl">{children}</div>
     </div>
   )
 }

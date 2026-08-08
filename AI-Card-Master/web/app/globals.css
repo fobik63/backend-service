@@ -126,6 +126,24 @@
   }
 }
 
+@keyframes marquee-left {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(-50%, 0, 0);
+  }
+}
+
+@keyframes marquee-right {
+  from {
+    transform: translate3d(-50%, 0, 0);
+  }
+  to {
+    transform: translate3d(0, 0, 0);
+  }
+}
+
 @layer utilities {
   .glass-panel {
     background: rgba(22, 24, 30, 0.75);
@@ -140,5 +158,26 @@
 
   .copper-border {
     border: 1px solid rgba(194, 166, 140, 0.3);
+  }
+
+  .animate-marquee-left {
+    animation: marquee-left var(--marquee-duration, 42s) linear infinite;
+  }
+
+  .animate-marquee-right {
+    animation: marquee-right var(--marquee-duration, 48s) linear infinite;
+  }
+
+  .group\/marquee:hover .animate-marquee-left,
+  .group\/marquee:hover .animate-marquee-right {
+    animation-play-state: paused;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .animate-marquee-left,
+    .animate-marquee-right {
+      animation: none;
+      transform: translate3d(0, 0, 0);
+    }
   }
 }
