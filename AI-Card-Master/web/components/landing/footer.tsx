@@ -21,14 +21,6 @@ const SUPPORT_EMAIL = "support@cardai.pro"
 function Footer() {
   return (
     <footer className="relative isolate">
-      <div
-        className="pointer-events-none absolute inset-0 -z-10"
-        aria-hidden
-      >
-        <div className="absolute -left-20 bottom-0 size-64 rounded-full bg-[#1b3e2b]/20 blur-[120px]" />
-        <div className="absolute -right-16 top-0 size-56 rounded-full bg-[#059669]/10 blur-[120px]" />
-      </div>
-
       <div className="mx-auto max-w-6xl px-5 pt-14 pb-8">
         <div className="section-glass rounded-3xl px-6 py-10 sm:px-8 sm:py-12">
         <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-4 lg:gap-8">

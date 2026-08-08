@@ -4,6 +4,9 @@ import { DEFAULT_TEXT_STYLE } from "@/types/canvas"
 export const CANVAS_WIDTH = 1080
 export const CANVAS_HEIGHT = 1440
 
+/** Isolated transparent product cutout used on the editor canvas. */
+export const DEFAULT_PRODUCT_CUTOUT = "/projects/cream-sage-mist-product.png"
+
 export const MOCK_EDITOR_LAYERS: CanvasLayer[] = [
   {
     id: "layer_bg",
@@ -22,65 +25,123 @@ export const MOCK_EDITOR_LAYERS: CanvasLayer[] = [
     locked: false,
     opacity: 1,
     zIndex: 1,
-    x: 27,
-    y: 23,
-    width: 46,
-    height: 38,
+    x: 31.66,
+    y: 11,
+    // Pixel aspect matches cream-sage-mist-product.png (1134×2638)
+    width: 36.68,
+    height: 64,
     scale: 1,
     rotation: 0,
   },
   {
     id: "layer_title",
     type: "text",
-    name: "Заголовок",
+    name: "Название",
     visible: true,
     locked: false,
     opacity: 1,
     zIndex: 2,
     x: 8,
-    y: 68,
-    width: 84,
+    y: 74,
+    width: 70,
     scale: 1,
     rotation: 0,
-    text: "Название товара",
-    textStyle: { ...DEFAULT_TEXT_STYLE },
-  },
-  {
-    id: "layer_badge",
-    type: "shape",
-    name: "Плашка «Хит»",
-    visible: true,
-    locked: false,
-    opacity: 0.95,
-    zIndex: 3,
-    x: 72,
-    y: 6,
-    scale: 1,
-    rotation: 0,
-    chip: {
-      label: "Хит",
-      bgColor: "#059669",
-      borderRadius: 8,
-      iconId: "icon_star",
+    text: "Sage Mist",
+    textStyle: {
+      ...DEFAULT_TEXT_STYLE,
+      fontSize: 56,
+      fontWeight: 700,
     },
   },
   {
-    id: "layer_icon",
+    id: "layer_subtitle",
+    type: "text",
+    name: "Подзаголовок",
+    visible: true,
+    locked: false,
+    opacity: 1,
+    zIndex: 3,
+    x: 8,
+    y: 82,
+    width: 70,
+    scale: 1,
+    rotation: 0,
+    text: "Крем для рук · 75 мл",
+    textStyle: {
+      ...DEFAULT_TEXT_STYLE,
+      fontSize: 26,
+      fontWeight: 500,
+      color: "#D4A574",
+      shadowEnabled: false,
+    },
+  },
+  {
+    id: "layer_badge_eco",
     type: "shape",
-    name: "Иконка объёма",
+    name: "Плашка «Эко-формула»",
     visible: true,
     locked: false,
     opacity: 1,
     zIndex: 4,
-    x: 8,
-    y: 86,
+    x: 56,
+    y: 26,
     scale: 1,
     rotation: 0,
     chip: {
-      label: "Натуральный состав",
-      bgColor: "#14171d",
-      borderRadius: 10,
-      iconId: "icon_check",
+      label: "Эко-формула",
+      subtitle: "Натуральные ингредиенты",
+      bgColor: "rgba(15,17,21,0.45)",
+      borderRadius: 14,
+      iconId: "icon_leaf",
+      variant: "glass",
+      textColor: "#FFFFFF",
+      blur: 12,
+    },
+  },
+  {
+    id: "layer_badge_hydrate",
+    type: "shape",
+    name: "Плашка «Увлажнение 24ч»",
+    visible: true,
+    locked: false,
+    opacity: 1,
+    zIndex: 5,
+    x: 56,
+    y: 38,
+    scale: 1,
+    rotation: 0,
+    chip: {
+      label: "Увлажнение 24ч",
+      subtitle: "Интенсивное питание",
+      bgColor: "rgba(15,17,21,0.45)",
+      borderRadius: 14,
+      iconId: "icon_drop",
+      variant: "glass",
+      textColor: "#FFFFFF",
+      blur: 12,
+    },
+  },
+  {
+    id: "layer_badge_paraben",
+    type: "shape",
+    name: "Плашка «Без парабенов»",
+    visible: true,
+    locked: false,
+    opacity: 1,
+    zIndex: 6,
+    x: 56,
+    y: 50,
+    scale: 1,
+    rotation: 0,
+    chip: {
+      label: "Без парабенов",
+      subtitle: "Безопасный уход",
+      bgColor: "rgba(15,17,21,0.45)",
+      borderRadius: 14,
+      iconId: "icon_flask",
+      variant: "glass",
+      textColor: "#FFFFFF",
+      blur: 12,
     },
   },
 ]
@@ -93,6 +154,7 @@ export const FEATURE_CHIP_ICONS = [
   { id: "icon_star", label: "Звезда" },
   { id: "icon_spark", label: "Искра" },
   { id: "icon_box", label: "Коробка" },
+  { id: "icon_flask", label: "Колба" },
 ] as const
 
 export const FEATURE_CHIP_BG_PRESETS = [
@@ -105,18 +167,50 @@ export const FEATURE_CHIP_BG_PRESETS = [
 ] as const
 
 export const TEXT_PRESETS = [
-  { id: "txt_title", label: "Заголовок", sample: "Название товара" },
-  { id: "txt_subtitle", label: "Подзаголовок", sample: "Ключевое преимущество" },
+  { id: "txt_title", label: "Заголовок", sample: "Sage Mist" },
+  {
+    id: "txt_subtitle",
+    label: "Подзаголовок",
+    sample: "Крем для рук · 75 мл",
+  },
   { id: "txt_bullet", label: "Пункт", sample: "• Состав / объём" },
 ] as const
 
 export const BADGE_PRESETS = [
+  {
+    id: "badge_eco_formula",
+    label: "Эко-формула",
+    subtitle: "Натуральные ингредиенты",
+    tone: "sage" as const,
+    bgColor: "rgba(15,17,21,0.45)",
+    iconId: "icon_leaf",
+    variant: "glass" as const,
+  },
+  {
+    id: "badge_hydrate",
+    label: "Увлажнение 24ч",
+    subtitle: "Интенсивное питание",
+    tone: "sage" as const,
+    bgColor: "rgba(15,17,21,0.45)",
+    iconId: "icon_drop",
+    variant: "glass" as const,
+  },
+  {
+    id: "badge_paraben_free",
+    label: "Без парабенов",
+    subtitle: "Безопасный уход",
+    tone: "sage" as const,
+    bgColor: "rgba(15,17,21,0.45)",
+    iconId: "icon_flask",
+    variant: "glass" as const,
+  },
   {
     id: "badge_hit",
     label: "Хит продаж",
     tone: "emerald" as const,
     bgColor: "#059669",
     iconId: "icon_star",
+    variant: "solid" as const,
   },
   {
     id: "badge_sale",
@@ -124,6 +218,7 @@ export const BADGE_PRESETS = [
     tone: "amber" as const,
     bgColor: "#E11D48",
     iconId: "icon_spark",
+    variant: "solid" as const,
   },
   {
     id: "badge_guarantee",
@@ -131,6 +226,7 @@ export const BADGE_PRESETS = [
     tone: "copper" as const,
     bgColor: "#F59E0B",
     iconId: "icon_shield",
+    variant: "solid" as const,
   },
   {
     id: "badge_new",
@@ -138,6 +234,7 @@ export const BADGE_PRESETS = [
     tone: "copper" as const,
     bgColor: "#B87333",
     iconId: "icon_spark",
+    variant: "solid" as const,
   },
   {
     id: "badge_eco",
@@ -145,6 +242,7 @@ export const BADGE_PRESETS = [
     tone: "sage" as const,
     bgColor: "#1B3E2B",
     iconId: "icon_leaf",
+    variant: "solid" as const,
   },
 ] as const
 
@@ -155,6 +253,7 @@ export const ICON_PRESETS = [
   { id: "icon_star", label: "Звезда" },
   { id: "icon_spark", label: "Искра" },
   { id: "icon_box", label: "Коробка" },
+  { id: "icon_flask", label: "Колба" },
 ] as const
 
 /** Default drop spot for the next badge/chip (% of canvas). */
@@ -164,7 +263,7 @@ export function nextBadgePosition(
   const col = existingChipCount % 2
   const row = Math.floor(existingChipCount / 2)
   return {
-    x: 58 + col * 14,
-    y: 5 + row * 9,
+    x: 56 + col * 4,
+    y: 24 + row * 12,
   }
 }

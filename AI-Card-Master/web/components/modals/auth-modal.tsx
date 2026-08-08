@@ -44,7 +44,7 @@ function AuthModal({
       }}
     >
       <DialogContent
-        showCloseButton
+        showCloseButton={false}
         className="max-w-[calc(100%-1.5rem)] border-0 bg-transparent p-0 shadow-none ring-0 sm:max-w-md"
       >
         <DialogHeader className="sr-only">

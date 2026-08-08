@@ -5,6 +5,7 @@ import {
   ChevronDown,
   CircleCheck,
   Droplets,
+  FlaskConical,
   Leaf,
   Package,
   Plus,
@@ -58,13 +59,18 @@ const CHIP_ICON_MAP: Record<string, LucideIcon> = {
   icon_star: Star,
   icon_spark: Sparkles,
   icon_box: Package,
+  icon_flask: FlaskConical,
 }
 
 const DEFAULT_CHIP: FeatureChipDraft = {
-  label: "Преимущество",
-  bgColor: "#FFFFFF",
-  borderRadius: 32,
-  iconId: "icon_check",
+  label: "Эко-формула",
+  subtitle: "Натуральные ингредиенты",
+  bgColor: "rgba(15,17,21,0.45)",
+  borderRadius: 14,
+  iconId: "icon_leaf",
+  variant: "glass",
+  textColor: "#FFFFFF",
+  blur: 12,
 }
 
 function FieldLabel({
@@ -204,16 +210,27 @@ function TextLayerControl({ className }: { className?: string }) {
       y: pos.y,
       scale: 1,
       rotation: 0,
-      chip: { ...chipDraft, label },
-    })
+    chip: {
+      ...chipDraft,
+      label,
+      blur: chipDraft.blur ?? (chipDraft.variant === "glass" ? 12 : 0),
+      textColor:
+        chipDraft.textColor ??
+        (chipDraft.variant === "glass" ? "#FFFFFF" : undefined),
+    },
+  })
     toast.success(`Плашка «${label}» на холсте`)
   }
 
   const ChipIcon = CHIP_ICON_MAP[chipDraft.iconId] ?? CircleCheck
+  const isGlassChip = chipDraft.variant === "glass"
   const chipTextColor =
+    isGlassChip ||
     chipDraft.bgColor.toLowerCase() === "#ffffff" ||
     chipDraft.bgColor.toLowerCase() === "#fff"
-      ? "#0F1115"
+      ? isGlassChip
+        ? "#FFFFFF"
+        : "#0F1115"
       : "#FFFFFF"
 
   return (
@@ -513,16 +530,35 @@ function TextLayerControl({ className }: { className?: string }) {
         </div>
 
         <div
-          className="inline-flex max-w-full items-center gap-2 border px-3 py-2 text-xs font-medium"
+          className={cn(
+            "inline-flex max-w-full items-center gap-2 border px-3 py-2 text-xs font-medium",
+            isGlassChip &&
+              "border-white/25 bg-white/10 text-white shadow-sm backdrop-blur-md"
+          )}
           style={{
-            backgroundColor: chipDraft.bgColor,
+            backgroundColor: isGlassChip ? undefined : chipDraft.bgColor,
             color: chipTextColor,
             borderRadius: chipDraft.borderRadius,
-            borderColor: "rgba(15,23,42,0.12)",
+            borderColor: isGlassChip ? undefined : "rgba(15,23,42,0.12)",
           }}
         >
-          <ChipIcon className="size-4 shrink-0" aria-hidden />
-          <span className="truncate">{chipDraft.label || "Преимущество"}</span>
+          {isGlassChip ? (
+            <span className="flex size-6 shrink-0 items-center justify-center rounded-full border border-white/30 bg-white/10">
+              <ChipIcon className="size-3.5" aria-hidden />
+            </span>
+          ) : (
+            <ChipIcon className="size-4 shrink-0" aria-hidden />
+          )}
+          <span className="min-w-0">
+            <span className="block whitespace-nowrap">
+              {chipDraft.label || "Преимущество"}
+            </span>
+            {chipDraft.subtitle ? (
+              <span className="block whitespace-nowrap text-[10px] font-normal opacity-70">
+                {chipDraft.subtitle}
+              </span>
+            ) : null}
+          </span>
         </div>
 
         <div className="space-y-1.5">
@@ -546,7 +582,13 @@ function TextLayerControl({ className }: { className?: string }) {
                 key={hex}
                 type="button"
                 title={hex}
-                onClick={() => setChipDraft((d) => ({ ...d, bgColor: hex }))}
+                onClick={() =>
+                  setChipDraft((d) => ({
+                    ...d,
+                    bgColor: hex,
+                    variant: "solid",
+                  }))
+                }
                 className={cn(
                   "size-7 rounded-md ring-1 ring-white/15 transition-transform hover:scale-105",
                   chipDraft.bgColor.toLowerCase() === hex.toLowerCase() &&

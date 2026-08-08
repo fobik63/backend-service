@@ -277,11 +277,6 @@ function PricingSection() {
       ref={sectionRef}
       className="relative isolate scroll-mt-24 py-20 sm:py-28"
     >
-      <div className="pointer-events-none absolute inset-0 -z-10" aria-hidden>
-        <div className="absolute left-1/2 top-10 size-96 -translate-x-1/2 rounded-full bg-[#059669]/10 blur-[120px]" />
-        <div className="absolute -right-24 bottom-1/4 size-72 rounded-full bg-[#1b3e2b]/20 blur-[120px]" />
-      </div>
-
       <div className="mx-auto max-w-6xl px-5">
         <div className="section-glass rounded-3xl px-5 py-10 sm:px-8 sm:py-12 lg:px-10">
           <SectionHeader

@@ -10,6 +10,11 @@ export type Project = {
   createdAt: string
   /** Marketplace-style card preview (local Unsplash-quality photo) */
   previewImage: string
+  /**
+   * Isolated transparent product cutout for the editor canvas.
+   * Falls back to `previewImage` when omitted.
+   */
+  productImage?: string
   accentLabel: string
 }
 
@@ -21,6 +26,7 @@ export const MOCK_PROJECTS: Project[] = [
     status: "ready",
     createdAt: "2026-08-02T10:24:00.000Z",
     previewImage: "/projects/cream-sage-mist.png",
+    productImage: "/projects/cream-sage-mist-product.png",
     accentLabel: "Уход",
   },
   {

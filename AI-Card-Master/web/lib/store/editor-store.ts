@@ -2,13 +2,17 @@
 
 import { create } from "zustand"
 
-import { MOCK_EDITOR_LAYERS } from "@/lib/constants/mock-editor"
-import type { PackSize } from "@/lib/export/card-pack"
+import { MOCK_EDITOR_LAYERS, DEFAULT_PRODUCT_CUTOUT } from "@/lib/constants/mock-editor"
+import {
+  clampPackSize,
+  PRESET_PACK_SIZES,
+  type PackSize,
+} from "@/lib/export/card-pack"
 import type { CanvasLayer } from "@/types/canvas"
 
 export type EditorZoomMode = "50" | "100" | "fit"
 
-export const PACK_SIZE_OPTIONS: PackSize[] = [1, 3, 5]
+export const PACK_SIZE_OPTIONS: PackSize[] = PRESET_PACK_SIZES
 
 /** Parametric softbox — mirrors backend StudioLightDTO (+ enabled for UI). */
 export type SoftboxSettings = {
@@ -37,7 +41,7 @@ type EditorState = {
   softbox: SoftboxSettings
   /** Local product preview (blob / CDN URL) shown on canvas. */
   productPreviewUrl: string | null
-  /** How many photos to generate in the card pack (1 / 3 / 5). */
+  /** How many photos to generate in the card pack (1–20). */
   packSize: PackSize
   busyKind: EditorBusyKind
   setProjectId: (id: string) => void
@@ -72,7 +76,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   flashLayerId: null,
   zoomMode: "fit",
   softbox: DEFAULT_SOFTBOX,
-  productPreviewUrl: null,
+  productPreviewUrl: DEFAULT_PRODUCT_CUTOUT,
   packSize: 5,
   busyKind: "idle",
   setProjectId: (id) => set({ projectId: id }),
@@ -90,9 +94,21 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setZoomMode: (mode) => set({ zoomMode: mode }),
   updateLayer: (id, patch) =>
     set((state) => ({
-      layers: state.layers.map((layer) =>
-        layer.id === id ? { ...layer, ...patch } : layer
-      ),
+      layers: state.layers.map((layer) => {
+        if (layer.id !== id) return layer
+        return {
+          ...layer,
+          ...patch,
+          textStyle:
+            patch.textStyle !== undefined
+              ? { ...layer.textStyle, ...patch.textStyle }
+              : layer.textStyle,
+          chip:
+            patch.chip !== undefined
+              ? { ...layer.chip, ...patch.chip }
+              : layer.chip,
+        }
+      }),
     })),
   addLayer: (layer) =>
     set((state) => ({
@@ -120,7 +136,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setSoftbox: (patch) =>
     set((state) => ({ softbox: { ...state.softbox, ...patch } })),
   setProductPreviewUrl: (url) => set({ productPreviewUrl: url }),
-  setPackSize: (size) => set({ packSize: size }),
+  setPackSize: (size) => set({ packSize: clampPackSize(size) }),
   setBusyKind: (kind) => set({ busyKind: kind }),
   reset: () =>
     set({
@@ -129,7 +145,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       flashLayerId: null,
       zoomMode: "fit",
       softbox: DEFAULT_SOFTBOX,
-      productPreviewUrl: null,
+      productPreviewUrl: DEFAULT_PRODUCT_CUTOUT,
       packSize: 5,
       busyKind: "idle",
     }),

@@ -7,7 +7,6 @@ import { toast } from "sonner"
 
 import { BrandLogo } from "@/components/dashboard/brand-logo"
 import { EditorCanvasStage } from "@/components/editor/canvas-stage"
-import { PromptBar } from "@/components/editor/prompt-bar"
 import { EditorSettingsPanel } from "@/components/editor/settings-panel"
 import { buttonVariants } from "@/components/ui/button"
 import {
@@ -49,10 +48,16 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
   }, [projectId, setProjectId])
 
   useEffect(() => {
-    if (productData?.previewImage) {
-      setProductPreviewUrl(productData.previewImage)
+    const cutout =
+      productData?.productImage ?? productData?.previewImage ?? null
+    if (cutout) {
+      setProductPreviewUrl(cutout)
     }
-  }, [productData?.previewImage, setProductPreviewUrl])
+  }, [
+    productData?.productImage,
+    productData?.previewImage,
+    setProductPreviewUrl,
+  ])
 
   const title = productData?.title ?? `Проект ${projectId}`
   const isSaving = saving || busyKind === "saving"
@@ -153,13 +158,13 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
       </header>
 
       {canRenderEditorSurface ? (
-        <>
-          <div className="flex min-h-0 flex-1">
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+          {/* Canvas + params centered as one work block */}
+          <div className="mx-auto flex h-full w-full max-w-7xl min-w-0 items-center justify-center">
             <EditorCanvasStage />
-            <EditorSettingsPanel />
+            <EditorSettingsPanel projectTitle={title} />
           </div>
-          <PromptBar projectTitle={title} />
-        </>
+        </div>
       ) : (
         <div
           className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 px-6"

@@ -27,9 +27,6 @@ function CallToActionSection() {
         />
 
         <div className="pointer-events-none absolute inset-0" aria-hidden>
-          <div className="absolute -left-16 top-1/2 size-64 -translate-y-1/2 rounded-full bg-[#059669]/10 blur-[120px]" />
-          <div className="absolute -right-10 -top-20 size-72 rounded-full bg-[#1b3e2b]/20 blur-[120px]" />
-          <div className="absolute bottom-0 left-1/3 size-56 rounded-full bg-[#0d0f12]/50 blur-[120px]" />
           <TropicalLeaves className="text-emerald" />
         </div>
 

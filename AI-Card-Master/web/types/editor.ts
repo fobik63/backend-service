@@ -6,5 +6,8 @@ export type EditorProductData = {
   title: string
   marketplace: Project["marketplace"] | null
   status: Project["status"] | null
+  /** Card thumbnail / marketing composite (projects list). */
   previewImage?: string | null
+  /** Isolated transparent product PNG for the canvas layer. */
+  productImage?: string | null
 }

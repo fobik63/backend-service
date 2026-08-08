@@ -47,10 +47,6 @@ function FaqSection() {
       className="relative isolate scroll-mt-28 px-5 py-16 sm:py-24"
       aria-labelledby="faq-heading"
     >
-      <div className="pointer-events-none absolute inset-0 -z-10" aria-hidden>
-        <div className="absolute left-1/2 top-0 size-96 -translate-x-1/2 rounded-full bg-[#059669]/10 blur-[120px]" />
-      </div>
-
       <div className="mx-auto max-w-3xl">
         <div className="section-glass rounded-3xl px-5 py-10 sm:px-8 sm:py-12">
           <SectionHeader

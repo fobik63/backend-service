@@ -20,6 +20,7 @@ function resolveProductData(id: string): EditorProductData | null {
       marketplace: project.marketplace,
       status: project.status,
       previewImage: project.previewImage,
+      productImage: project.productImage ?? project.previewImage,
     }
   }
 
@@ -29,6 +30,7 @@ function resolveProductData(id: string): EditorProductData | null {
     title: `Проект ${trimmed}`,
     marketplace: null,
     status: null,
+    productImage: "/projects/cream-sage-mist-product.png",
   }
 }
 

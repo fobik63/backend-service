@@ -20,11 +20,21 @@ export type TextLayerStyle = {
   shadowOffsetY: number
 }
 
+export type FeatureChipVariant = "solid" | "glass"
+
 export type FeatureChipDraft = {
   label: string
   bgColor: string
   borderRadius: number
   iconId: string
+  /** `glass` = frosted translucent plate (backdrop-blur). */
+  variant?: FeatureChipVariant
+  /** Optional second line under the main label. */
+  subtitle?: string
+  /** Explicit text/icon color; falls back to contrast against bg. */
+  textColor?: string
+  /** Backdrop blur in px for glassmorphism (0 = none). */
+  blur?: number
 }
 
 export type CanvasLayer = {

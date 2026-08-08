@@ -1,6 +1,6 @@
 import type { ReactNode } from "react"
 import Link from "next/link"
-import { ArrowLeft, X } from "lucide-react"
+import { ArrowLeft } from "lucide-react"
 
 type AuthLayoutProps = {
   children: ReactNode
@@ -15,14 +15,6 @@ export default function AuthLayout({ children }: AuthLayoutProps) {
       >
         <ArrowLeft className="size-4 text-copper" aria-hidden />
         Назад на главную
-      </Link>
-
-      <Link
-        href="/landing"
-        aria-label="Закрыть и вернуться на главную"
-        className="absolute top-5 right-5 z-20 inline-flex size-10 items-center justify-center rounded-full border border-white/10 bg-loft-surface/80 text-foreground/80 shadow-lg backdrop-blur-md transition-colors hover:border-copper/40 hover:text-foreground"
-      >
-        <X className="size-4" />
       </Link>
 
       <div className="relative z-10 w-full max-w-md">{children}</div>

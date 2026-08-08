@@ -3,6 +3,7 @@
 import {
   CircleCheck,
   Droplets,
+  FlaskConical,
   Leaf,
   Package,
   Shield,
@@ -21,7 +22,6 @@ import {
   type RefObject,
 } from "react"
 
-import { ImageWithSkeleton } from "@/components/ui/image-with-skeleton"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   CANVAS_HEIGHT,
@@ -42,6 +42,7 @@ const CHIP_ICON_MAP: Record<string, LucideIcon> = {
   icon_star: Star,
   icon_spark: Sparkles,
   icon_box: Package,
+  icon_flask: FlaskConical,
 }
 
 type InteractMode = "drag" | "rotate" | "scale"
@@ -208,8 +209,8 @@ function layerDefaults(layer: CanvasLayer): {
     return {
       x: layer.x ?? 27,
       y: layer.y ?? 23,
-      width: layer.width ?? 46,
-      height: layer.height ?? 38,
+      width: layer.width ?? 36.68,
+      height: layer.height ?? 64,
       scale: layer.scale ?? 1,
       rotation: layer.rotation ?? 0,
     }
@@ -231,6 +232,41 @@ function layerDefaults(layer: CanvasLayer): {
   }
 }
 
+/**
+ * Size an image layer box (%) so its pixel aspect matches the bitmap.
+ * Fits inside the current max width×height envelope (preserves framing).
+ */
+function fitImageLayerBox(
+  naturalW: number,
+  naturalH: number,
+  maxWidthPct: number,
+  maxHeightPct: number
+): { width: number; height: number } {
+  const safeW = Math.max(1, naturalW)
+  const safeH = Math.max(1, naturalH)
+  // width%/height% ratio that yields the same pixel aspect as the image
+  const widthOverHeight =
+    (safeW / safeH) * (CANVAS_HEIGHT / CANVAS_WIDTH)
+
+  let width = maxWidthPct
+  let height = width / widthOverHeight
+  if (height > maxHeightPct) {
+    height = maxHeightPct
+    width = height * widthOverHeight
+  }
+
+  return {
+    width: Math.round(width * 100) / 100,
+    height: Math.round(height * 100) / 100,
+  }
+}
+
+const PRODUCT_IMG_RENDER: CSSProperties = {
+  objectFit: "fill",
+  // Prefer contrast over smooth downscale (WebKit) / avoid blurry bilinear mush
+  imageRendering: "crisp-edges",
+}
+
 const CORNER_HANDLES = [
   { key: "nw", cursor: "nwse-resize", style: { left: 0, top: 0 } },
   { key: "ne", cursor: "nesw-resize", style: { left: "100%", top: 0 } },
@@ -248,7 +284,11 @@ function SelectionChrome({
   onScalePointerDown: (e: ReactPointerEvent) => void
 }) {
   return (
-    <div className="pointer-events-none absolute inset-0 z-10" aria-hidden>
+    <div
+      className="pointer-events-none absolute inset-0 z-10"
+      aria-hidden
+      data-export-chrome="true"
+    >
       <div className="absolute inset-0 border border-emerald/90" />
 
       <div className="absolute left-1/2 top-0 flex -translate-x-1/2 -translate-y-full flex-col items-center">
@@ -295,6 +335,7 @@ function InteractiveLayer({
   className,
   style,
   editableText,
+  editValue,
   onCommitText,
 }: {
   layer: CanvasLayer
@@ -305,6 +346,8 @@ function InteractiveLayer({
   className?: string
   style?: CSSProperties
   editableText?: boolean
+  /** Initial value for inline editing (defaults to `layer.text`). */
+  editValue?: string
   onCommitText?: (text: string) => void
 }) {
   const selectLayer = useEditorStore((s) => s.selectLayer)
@@ -451,8 +494,10 @@ function InteractiveLayer({
         height: defs.height != null ? `${defs.height}%` : undefined,
         opacity: layer.opacity,
         zIndex: layer.zIndex + (selected || flashing ? 100 : 0),
+        // Top-left placement; rotate/scale around geometric center of width×height box
         transform: `rotate(${defs.rotation}deg) scale(${defs.scale})`,
-        transformOrigin: "center center",
+        transformOrigin: "50% 50%",
+        willChange: selected ? "transform" : undefined,
       }}
       onPointerDown={(e) => {
         if (e.button !== 0) return
@@ -482,6 +527,9 @@ function InteractiveLayer({
       <div
         className={cn(
           "relative",
+          // Image / sized layers: fill the transform box so SelectionChrome hugs width×height
+          defs.width != null && "w-full",
+          defs.height != null && "h-full",
           editing && "ring-1 ring-emerald/60",
           flashing && "ring-2 ring-amber shadow-[0_0_0_4px_rgba(245,158,11,0.35)]",
           className
@@ -511,7 +559,7 @@ function InteractiveLayer({
               }
             }}
           >
-            {layer.text ?? ""}
+            {editValue ?? layer.text ?? ""}
           </div>
         ) : (
           children
@@ -546,6 +594,11 @@ function ProductLayer({
   softbox: SoftboxSettings
   productPreviewUrl: string | null
 }) {
+  const updateLayer = useEditorStore((s) => s.updateLayer)
+  const fittedUrlRef = useRef<string | null>(null)
+  const imgRef = useRef<HTMLImageElement>(null)
+  const layerId = layer.id
+
   const rad = (softbox.lightAngle * Math.PI) / 180
   const cast = softbox.enabled
     ? 0.55 - ((softbox.lightElevation - 10) / 80) * 0.42
@@ -565,6 +618,60 @@ function ProductLayer({
   const localY = clamp(25 + (ly - 50) * 0.9, 5, 95)
   const sheenBlur = 8 + diffusion * 22
 
+  const syncBoxToImage = useCallback(
+    (img: HTMLImageElement) => {
+      const nw = img.naturalWidth
+      const nh = img.naturalHeight
+      if (nw <= 0 || nh <= 0) return
+      if (!productPreviewUrl || fittedUrlRef.current === productPreviewUrl) return
+      fittedUrlRef.current = productPreviewUrl
+
+      const current = useEditorStore
+        .getState()
+        .layers.find((l) => l.id === layerId)
+      if (!current) return
+
+      const d = layerDefaults(current)
+      // Fresh bitmap always fits into a studio envelope (not the previous photo's box),
+      // so landscape → portrait uploads don't inherit a flattened frame.
+      const fitted = fitImageLayerBox(nw, nh, 52, 64)
+
+      const cx = d.x + (d.width ?? fitted.width) / 2
+      const cy = d.y + (d.height ?? fitted.height) / 2
+      const nextX = clamp(cx - fitted.width / 2, -30, 110)
+      const nextY = clamp(cy - fitted.height / 2, -30, 110)
+
+      updateLayer(layerId, {
+        width: fitted.width,
+        height: fitted.height,
+        x: nextX,
+        y: nextY,
+      })
+    },
+    [layerId, productPreviewUrl, updateLayer]
+  )
+
+  useEffect(() => {
+    fittedUrlRef.current = null
+    const img = imgRef.current
+    if (img?.complete && img.naturalWidth > 0) {
+      syncBoxToImage(img)
+    }
+  }, [productPreviewUrl, syncBoxToImage])
+
+  const maskStyle = productPreviewUrl
+    ? {
+        WebkitMaskImage: `url(${productPreviewUrl})`,
+        maskImage: `url(${productPreviewUrl})`,
+        WebkitMaskSize: "100% 100%",
+        maskSize: "100% 100%",
+        WebkitMaskRepeat: "no-repeat",
+        maskRepeat: "no-repeat",
+        WebkitMaskPosition: "center",
+        maskPosition: "center",
+      }
+    : undefined
+
   return (
     <InteractiveLayer
       layer={layer}
@@ -572,45 +679,63 @@ function ProductLayer({
       flashing={flashing}
       canvasRef={canvasRef}
       className="size-full"
-      style={{
-        boxShadow: `${shadowX * canvasScale}px ${shadowY * canvasScale}px ${shadowBlur * canvasScale}px rgba(0,0,0,0.55)`,
-      }}
     >
-      <div
-        className={cn(
-          "absolute inset-0 overflow-hidden rounded-[18%] border border-white/15",
-          !productPreviewUrl && "bg-gradient-to-b from-copper/45 to-sage/55"
-        )}
-      >
+      {/*
+        Content root fills the layer width×height box exactly.
+        SelectionChrome (sibling in InteractiveLayer) therefore hugs the photo.
+      */}
+      <div className="absolute inset-0">
         {productPreviewUrl ? (
-          <ImageWithSkeleton
-            src={productPreviewUrl}
-            alt="Товар на холсте"
-            className="pointer-events-none absolute inset-0 size-full"
-            skeletonClassName="rounded-none"
-            onLoad={() => {
-              if (useEditorStore.getState().busyKind === "loading-image") {
-                useEditorStore.getState().setBusyKind("idle")
-              }
-            }}
-            onLoadError={() => {
-              if (useEditorStore.getState().busyKind === "loading-image") {
-                useEditorStore.getState().setBusyKind("idle")
-              }
-            }}
-          />
+          <>
+            {/* Shadow as masked silhouette — never filter() the crisp product img */}
+            <div
+              className="pointer-events-none absolute inset-0"
+              style={{
+                background: "rgba(0,0,0,0.55)",
+                transform: `translate(${shadowX * canvasScale}px, ${shadowY * canvasScale}px)`,
+                filter: `blur(${Math.max(4, shadowBlur * canvasScale * 0.45)}px)`,
+                opacity: softbox.enabled ? 0.55 : 0.4,
+                ...maskStyle,
+              }}
+              aria-hidden
+            />
+            {/* eslint-disable-next-line @next/next/no-img-element -- dynamic blob/CDN product cutouts */}
+            <img
+              ref={imgRef}
+              src={productPreviewUrl}
+              alt="Товар на холсте"
+              className="pointer-events-none absolute inset-0 size-full [image-rendering:-webkit-optimize-contrast]"
+              style={PRODUCT_IMG_RENDER}
+              draggable={false}
+              decoding="async"
+              onLoad={(e) => {
+                syncBoxToImage(e.currentTarget)
+                if (useEditorStore.getState().busyKind === "loading-image") {
+                  useEditorStore.getState().setBusyKind("idle")
+                }
+              }}
+              onError={() => {
+                if (useEditorStore.getState().busyKind === "loading-image") {
+                  useEditorStore.getState().setBusyKind("idle")
+                }
+              }}
+            />
+          </>
         ) : (
-          <span className="sr-only">Слой товара</span>
+          <div className="absolute inset-[8%] rounded-[18%] border border-white/15 bg-gradient-to-b from-copper/45 to-sage/55">
+            <span className="sr-only">Слой товара</span>
+          </div>
         )}
-        {softbox.enabled ? (
+        {softbox.enabled && productPreviewUrl ? (
           <>
             <div
               className="pointer-events-none absolute inset-0"
               style={{
                 background: `radial-gradient(ellipse ${48 + diffusion * 30}% ${40 + diffusion * 28}% at ${localX}% ${localY}%, ${lightColor} 0%, transparent 70%)`,
-                opacity: 0.35 * intensity,
+                opacity: 0.28 * intensity,
                 filter: `blur(${sheenBlur}px)`,
                 mixBlendMode: "soft-light",
+                ...maskStyle,
               }}
               aria-hidden
             />
@@ -618,9 +743,10 @@ function ProductLayer({
               className="pointer-events-none absolute inset-0"
               style={{
                 background: `radial-gradient(circle at ${localX}% ${localY}%, color-mix(in srgb, ${lightColor} 70%, white) 0%, transparent ${18 + diffusion * 20}%)`,
-                opacity: 0.22 * intensity,
+                opacity: 0.18 * intensity,
                 filter: `blur(${4 + diffusion * 12}px)`,
                 mixBlendMode: "overlay",
+                ...maskStyle,
               }}
               aria-hidden
             />
@@ -637,14 +763,12 @@ function TextLayerView({
   flashing,
   canvasScale,
   canvasRef,
-  subtitle,
 }: {
   layer: CanvasLayer
   selected: boolean
   flashing?: boolean
   canvasScale: number
   canvasRef: RefObject<HTMLDivElement | null>
-  subtitle?: string
 }) {
   const updateLayer = useEditorStore((s) => s.updateLayer)
   const ts = layer.textStyle
@@ -676,14 +800,6 @@ function TextLayerView({
       >
         {layer.text ?? ""}
       </span>
-      {subtitle ? (
-        <span
-          className="mt-1 block text-copper/90"
-          style={{ fontSize: Math.max(10, 20 * canvasScale) }}
-        >
-          {subtitle}
-        </span>
-      ) : null}
     </InteractiveLayer>
   )
 }
@@ -701,9 +817,16 @@ function ChipLayerView({
   canvasScale: number
   canvasRef: RefObject<HTMLDivElement | null>
 }) {
+  const updateLayer = useEditorStore((s) => s.updateLayer)
   const chip = layer.chip
   const Icon = CHIP_ICON_MAP[chip.iconId] ?? CircleCheck
-  const fg = chipTextColor(chip.bgColor)
+  const isGlass = chip.variant === "glass"
+  const blurPx = chip.blur ?? (isGlass ? 12 : 0)
+  const hasBlur = blurPx > 0
+  const fg =
+    chip.textColor ?? (isGlass || hasBlur ? "#FFFFFF" : chipTextColor(chip.bgColor))
+  const iconSize = Math.max(12, (isGlass || hasBlur ? 18 : 16) * canvasScale)
+  const fontSize = Math.max(10, (isGlass || hasBlur ? 15 : 16) * canvasScale)
 
   return (
     <InteractiveLayer
@@ -711,23 +834,56 @@ function ChipLayerView({
       selected={selected}
       flashing={flashing}
       canvasRef={canvasRef}
-      className="flex max-w-[42%] items-center gap-1.5 border border-black/10 px-2.5 py-1.5 font-heading font-semibold shadow-sm"
+      editableText
+      editValue={chip.label}
+      onCommitText={(text) =>
+        updateLayer(layer.id, {
+          chip: { ...chip, label: text || chip.label },
+        })
+      }
+      className={cn(
+        "inline-flex w-max max-w-none shrink-0 items-center whitespace-nowrap font-heading font-semibold overflow-visible",
+        isGlass || hasBlur
+          ? "gap-2.5 border border-white/25 px-3 py-2.5 shadow-[0_8px_32px_rgba(0,0,0,0.35)]"
+          : "gap-1.5 border border-black/10 px-2.5 py-1.5 shadow-sm"
+      )}
       style={{
         backgroundColor: chip.bgColor,
         color: fg,
         borderRadius: chip.borderRadius,
-        fontSize: Math.max(10, 16 * canvasScale),
+        fontSize,
+        backdropFilter: hasBlur ? `blur(${blurPx}px)` : undefined,
+        WebkitBackdropFilter: hasBlur ? `blur(${blurPx}px)` : undefined,
       }}
     >
-      <Icon
-        className="pointer-events-none shrink-0"
-        style={{
-          width: Math.max(12, 16 * canvasScale),
-          height: Math.max(12, 16 * canvasScale),
-        }}
-        aria-hidden
-      />
-      <span className="pointer-events-none truncate">{chip.label}</span>
+      {isGlass || hasBlur ? (
+        <span
+          className="pointer-events-none flex shrink-0 items-center justify-center rounded-full border border-white/30 bg-white/10"
+          style={{ width: iconSize + 10, height: iconSize + 10 }}
+        >
+          <Icon
+            style={{ width: iconSize, height: iconSize }}
+            aria-hidden
+          />
+        </span>
+      ) : (
+        <Icon
+          className="pointer-events-none shrink-0"
+          style={{ width: iconSize, height: iconSize }}
+          aria-hidden
+        />
+      )}
+      <span className="pointer-events-none shrink-0 whitespace-nowrap">
+        <span className="block whitespace-nowrap leading-tight">{chip.label}</span>
+        {chip.subtitle ? (
+          <span
+            className="mt-0.5 block whitespace-nowrap font-sans font-normal leading-tight opacity-70"
+            style={{ fontSize: Math.max(9, fontSize * 0.72) }}
+          >
+            {chip.subtitle}
+          </span>
+        ) : null}
+      </span>
     </InteractiveLayer>
   )
 }
@@ -802,9 +958,6 @@ function EditorCanvas({
               flashing={flashing}
               canvasScale={scale}
               canvasRef={canvasRef}
-              subtitle={
-                layer.id === "layer_title" ? "Крем для рук · 75 мл" : undefined
-              }
             />
           )
         }
@@ -830,7 +983,10 @@ function EditorCanvas({
       })}
 
       {showBusyOverlay ? (
-        <div className="pointer-events-none absolute inset-0 z-[200] flex flex-col items-center justify-center gap-3 bg-loft/55 backdrop-blur-[2px]">
+        <div
+          className="pointer-events-none absolute inset-0 z-[200] flex flex-col items-center justify-center gap-3 bg-loft/55 backdrop-blur-[2px]"
+          data-export-chrome="true"
+        >
           <Skeleton className="h-[38%] w-[46%] rounded-[18%]" />
           <p className="text-xs text-muted-foreground">
             {busyKind === "generating"
@@ -842,7 +998,10 @@ function EditorCanvas({
         </div>
       ) : null}
 
-      <span className="pointer-events-none absolute bottom-2 right-3 z-[130] font-mono text-[10px] text-white/25">
+      <span
+        className="pointer-events-none absolute bottom-2 right-3 z-[130] font-mono text-[10px] text-white/25"
+        data-export-chrome="true"
+      >
         {CANVAS_WIDTH}×{CANVAS_HEIGHT}
       </span>
     </div>

@@ -1,14 +1,29 @@
-import { toPng } from "html-to-image"
+import { toBlob, toPng } from "html-to-image"
 import JSZip from "jszip"
 
 import {
   CANVAS_HEIGHT,
   CANVAS_WIDTH,
 } from "@/lib/constants/mock-editor"
-import { dataUrlToBlob, downloadBlob } from "@/lib/export/download-blob"
+import {
+  assertValidPngBlob,
+  dataUrlToBlob,
+  downloadBlob,
+  imageUrlToDataUrl,
+} from "@/lib/export/download-blob"
 import type { CanvasLayer } from "@/types/canvas"
 
-export type PackSize = 1 | 3 | 5
+/** Number of photos in a generated card pack (1–20). */
+export type PackSize = number
+
+export const MIN_PACK_SIZE = 1
+export const MAX_PACK_SIZE = 20
+export const PRESET_PACK_SIZES: PackSize[] = [1, 2, 3, 4, 5]
+
+export function clampPackSize(size: number): PackSize {
+  const n = Number.isFinite(size) ? Math.floor(size) : 5
+  return Math.min(MAX_PACK_SIZE, Math.max(MIN_PACK_SIZE, n))
+}
 
 export type CardPackSlideKind =
   | "main"
@@ -58,7 +73,23 @@ export const CARD_PACK_SLIDES: CardPackSlideDef[] = [
 ]
 
 export function resolvePackSlides(packSize: PackSize): CardPackSlideDef[] {
-  return CARD_PACK_SLIDES.slice(0, packSize)
+  const n = clampPackSize(packSize)
+  if (n <= CARD_PACK_SLIDES.length) {
+    return CARD_PACK_SLIDES.slice(0, n)
+  }
+
+  const slides: CardPackSlideDef[] = [...CARD_PACK_SLIDES]
+  for (let i = CARD_PACK_SLIDES.length; i < n; i++) {
+    const base = CARD_PACK_SLIDES[i % CARD_PACK_SLIDES.length]!
+    const cycle = Math.floor(i / CARD_PACK_SLIDES.length) + 1
+    slides.push({
+      ...base,
+      filename: `${String(i + 1).padStart(2, "0")}-${base.kind}.png`,
+      titleRu: `${base.titleRu} ${cycle}`,
+      titleEn: `${base.titleEn} ${cycle}`,
+    })
+  }
+  return slides
 }
 
 export type BuildCardPackOptions = {
@@ -106,56 +137,207 @@ function productTitle(layers: CanvasLayer[] | undefined, fallback: string): stri
   return textLayer?.text?.trim() || fallback
 }
 
-async function captureElement(el: HTMLElement): Promise<Blob> {
-  const dataUrl = await toPng(el, {
-    cacheBust: true,
-    pixelRatio: 1,
-    width: CANVAS_WIDTH,
-    height: CANVAS_HEIGHT,
-    style: {
-      width: `${CANVAS_WIDTH}px`,
-      height: `${CANVAS_HEIGHT}px`,
-      transform: "none",
-    },
-  })
-  return dataUrlToBlob(dataUrl)
+const CAPTURE_BG = "#0f1115"
+
+type CaptureOptions = {
+  width?: number
+  height?: number
 }
 
-async function captureLiveCanvas(canvasEl: HTMLElement): Promise<Blob> {
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+async function nextFrame(): Promise<void> {
+  await new Promise<void>((resolve) =>
+    window.requestAnimationFrame(() => resolve())
+  )
+}
+
+/** Wait until layout + paint settle after DOM/style mutations. */
+async function settleLayout(): Promise<void> {
+  await nextFrame()
+  await nextFrame()
+  if (typeof document !== "undefined" && document.fonts?.ready) {
+    try {
+      await document.fonts.ready
+    } catch {
+      // ignore font readiness errors
+    }
+  }
+}
+
+/**
+ * Wait for every <img> under `root` to finish loading/decoding.
+ * Avoids 0-byte / blank captures when html-to-image races image paint.
+ */
+async function waitForImages(root: HTMLElement): Promise<void> {
+  const images = Array.from(root.querySelectorAll("img"))
+  await Promise.all(
+    images.map(async (img) => {
+      if (!img.getAttribute("src") && !img.src) return
+
+      // Same-origin public assets don't need CORS; keep existing attr if set.
+      if (img.complete && img.naturalWidth > 0) {
+        try {
+          await img.decode()
+        } catch {
+          // decode can reject for already-broken images; fall through
+        }
+        return
+      }
+
+      await new Promise<void>((resolve, reject) => {
+        const onLoad = () => {
+          cleanup()
+          resolve()
+        }
+        const onError = () => {
+          cleanup()
+          reject(new Error(`Image failed to load: ${img.currentSrc || img.src}`))
+        }
+        const cleanup = () => {
+          img.removeEventListener("load", onLoad)
+          img.removeEventListener("error", onError)
+        }
+        img.addEventListener("load", onLoad)
+        img.addEventListener("error", onError)
+      })
+
+      try {
+        await img.decode()
+      } catch {
+        // non-fatal — paint may still succeed
+      }
+    })
+  )
+}
+
+/** Skip editor chrome that must not appear in exported cards. */
+function shouldIncludeNode(node: HTMLElement): boolean {
+  if (node.dataset?.exportIgnore === "true") return false
+  if (node.dataset?.exportChrome === "true") return false
+  return true
+}
+
+async function captureElementToPngBytes(
+  el: HTMLElement,
+  options: CaptureOptions = {}
+): Promise<Uint8Array> {
+  const width = options.width ?? CANVAS_WIDTH
+  const height = options.height ?? CANVAS_HEIGHT
+
+  await waitForImages(el)
+  await settleLayout()
+
+  const captureOpts = {
+    cacheBust: true,
+    pixelRatio: 1,
+    width,
+    height,
+    canvasWidth: width,
+    canvasHeight: height,
+    backgroundColor: CAPTURE_BG,
+    style: {
+      width: `${width}px`,
+      height: `${height}px`,
+      transform: "none",
+      margin: "0",
+      opacity: "1",
+    },
+    filter: shouldIncludeNode,
+  }
+
+  // Warm-up pass: Safari / Chromium sometimes return blank on first paint.
+  try {
+    await toBlob(el, captureOpts)
+  } catch {
+    // warm-up is best-effort
+  }
+  await sleep(40)
+
+  let lastError: unknown
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      let blob = await toBlob(el, captureOpts)
+      if (!blob || blob.size < 2_048) {
+        // Fallback path via DataURL — more reliable when toBlob returns null.
+        const dataUrl = await toPng(el, captureOpts)
+        blob = dataUrlToBlob(dataUrl)
+      }
+      return await assertValidPngBlob(blob)
+    } catch (error) {
+      lastError = error
+      await sleep(80 * (attempt + 1))
+      await settleLayout()
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Failed to capture card PNG")
+}
+
+async function captureLiveCanvas(canvasEl: HTMLElement): Promise<Uint8Array> {
   const prevWidth = canvasEl.style.width
   const prevHeight = canvasEl.style.height
   const prevTransform = canvasEl.style.transform
+  const prevMaxWidth = canvasEl.style.maxWidth
+  const prevMaxHeight = canvasEl.style.maxHeight
 
+  // Force native card size so the clone is not a scaled-down preview.
   canvasEl.style.width = `${CANVAS_WIDTH}px`
   canvasEl.style.height = `${CANVAS_HEIGHT}px`
+  canvasEl.style.maxWidth = "none"
+  canvasEl.style.maxHeight = "none"
   canvasEl.style.transform = "none"
 
   try {
-    return await captureElement(canvasEl)
+    await settleLayout()
+    return await captureElementToPngBytes(canvasEl)
   } finally {
     canvasEl.style.width = prevWidth
     canvasEl.style.height = prevHeight
+    canvasEl.style.maxWidth = prevMaxWidth
+    canvasEl.style.maxHeight = prevMaxHeight
     canvasEl.style.transform = prevTransform
   }
 }
 
-function buildSlideShell(): HTMLDivElement {
+function buildSlideShell(): { host: HTMLDivElement; root: HTMLDivElement } {
+  // Host clips the slide from view; the capture target itself stays opacity:1 —
+  // html-to-image copies computed opacity and blanks fully transparent nodes.
+  const host = document.createElement("div")
+  host.setAttribute("data-card-pack-host", "true")
+  host.style.cssText = [
+    "position:fixed",
+    "left:0",
+    "top:0",
+    "width:0",
+    "height:0",
+    "overflow:hidden",
+    "pointer-events:none",
+    "z-index:-1",
+    "opacity:1",
+  ].join(";")
+
   const root = document.createElement("div")
   root.setAttribute("data-card-pack-slide", "true")
   root.style.cssText = [
-    "position:fixed",
-    "left:-10000px",
-    "top:0",
     `width:${CANVAS_WIDTH}px`,
     `height:${CANVAS_HEIGHT}px`,
     "overflow:hidden",
-    "font-family:Montserrat,Inter,system-ui,sans-serif",
+    "font-family:Montserrat,system-ui,sans-serif",
     "color:#f5f5f4",
-    "background:#0f1115",
+    `background:${CAPTURE_BG}`,
     "box-sizing:border-box",
+    "position:relative",
+    "opacity:1",
   ].join(";")
-  document.body.appendChild(root)
-  return root
+
+  host.appendChild(root)
+  document.body.appendChild(host)
+  return { host, root }
 }
 
 function setSlideBackground(root: HTMLDivElement, imageUrl: string | null) {
@@ -166,9 +348,10 @@ function setSlideBackground(root: HTMLDivElement, imageUrl: string | null) {
 
   if (imageUrl) {
     const img = document.createElement("img")
+    // DataURLs / same-origin assets — do NOT force crossOrigin (breaks some local PNGs).
     img.src = imageUrl
-    img.crossOrigin = "anonymous"
     img.alt = ""
+    img.decoding = "sync"
     img.style.cssText =
       "position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0.22;filter:blur(18px) saturate(1.1);"
     root.appendChild(img)
@@ -198,8 +381,8 @@ function appendProductHero(
   if (imageUrl) {
     const img = document.createElement("img")
     img.src = imageUrl
-    img.crossOrigin = "anonymous"
     img.alt = ""
+    img.decoding = "sync"
     img.style.cssText =
       "width:100%;height:100%;object-fit:contain;padding:28px;background:radial-gradient(circle at 50% 30%,rgba(5,150,105,0.18),transparent 62%);"
     frame.appendChild(img)
@@ -279,8 +462,8 @@ async function renderInfographicSlide(args: {
   title: string
   imageUrl: string | null
   labels: string[]
-}): Promise<Blob> {
-  const root = buildSlideShell()
+}): Promise<Uint8Array> {
+  const { host, root } = buildSlideShell()
   setSlideBackground(root, args.imageUrl)
 
   try {
@@ -330,8 +513,8 @@ async function renderInfographicSlide(args: {
         if (args.imageUrl) {
           const thumb = document.createElement("img")
           thumb.src = args.imageUrl
-          thumb.crossOrigin = "anonymous"
           thumb.alt = ""
+          thumb.decoding = "sync"
           thumb.style.cssText =
             "position:absolute;bottom:7%;left:50%;transform:translateX(-50%);width:28%;height:18%;object-fit:contain;opacity:0.95;"
           root.appendChild(thumb)
@@ -350,53 +533,75 @@ async function renderInfographicSlide(args: {
       }
     }
 
-    // Let images paint before snapshot.
-    await new Promise((r) => window.setTimeout(r, 120))
-    return await captureElement(root)
+    await waitForImages(root)
+    await settleLayout()
+    return await captureElementToPngBytes(root)
   } finally {
-    root.remove()
+    host.remove()
   }
 }
 
 /**
- * Build a marketplace card pack ZIP (1 / 3 / 5 PNGs) and download it.
+ * Build a marketplace card pack ZIP (1–20 PNGs) and download it.
  * Main slide prefers the live editor canvas; remaining slides are
  * offscreen infographic renders from the same product assets.
  */
 async function downloadCardPackZip(options: BuildCardPackOptions): Promise<void> {
-  const slides = resolvePackSlides(options.packSize)
+  const packSize = clampPackSize(options.packSize)
+  const slides = resolvePackSlides(packSize)
   const title = productTitle(options.layers, options.projectTitle)
   const labels = chipLabels(options.layers)
-  const imageUrl = options.productImageUrl ?? null
+
+  // Prefetch product image into a DataURL so ZIP PNGs never depend on
+  // 0-byte Blobs / racey network loads during html-to-image cloning.
+  let imageUrl: string | null = null
+  if (options.productImageUrl) {
+    try {
+      imageUrl = await imageUrlToDataUrl(options.productImageUrl)
+    } catch {
+      // Keep absolute URL as a fallback if DataURL conversion fails.
+      imageUrl = options.productImageUrl
+    }
+  }
+
   const zip = new JSZip()
   const folder = zip.folder("cards") ?? zip
 
   for (const slide of slides) {
-    let blob: Blob
+    let pngBytes: Uint8Array
     if (slide.kind === "main" && options.canvasEl) {
-      blob = await captureLiveCanvas(options.canvasEl)
+      pngBytes = await captureLiveCanvas(options.canvasEl)
     } else if (slide.kind === "main") {
       // Fallback main card when canvas is unavailable (e.g. projects grid).
-      blob = await renderInfographicSlide({
+      pngBytes = await renderInfographicSlide({
         kind: "cta",
         title,
         imageUrl,
         labels,
       })
     } else {
-      blob = await renderInfographicSlide({
+      pngBytes = await renderInfographicSlide({
         kind: slide.kind,
         title,
         imageUrl,
         labels,
       })
     }
-    folder.file(slide.filename, blob)
+
+    // Pass raw bytes (not Blob) so JSZip always writes binary PNG correctly.
+    folder.file(slide.filename, pngBytes, { binary: true })
   }
 
   const basename = slugify(options.zipBasename ?? options.projectTitle)
-  const archive = await zip.generateAsync({ type: "blob" })
-  downloadBlob(archive, `${basename}-pack-${options.packSize}.zip`)
+  const archive = await zip.generateAsync({
+    type: "blob",
+    compression: "DEFLATE",
+    compressionOptions: { level: 6 },
+  })
+  if (!archive || archive.size <= 0) {
+    throw new Error("ZIP archive is empty")
+  }
+  downloadBlob(archive, `${basename}-pack-${packSize}.zip`)
 }
 
 function findEditorExportCanvas(): HTMLElement | null {

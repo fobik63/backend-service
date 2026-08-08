@@ -17,15 +17,15 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { getApiErrorMessage } from "@/lib/api"
 import {
+  clampPackSize,
   downloadCardPackZip,
   findEditorExportCanvas,
+  PRESET_PACK_SIZES,
   type PackSize,
 } from "@/lib/export/card-pack"
 import { useI18n } from "@/lib/i18n"
 import { useEditorStore } from "@/lib/store/editor-store"
 import { cn } from "@/lib/utils"
-
-const PACK_SIZES: PackSize[] = [1, 3, 5]
 
 type ExportButtonProps = {
   className?: string
@@ -101,7 +101,7 @@ function ExportButton({
           role="group"
           aria-label={t("export.packSize")}
         >
-          {PACK_SIZES.map((size) => (
+          {PRESET_PACK_SIZES.map((size) => (
             <button
               key={size}
               type="button"
@@ -192,10 +192,10 @@ function ExportButton({
             <DropdownMenuRadioGroup
               value={String(packSize)}
               onValueChange={(value) =>
-                setPackSize(Number(value) as PackSize)
+                setPackSize(clampPackSize(Number(value)))
               }
             >
-              {PACK_SIZES.map((size) => (
+              {PRESET_PACK_SIZES.map((size) => (
                 <DropdownMenuRadioItem key={size} value={String(size)}>
                   {t("export.packOption", { count: String(size) })}
                 </DropdownMenuRadioItem>

@@ -164,11 +164,6 @@ function TestimonialsSection() {
       ref={sectionRef}
       className="relative isolate scroll-mt-24 py-20 sm:py-28"
     >
-      <div className="pointer-events-none absolute inset-0 -z-10" aria-hidden>
-        <div className="absolute -right-32 top-1/4 size-72 rounded-full bg-[#1b3e2b]/20 blur-[120px]" />
-        <div className="absolute -left-28 bottom-1/3 size-64 rounded-full bg-[#059669]/10 blur-[120px]" />
-      </div>
-
       <div className="mx-auto max-w-6xl px-5">
         <div className="section-glass mb-10 rounded-3xl px-5 py-10 sm:mb-12 sm:px-8 sm:py-12">
           <motion.div

@@ -152,6 +152,7 @@ const SALE_LAYERS: CanvasLayer[] = [
       bgColor: "#E11D48",
       borderRadius: 8,
       iconId: "icon_spark",
+      variant: "solid",
     },
   },
   {

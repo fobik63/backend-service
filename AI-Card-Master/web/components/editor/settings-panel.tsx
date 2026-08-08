@@ -1,8 +1,12 @@
 "use client"
 
 import { ChevronDown, Images, Lamp, Type } from "lucide-react"
+import { useEffect, useState } from "react"
 
+import { BadgeParamsSection } from "@/components/editor/badge-tool"
+import { PromptBar } from "@/components/editor/prompt-bar"
 import { SliderControl } from "@/components/editor/slider-control"
+import { Input } from "@/components/ui/input"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -12,10 +16,12 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { useI18n } from "@/lib/i18n"
 import {
-  PACK_SIZE_OPTIONS,
-  useEditorStore,
-} from "@/lib/store/editor-store"
-import type { PackSize } from "@/lib/export/card-pack"
+  MAX_PACK_SIZE,
+  MIN_PACK_SIZE,
+  PRESET_PACK_SIZES,
+  clampPackSize,
+} from "@/lib/export/card-pack"
+import { useEditorStore } from "@/lib/store/editor-store"
 import {
   DEFAULT_TEXT_STYLE,
   EDITOR_FONT_FAMILIES,
@@ -35,13 +41,8 @@ function clamp(n: number, min: number, max: number) {
   return Math.min(max, Math.max(min, n))
 }
 
-function packSizeToIndex(size: PackSize): number {
-  const idx = PACK_SIZE_OPTIONS.indexOf(size)
-  return idx >= 0 ? idx : PACK_SIZE_OPTIONS.length - 1
-}
-
-function indexToPackSize(index: number): PackSize {
-  return PACK_SIZE_OPTIONS[clamp(Math.round(index), 0, PACK_SIZE_OPTIONS.length - 1)]!
+type EditorSettingsPanelProps = {
+  projectTitle?: string
 }
 
 function TextParamsSection() {
@@ -65,7 +66,7 @@ function TextParamsSection() {
   }
 
   return (
-    <section className="space-y-3">
+    <section className="space-y-2.5">
       <div className="flex items-center gap-2">
         <Type className="size-4 text-copper" aria-hidden />
         <h3 className="font-heading text-sm font-semibold tracking-tight">
@@ -79,7 +80,7 @@ function TextParamsSection() {
         </p>
       ) : null}
 
-      <div className={cn("space-y-3", !isText && "opacity-45")}>
+      <div className={cn("space-y-2.5", !isText && "opacity-45")}>
         <div className="space-y-1.5">
           <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
             Шрифт
@@ -144,7 +145,7 @@ function SoftboxParamsSection() {
   const disabled = !softbox.enabled
 
   return (
-    <section className="space-y-3">
+    <section className="space-y-2.5">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <Lamp className="size-4 text-amber" aria-hidden />
@@ -172,7 +173,7 @@ function SoftboxParamsSection() {
         </button>
       </div>
 
-      <div className={cn("space-y-3", disabled && "opacity-45")}>
+      <div className={cn("space-y-2.5", disabled && "opacity-45")}>
         <SliderControl
           label="Интенсивность"
           value={softbox.intensity}
@@ -231,9 +232,32 @@ function PackParamsSection() {
   const { t } = useI18n()
   const packSize = useEditorStore((s) => s.packSize)
   const setPackSize = useEditorStore((s) => s.setPackSize)
+  const isPreset = PRESET_PACK_SIZES.includes(packSize)
+  const [customMode, setCustomMode] = useState(!isPreset)
+  const [customDraft, setCustomDraft] = useState(String(packSize))
+
+  useEffect(() => {
+    if (!PRESET_PACK_SIZES.includes(packSize)) {
+      setCustomMode(true)
+      setCustomDraft(String(packSize))
+    }
+  }, [packSize])
+
+  const selectPreset = (size: number) => {
+    setCustomMode(false)
+    setPackSize(size)
+    setCustomDraft(String(size))
+  }
+
+  const applyCustom = (raw: string) => {
+    setCustomDraft(raw)
+    const parsed = Number.parseInt(raw, 10)
+    if (!Number.isFinite(parsed)) return
+    setPackSize(clampPackSize(parsed))
+  }
 
   return (
-    <section className="space-y-3">
+    <section className="space-y-2.5">
       <div className="flex items-center gap-2">
         <Images className="size-4 text-emerald" aria-hidden />
         <h3 className="font-heading text-sm font-semibold tracking-tight">
@@ -241,47 +265,92 @@ function PackParamsSection() {
         </h3>
       </div>
 
-      <SliderControl
-        label={t("export.packSize")}
-        value={packSizeToIndex(packSize)}
-        min={0}
-        max={PACK_SIZE_OPTIONS.length - 1}
-        step={1}
-        formatValue={() => t("export.packPhotos", { count: String(packSize) })}
-        onChange={(index) => setPackSize(indexToPackSize(index))}
-        hint={
-          <div className="flex justify-between font-mono">
-            {PACK_SIZE_OPTIONS.map((size) => (
-              <button
-                key={size}
-                type="button"
-                onClick={() => setPackSize(size)}
-                className={cn(
-                  "rounded px-1 transition-colors",
-                  packSize === size
-                    ? "text-emerald"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                {size}
-              </button>
-            ))}
+      <div className="space-y-1.5">
+        <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+          {t("export.packSize")}
+        </span>
+        <div
+          className="flex flex-wrap gap-1"
+          role="group"
+          aria-label={t("export.packSize")}
+        >
+          {PRESET_PACK_SIZES.map((size) => (
+            <button
+              key={size}
+              type="button"
+              onClick={() => selectPreset(size)}
+              className={cn(
+                "inline-flex h-8 min-w-8 flex-1 items-center justify-center rounded-md border text-xs font-medium transition-colors",
+                !customMode && packSize === size
+                  ? "border-emerald/40 bg-emerald/20 text-emerald"
+                  : "border-white/10 bg-white/[0.04] text-muted-foreground hover:text-foreground"
+              )}
+              aria-pressed={!customMode && packSize === size}
+            >
+              {size}
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={() => {
+              setCustomMode(true)
+              if (PRESET_PACK_SIZES.includes(packSize)) {
+                setCustomDraft("6")
+                setPackSize(6)
+              }
+            }}
+            className={cn(
+              "inline-flex h-8 min-w-10 flex-[1.2] items-center justify-center rounded-md border px-2 text-[11px] font-medium transition-colors",
+              customMode
+                ? "border-emerald/40 bg-emerald/20 text-emerald"
+                : "border-white/10 bg-white/[0.04] text-muted-foreground hover:text-foreground"
+            )}
+            aria-pressed={customMode}
+          >
+            {t("export.packCustom")}
+          </button>
+        </div>
+
+        {customMode ? (
+          <div className="flex items-center gap-2 pt-0.5">
+            <Input
+              type="number"
+              min={MIN_PACK_SIZE}
+              max={MAX_PACK_SIZE}
+              value={customDraft}
+              placeholder={t("export.packCustomPlaceholder")}
+              aria-label={t("export.packCustom")}
+              onChange={(e) => applyCustom(e.target.value)}
+              onBlur={() => {
+                const next = clampPackSize(Number.parseInt(customDraft, 10) || 1)
+                setCustomDraft(String(next))
+                setPackSize(next)
+              }}
+              className="h-8 border-white/10 bg-white/[0.04] text-xs"
+            />
+            <span className="shrink-0 text-[11px] text-muted-foreground">
+              {MIN_PACK_SIZE}–{MAX_PACK_SIZE}
+            </span>
           </div>
-        }
-      />
+        ) : null}
+
+        <p className="text-[10px] text-muted-foreground">
+          {t("export.packPhotos", { count: String(packSize) })}
+        </p>
+      </div>
     </section>
   )
 }
 
-function EditorSettingsPanel() {
+function EditorSettingsPanel({ projectTitle }: EditorSettingsPanelProps) {
   const { t } = useI18n()
 
   return (
     <aside
-      className="flex h-full max-h-[calc(100vh-80px)] w-[280px] shrink-0 flex-col overflow-hidden border-l border-white/8 bg-[#14171d]"
+      className="flex h-full w-[340px] shrink-0 flex-col self-stretch overflow-hidden border-l border-white/8 bg-[#14171d]"
       aria-label={t("editor.tools")}
     >
-      <div className="sticky top-0 z-10 shrink-0 border-b border-white/8 bg-[#14171d] px-4 py-3">
+      <div className="shrink-0 border-b border-white/8 px-3 py-2.5">
         <h2 className="font-heading text-sm font-semibold tracking-tight">
           {t("editor.tools")}
         </h2>
@@ -290,17 +359,25 @@ function EditorSettingsPanel() {
         </p>
       </div>
 
-      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain px-4 py-4">
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-3 py-3">
         <TextParamsSection />
-        <div className="border-t border-white/8 pt-4">
+        <div className="border-t border-white/8 pt-3">
+          <BadgeParamsSection />
+        </div>
+        <div className="border-t border-white/8 pt-3">
           <SoftboxParamsSection />
         </div>
-        <div className="border-t border-white/8 pt-4">
+        <div className="border-t border-white/8 pt-3">
           <PackParamsSection />
         </div>
+      </div>
+
+      <div className="shrink-0 border-t border-white/8 bg-[#12151a] px-3 py-3">
+        <PromptBar variant="panel" projectTitle={projectTitle} />
       </div>
     </aside>
   )
 }
 
 export { EditorSettingsPanel }
+export type { EditorSettingsPanelProps }

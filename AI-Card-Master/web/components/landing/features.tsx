@@ -21,6 +21,7 @@ import {
 } from "react"
 import { motion, useInView } from "framer-motion"
 
+import { Sneaker3DViewer } from "@/components/landing/sneaker-3d-viewer"
 import { GlassCard } from "@/components/ui/glass-card"
 import { SectionHeader } from "@/components/ui/section-header"
 import { cn } from "@/lib/utils"
@@ -160,74 +161,88 @@ function CutoutDemo() {
 
   return (
     <div
-      className="relative aspect-[16/10] w-full overflow-hidden rounded-lg bg-[linear-gradient(135deg,#1a1d24_25%,#12141a_25%,#12141a_50%,#1a1d24_50%,#1a1d24_75%,#12141a_75%)] bg-[length:16px_16px] select-none"
+      className="relative aspect-[16/10] w-full overflow-hidden rounded-lg bg-[linear-gradient(135deg,#1a1d24_25%,#12141a_25%,#12141a_50%,#1a1d24_50%,#1a1d24_75%,#12141a_75%)] bg-[length:14px_14px] select-none"
       role="img"
-      aria-label="Демо AI-вырезки: чистый контур товара без ореолов"
+      aria-label="Демо AI-вырезки: вся баночка товара и аккуратный край вырезки без белых пикселей"
     >
+      {/* Full product framed against checkerboard — edge detail without extreme macro zoom */}
       <div
         className={cn(
           "absolute inset-0 transition-opacity duration-500",
           phase === 0 ? "opacity-100" : "opacity-0"
         )}
       >
-        <div className="absolute left-1/2 top-1/2 h-20 w-16 -translate-x-1/2 -translate-y-1/2">
+        <div className="absolute inset-[10%] overflow-hidden">
           <Image
             src="/landing/cosmetics-raw.png"
             alt=""
             fill
-            sizes="64px"
-            className="object-contain blur-[1.5px] brightness-110 contrast-75"
+            sizes="320px"
+            className="object-contain object-center blur-[0.6px] brightness-110 contrast-75"
             aria-hidden
           />
-          <div className="absolute inset-0 rounded-lg ring-4 ring-white/70" />
+          <div className="absolute inset-0 ring-[6px] ring-white/70" />
         </div>
-        <span className="absolute top-2 left-2 rounded bg-loft/80 px-1.5 py-0.5 font-heading text-[10px] text-amber">
+        <span className="absolute top-2 left-2 z-10 rounded bg-loft/80 px-1.5 py-0.5 font-heading text-[10px] text-amber">
           До: ореол
         </span>
       </div>
+
       <div
         className={cn(
-          "absolute inset-0 flex items-center justify-center transition-opacity duration-500",
+          "absolute inset-0 transition-opacity duration-500",
           phase === 1 ? "opacity-100" : "opacity-0"
         )}
       >
         <motion.div
-          className="relative h-20 w-16"
-          animate={{ scale: [0.96, 1.02, 1] }}
+          className="absolute inset-[10%]"
+          animate={{ scale: [0.98, 1.02, 1] }}
           transition={{ duration: 1.2, ease: "easeOut" }}
         >
           <Image
             src="/landing/cosmetics-transparent.png"
             alt=""
             fill
-            sizes="64px"
-            className="object-contain opacity-90"
+            sizes="320px"
+            className="object-contain object-center opacity-95"
             aria-hidden
           />
         </motion.div>
-        <div className="pointer-events-none absolute inset-0 border border-dashed border-emerald/50" />
-        <span className="absolute top-2 left-2 rounded bg-loft/80 px-1.5 py-0.5 font-heading text-[10px] text-emerald">
+        <div className="pointer-events-none absolute inset-0 border border-dashed border-emerald/55" />
+        <div
+          className="pointer-events-none absolute inset-[12%] border border-emerald/35"
+          style={{
+            backgroundImage:
+              "linear-gradient(to right, rgba(16,185,129,0.15) 1px, transparent 1px), linear-gradient(to bottom, rgba(16,185,129,0.15) 1px, transparent 1px)",
+            backgroundSize: "12px 12px",
+          }}
+        />
+        <span className="absolute top-2 left-2 z-10 rounded bg-loft/80 px-1.5 py-0.5 font-heading text-[10px] text-emerald">
           Скан краёв
         </span>
       </div>
+
       <div
         className={cn(
-          "absolute inset-0 flex items-center justify-center transition-opacity duration-500",
+          "absolute inset-0 transition-opacity duration-500",
           phase === 2 ? "opacity-100" : "opacity-0"
         )}
       >
-        <div className="relative h-20 w-16 drop-shadow-[0_8px_24px_rgba(0,0,0,0.35)]">
+        <div className="absolute inset-[10%] drop-shadow-[0_12px_28px_rgba(0,0,0,0.4)]">
           <Image
             src="/landing/cosmetics-transparent.png"
             alt=""
             fill
-            sizes="64px"
-            className="object-contain"
+            sizes="320px"
+            className="object-contain object-center"
             aria-hidden
           />
         </div>
-        <span className="absolute top-2 left-2 rounded bg-loft/80 px-1.5 py-0.5 font-heading text-[10px] text-emerald">
+        <span className="absolute top-2 left-2 z-10 rounded bg-loft/80 px-1.5 py-0.5 font-heading text-[10px] text-emerald">
           После: чисто
+        </span>
+        <span className="absolute right-2 bottom-2 z-10 rounded bg-loft/80 px-1.5 py-0.5 font-heading text-[9px] tracking-wide text-text-muted uppercase">
+          Край без белых пикселей
         </span>
       </div>
     </div>
@@ -235,94 +250,9 @@ function CutoutDemo() {
 }
 
 function Rotate360Demo() {
-  const [rotation, setRotation] = useState(0)
-  const dragging = useRef(false)
-  const lastX = useRef(0)
-  const auto = useRef(true)
-
-  useEffect(() => {
-    const id = window.setInterval(() => {
-      if (!auto.current) return
-      setRotation((r) => (r + 1.2) % 360)
-    }, 32)
-    return () => window.clearInterval(id)
-  }, [])
-
-  const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
-    auto.current = false
-    dragging.current = true
-    lastX.current = e.clientX
-    e.currentTarget.setPointerCapture(e.pointerId)
-  }
-
-  const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (!dragging.current) return
-    const dx = e.clientX - lastX.current
-    lastX.current = e.clientX
-    setRotation((r) => (r + dx * 0.7) % 360)
-  }
-
-  const onPointerUp = (e: ReactPointerEvent<HTMLDivElement>) => {
-    dragging.current = false
-    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-      e.currentTarget.releasePointerCapture(e.pointerId)
-    }
-    window.setTimeout(() => {
-      auto.current = true
-    }, 1200)
-  }
-
-  const face = ((rotation % 360) + 360) % 360
-  const depth = Math.cos((face * Math.PI) / 180)
-
   return (
-    <div
-      className="relative aspect-[16/10] w-full cursor-ew-resize touch-none overflow-hidden rounded-lg bg-loft select-none"
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
-      role="img"
-      aria-label="Демо 360° обзора: перетащите для вращения товара"
-    >
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(16,185,129,0.12),transparent_65%)]" />
-      <div className="absolute inset-x-8 bottom-6 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent" />
-      <div
-        className="absolute left-1/2 top-[48%] h-20 w-28 -translate-x-1/2 -translate-y-1/2"
-        style={{
-          transform: `translate(-50%, -50%) rotateY(${face}deg) scaleX(${0.72 + Math.abs(depth) * 0.28})`,
-          filter: `drop-shadow(0 ${10 + (1 - Math.abs(depth)) * 8}px 28px rgba(0,0,0,0.45))`,
-        }}
-      >
-        <Image
-          src="/landing/sneaker-transparent.png"
-          alt=""
-          fill
-          sizes="112px"
-          className="object-contain"
-          aria-hidden
-        />
-      </div>
-      <div className="absolute right-2 bottom-2 flex items-center gap-1 font-heading text-[10px] text-text-muted uppercase tracking-wide">
-        <Rotate3d className="size-3 text-emerald" />
-        360°
-      </div>
-      <svg
-        className="absolute bottom-3 left-1/2 size-10 -translate-x-1/2 text-emerald/40"
-        viewBox="0 0 40 40"
-        aria-hidden
-      >
-        <circle
-          cx="20"
-          cy="20"
-          r="14"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1"
-          strokeDasharray="4 6"
-          transform={`rotate(${face} 20 20)`}
-        />
-      </svg>
+    <div className="relative aspect-[16/10] w-full overflow-hidden rounded-lg">
+      <Sneaker3DViewer variant="card" className="absolute inset-0" autoRotate enableZoom />
     </div>
   )
 }
@@ -617,7 +547,8 @@ const FEATURES: Feature[] = [
   {
     id: "rotate-360",
     title: "360° Обзор товара",
-    description: "Генерация 3D-видео вращения для маркетплейсов.",
+    description:
+      "Интерактивная 3D-модель: вращайте во всех плоскостях, приближайте и рассматривайте товар со всех сторон.",
     icon: Rotate3d,
     demo: <Rotate360Demo />,
   },
@@ -675,13 +606,8 @@ function FeaturesSection() {
     <section
       id="features"
       ref={sectionRef}
-      className="relative isolate scroll-mt-24 py-20 sm:py-28"
+      className="relative isolate scroll-mt-24 pt-8 pb-20 sm:pt-10 sm:pb-28"
     >
-      <div className="pointer-events-none absolute inset-0 -z-10" aria-hidden>
-        <div className="absolute -left-28 top-1/3 size-72 rounded-full bg-[#059669]/10 blur-[120px]" />
-        <div className="absolute -right-24 bottom-1/4 size-80 rounded-full bg-[#1b3e2b]/20 blur-[120px]" />
-      </div>
-
       <div className="mx-auto max-w-6xl px-5">
         <div className="section-glass rounded-3xl px-5 py-10 sm:px-8 sm:py-12 lg:px-10">
           <SectionHeader

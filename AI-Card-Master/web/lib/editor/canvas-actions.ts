@@ -7,6 +7,7 @@ import { useEditorStore } from "@/lib/store/editor-store"
 import {
   DEFAULT_TEXT_STYLE,
   type CanvasLayer,
+  type FeatureChipVariant,
 } from "@/types/canvas"
 
 function normalizeBadgeLabel(label: string): string {
@@ -27,6 +28,10 @@ export function addBadgeToCanvas(opts: {
   bgColor: string
   iconId: string
   borderRadius?: number
+  variant?: FeatureChipVariant
+  subtitle?: string
+  textColor?: string
+  blur?: number
 }): { label: string; created: boolean } {
   const existing = findExistingBadge(opts.label)
   if (existing) {
@@ -39,6 +44,8 @@ export function addBadgeToCanvas(opts: {
   const pos = nextBadgePosition(chipCount)
   const maxZ = layers.reduce((m, l) => Math.max(m, l.zIndex), 0)
   const id = `chip_${Date.now()}`
+  const variant = opts.variant ?? "solid"
+  const blur = opts.blur ?? (variant === "glass" ? 12 : 0)
 
   addLayer({
     id,
@@ -55,8 +62,12 @@ export function addBadgeToCanvas(opts: {
     chip: {
       label: opts.label,
       bgColor: opts.bgColor,
-      borderRadius: opts.borderRadius ?? 10,
+      borderRadius: opts.borderRadius ?? (variant === "glass" ? 14 : 10),
       iconId: opts.iconId,
+      variant,
+      subtitle: opts.subtitle,
+      textColor: opts.textColor,
+      blur,
     },
   })
 
@@ -69,6 +80,7 @@ export function addTextPresetToCanvas(
   const { layers, addLayer } = useEditorStore.getState()
   const maxZ = layers.reduce((m, l) => Math.max(m, l.zIndex), 0)
   const id = `text_${Date.now()}`
+  const isSubtitle = preset.id === "txt_subtitle"
   addLayer({
     id,
     type: "text",
@@ -83,7 +95,17 @@ export function addTextPresetToCanvas(
     scale: 1,
     rotation: 0,
     text: preset.sample,
-    textStyle: { ...DEFAULT_TEXT_STYLE },
+    textStyle: {
+      ...DEFAULT_TEXT_STYLE,
+      ...(isSubtitle
+        ? {
+            fontSize: 26,
+            fontWeight: 500,
+            color: "#D4A574",
+            shadowEnabled: false,
+          }
+        : {}),
+    },
   })
   return preset.label
 }
@@ -97,5 +119,26 @@ export function addQuickBadgeById(
     label: badge.label,
     bgColor: badge.bgColor,
     iconId: badge.iconId,
+    variant: badge.variant,
+    subtitle: "subtitle" in badge ? badge.subtitle : undefined,
+    blur: badge.variant === "glass" ? 12 : 0,
+    textColor: badge.variant === "glass" ? "#FFFFFF" : undefined,
+  })
+}
+
+export function addCustomBadge(label: string): {
+  label: string
+  created: boolean
+} | null {
+  const trimmed = label.trim()
+  if (!trimmed) return null
+  return addBadgeToCanvas({
+    label: trimmed,
+    bgColor: "rgba(15,17,21,0.55)",
+    iconId: "icon_spark",
+    variant: "glass",
+    blur: 12,
+    textColor: "#FFFFFF",
+    borderRadius: 14,
   })
 }
