@@ -10,7 +10,6 @@ import {
   UserRound,
 } from "lucide-react"
 import Link from "next/link"
-import { useState } from "react"
 
 import { Breadcrumbs } from "@/components/dashboard/breadcrumbs"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -18,6 +17,7 @@ import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
@@ -25,6 +25,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { useI18n, type Locale } from "@/lib/i18n"
 import { cn } from "@/lib/utils"
 
 type TopBarUser = {
@@ -36,6 +37,7 @@ type TopBarUser = {
 type TopBarProps = {
   user?: TopBarUser
   onMenuClick?: () => void
+  onOpenProfile?: () => void
   className?: string
 }
 
@@ -45,14 +47,13 @@ const DEFAULT_USER: TopBarUser = {
   avatarUrl: null,
 }
 
-type Locale = "ru" | "en"
-
 function TopBar({
   user = DEFAULT_USER,
   onMenuClick,
+  onOpenProfile,
   className,
 }: TopBarProps) {
-  const [locale, setLocale] = useState<Locale>("ru")
+  const { locale, setLocale, t } = useI18n()
   const initials = user.name
     .split(" ")
     .map((part) => part[0])
@@ -73,7 +74,7 @@ function TopBar({
           variant="ghost"
           size="icon"
           className="lg:hidden"
-          aria-label="Открыть меню"
+          aria-label={t("common.openMenu")}
           onClick={onMenuClick}
         >
           <Menu className="size-5" />
@@ -89,22 +90,28 @@ function TopBar({
               "inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-sm text-text-muted transition-colors",
               "hover:bg-muted hover:text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
             )}
-            aria-label="Переключатель языка"
+            aria-label={t("topBar.languageSwitch")}
           >
             <Languages className="size-4" aria-hidden />
             <span className="hidden uppercase sm:inline">{locale}</span>
             <ChevronDown className="size-3.5 opacity-60" aria-hidden />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="min-w-36">
-            <DropdownMenuLabel>Язык</DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            <DropdownMenuRadioGroup
-              value={locale}
-              onValueChange={(value) => setLocale(value as Locale)}
-            >
-              <DropdownMenuRadioItem value="ru">Русский</DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="en">English</DropdownMenuRadioItem>
-            </DropdownMenuRadioGroup>
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>{t("common.language")}</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuRadioGroup
+                value={locale}
+                onValueChange={(value) => setLocale(value as Locale)}
+              >
+                <DropdownMenuRadioItem value="ru">
+                  {t("topBar.russian")}
+                </DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="en">
+                  {t("topBar.english")}
+                </DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+            </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
 
@@ -114,7 +121,7 @@ function TopBar({
               "relative inline-flex size-8 items-center justify-center rounded-lg text-text-muted transition-colors",
               "hover:bg-muted hover:text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
             )}
-            aria-label="Уведомления"
+            aria-label={t("common.notifications")}
           >
             <Bell className="size-4" aria-hidden />
             <span
@@ -123,11 +130,13 @@ function TopBar({
             />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-72">
-            <DropdownMenuLabel>Уведомления</DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            <div className="px-2 py-6 text-center text-sm text-text-muted">
-              Новых уведомлений нет
-            </div>
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>{t("common.notifications")}</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <div className="px-2 py-6 text-center text-sm text-text-muted">
+                {t("common.noNotifications")}
+              </div>
+            </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
 
@@ -137,7 +146,7 @@ function TopBar({
               "inline-flex items-center gap-2 rounded-lg px-1.5 py-1 text-sm transition-colors",
               "hover:bg-muted outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
             )}
-            aria-label="Меню профиля"
+            aria-label={t("topBar.profileMenu")}
           >
             <Avatar size="sm">
               {user.avatarUrl ? (
@@ -153,40 +162,46 @@ function TopBar({
             <ChevronDown className="hidden size-3.5 text-text-muted md:inline" aria-hidden />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="min-w-52">
-            <DropdownMenuLabel className="font-normal">
-              <div className="flex flex-col gap-0.5">
-                <span className="text-sm font-medium text-foreground">
-                  {user.name}
-                </span>
-                {user.email ? (
-                  <span className="text-xs text-text-muted">{user.email}</span>
-                ) : null}
-              </div>
-            </DropdownMenuLabel>
+            <DropdownMenuGroup>
+              <DropdownMenuLabel className="font-normal">
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-sm font-medium text-foreground">
+                    {user.name}
+                  </span>
+                  {user.email ? (
+                    <span className="text-xs text-text-muted">{user.email}</span>
+                  ) : null}
+                </div>
+              </DropdownMenuLabel>
+            </DropdownMenuGroup>
             <DropdownMenuSeparator />
-            <DropdownMenuItem
-              render={<Link href="/dashboard/settings" />}
-              className="cursor-pointer gap-2"
-            >
-              <UserRound className="size-4" aria-hidden />
-              Профиль
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              render={<Link href="/dashboard/settings" />}
-              className="cursor-pointer gap-2"
-            >
-              <Settings className="size-4" aria-hidden />
-              Настройки
-            </DropdownMenuItem>
+            <DropdownMenuGroup>
+              <DropdownMenuItem
+                className="cursor-pointer gap-2"
+                onClick={() => onOpenProfile?.()}
+              >
+                <UserRound className="size-4" aria-hidden />
+                {t("common.profile")}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                render={<Link href="/settings" />}
+                className="cursor-pointer gap-2"
+              >
+                <Settings className="size-4" aria-hidden />
+                {t("common.settings")}
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
             <DropdownMenuSeparator />
-            <DropdownMenuItem
-              variant="destructive"
-              className="cursor-pointer gap-2"
-              render={<Link href="/login" />}
-            >
-              <LogOut className="size-4" aria-hidden />
-              Выйти
-            </DropdownMenuItem>
+            <DropdownMenuGroup>
+              <DropdownMenuItem
+                variant="destructive"
+                className="cursor-pointer gap-2"
+                render={<Link href="/login" />}
+              >
+                <LogOut className="size-4" aria-hidden />
+                {t("common.logout")}
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

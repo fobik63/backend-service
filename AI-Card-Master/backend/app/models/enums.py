@@ -7,7 +7,7 @@ class SubscriptionStatus(StrEnum):
     """User subscription plans.
 
     Free remains the unpaid baseline. Paid commercial tiers match the
-    public tariff grid (Старт / Про / Полугодовой / Годовая).
+    public tariff grid (Pro Lite / Pro / Business).
     """
 
     FREE = "Free"
@@ -38,7 +38,7 @@ class SubscriptionStatus(StrEnum):
     def workspace_owner_values(cls) -> frozenset[str]:
         """Tariffs allowed to own a workspace and invite managers.
 
-        Start is a short trial; Pro / HalfYear / Year are full Pro-tier accounts.
+        Start (Pro Lite) is a short trial; Pro / HalfYear / Year are full Pro-tier accounts.
         """
 
         return frozenset(

@@ -6,7 +6,11 @@ import {
   isNetworkError,
   NETWORK_ERROR_MESSAGES,
 } from "@/lib/api/errors";
-import { API_BASE_URL } from "@/lib/constants/api";
+import {
+  API_BASE_URL,
+  DEFAULT_API_BASE_URL,
+  resolveApiBaseUrl,
+} from "@/lib/constants/api";
 import type {
   CanvasStateDTO,
   ParsedProductDTO,
@@ -18,6 +22,10 @@ import type {
 
 const LONG_RUNNING_TIMEOUT_MS = 120_000;
 
+/** Guaranteed fallback if env/build leaves baseURL empty. */
+const resolvedBaseUrl =
+  resolveApiBaseUrl(API_BASE_URL) || DEFAULT_API_BASE_URL;
+
 declare module "axios" {
   export interface AxiosRequestConfig {
     /** When true, the global response interceptor skips toasting. */
@@ -26,7 +34,7 @@ declare module "axios" {
 }
 
 export const apiClient = axios.create({
-  baseURL: API_BASE_URL,
+  baseURL: resolvedBaseUrl,
   headers: {
     "Content-Type": "application/json",
   },

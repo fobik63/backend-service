@@ -453,7 +453,7 @@ async def _seed_payments(session, user: User, spec: SeedUserSpec) -> int:
                     user_id=user.id,
                     tariff_code=spec.payments[-1],
                     yookassa_payment_id=pending_id,
-                    amount_rub=Decimal("1490.00"),
+                    amount_rub=Decimal("990.00"),
                     currency="RUB",
                     status=PaymentStatus.PENDING,
                     confirmation_url="https://yookassa.example.local/seed-checkout",

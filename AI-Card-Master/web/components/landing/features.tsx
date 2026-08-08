@@ -2,11 +2,15 @@
 
 import {
   BadgePercent,
+  Gem,
   Lamp,
+  Link2,
+  MessageSquareWarning,
   Rotate3d,
   Scissors,
   type LucideIcon,
 } from "lucide-react"
+import Image from "next/image"
 import {
   useCallback,
   useEffect,
@@ -116,19 +120,24 @@ function SoftboxDemo() {
         })}
       </svg>
 
-      {/* Product silhouette under soft light */}
+      {/* Real product cutout under soft light */}
       <div
-        className="absolute left-1/2 top-[58%] h-16 w-[4.5rem] -translate-x-1/2 -translate-y-1/2 rounded-md border border-white/12 bg-gradient-to-b from-[#d6c4b0] to-[#8a9a84]"
+        className="absolute left-1/2 top-[56%] h-24 w-20 -translate-x-1/2 -translate-y-1/2"
         style={{
-          boxShadow: `
-            ${Math.cos(rad) * 14}px ${10 + Math.sin(rad) * 8}px ${soft}px rgba(0,0,0,0.55),
-            inset ${-Math.cos(rad) * 6}px ${-Math.sin(rad) * 4}px 14px rgba(255,255,255,0.18)
-          `,
+          filter: `drop-shadow(${Math.cos(rad) * 10}px ${8 + Math.sin(rad) * 6}px ${soft * 0.55}px rgba(0,0,0,0.55))`,
         }}
-      />
-      {/* Contact shadow */}
+      >
+        <Image
+          src="/landing/perfume-transparent.png"
+          alt=""
+          fill
+          sizes="80px"
+          className="object-contain"
+          aria-hidden
+        />
+      </div>
       <div
-        className="absolute left-1/2 top-[72%] h-3 w-24 -translate-x-1/2 rounded-[100%] bg-black/45 blur-md"
+        className="absolute left-1/2 top-[78%] h-3 w-24 -translate-x-1/2 rounded-[100%] bg-black/45 blur-md"
         style={{ opacity: 0.45 + warmth * 0.25 }}
       />
 
@@ -161,7 +170,17 @@ function CutoutDemo() {
           phase === 0 ? "opacity-100" : "opacity-0"
         )}
       >
-        <div className="absolute left-1/2 top-1/2 h-16 w-24 -translate-x-1/2 -translate-y-1/2 rounded-lg bg-copper/50 blur-[1px] ring-4 ring-white/70" />
+        <div className="absolute left-1/2 top-1/2 h-20 w-16 -translate-x-1/2 -translate-y-1/2">
+          <Image
+            src="/landing/cosmetics-raw.png"
+            alt=""
+            fill
+            sizes="64px"
+            className="object-contain blur-[1.5px] brightness-110 contrast-75"
+            aria-hidden
+          />
+          <div className="absolute inset-0 rounded-lg ring-4 ring-white/70" />
+        </div>
         <span className="absolute top-2 left-2 rounded bg-loft/80 px-1.5 py-0.5 font-heading text-[10px] text-amber">
           До: ореол
         </span>
@@ -173,13 +192,19 @@ function CutoutDemo() {
         )}
       >
         <motion.div
-          className="h-16 w-24 rounded-lg bg-gradient-to-br from-copper/70 to-sage"
-          style={{
-            clipPath: "inset(0 round 8px)",
-          }}
+          className="relative h-20 w-16"
           animate={{ scale: [0.96, 1.02, 1] }}
           transition={{ duration: 1.2, ease: "easeOut" }}
-        />
+        >
+          <Image
+            src="/landing/cosmetics-transparent.png"
+            alt=""
+            fill
+            sizes="64px"
+            className="object-contain opacity-90"
+            aria-hidden
+          />
+        </motion.div>
         <div className="pointer-events-none absolute inset-0 border border-dashed border-emerald/50" />
         <span className="absolute top-2 left-2 rounded bg-loft/80 px-1.5 py-0.5 font-heading text-[10px] text-emerald">
           Скан краёв
@@ -191,7 +216,16 @@ function CutoutDemo() {
           phase === 2 ? "opacity-100" : "opacity-0"
         )}
       >
-        <div className="h-16 w-24 rounded-lg bg-gradient-to-br from-copper/80 to-sage shadow-[0_8px_24px_rgba(0,0,0,0.35)]" />
+        <div className="relative h-20 w-16 drop-shadow-[0_8px_24px_rgba(0,0,0,0.35)]">
+          <Image
+            src="/landing/cosmetics-transparent.png"
+            alt=""
+            fill
+            sizes="64px"
+            className="object-contain"
+            aria-hidden
+          />
+        </div>
         <span className="absolute top-2 left-2 rounded bg-loft/80 px-1.5 py-0.5 font-heading text-[10px] text-emerald">
           После: чисто
         </span>
@@ -254,14 +288,20 @@ function Rotate360Demo() {
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(16,185,129,0.12),transparent_65%)]" />
       <div className="absolute inset-x-8 bottom-6 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent" />
       <div
-        className="absolute left-1/2 top-[48%] h-16 w-20 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-white/20 bg-gradient-to-br from-emerald/30 via-sage to-loft-surface"
+        className="absolute left-1/2 top-[48%] h-20 w-28 -translate-x-1/2 -translate-y-1/2"
         style={{
           transform: `translate(-50%, -50%) rotateY(${face}deg) scaleX(${0.72 + Math.abs(depth) * 0.28})`,
-          boxShadow: `0 ${10 + (1 - Math.abs(depth)) * 8}px 28px rgba(0,0,0,0.45)`,
+          filter: `drop-shadow(0 ${10 + (1 - Math.abs(depth)) * 8}px 28px rgba(0,0,0,0.45))`,
         }}
       >
-        <div className="absolute inset-x-2 top-2 h-1 rounded-full bg-white/25" />
-        <div className="absolute inset-x-4 top-5 h-1 rounded-full bg-white/15" />
+        <Image
+          src="/landing/sneaker-transparent.png"
+          alt=""
+          fill
+          sizes="112px"
+          className="object-contain"
+          aria-hidden
+        />
       </div>
       <div className="absolute right-2 bottom-2 flex items-center gap-1 font-heading text-[10px] text-text-muted uppercase tracking-wide">
         <Rotate3d className="size-3 text-emerald" />
@@ -296,43 +336,265 @@ function InfographicDemo() {
     >
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_70%_35%,rgba(27,62,43,0.55),transparent_60%)]" />
 
-      {/* Marketplace card mock */}
-      <div className="absolute inset-3 overflow-hidden rounded-xl border border-white/10 bg-gradient-to-b from-[#1a1d24] to-[#12141a] copper-border shadow-[0_16px_40px_rgba(0,0,0,0.4)]">
-        <div className="relative h-[58%] bg-[radial-gradient(ellipse_at_center,rgba(16,185,129,0.12),transparent_70%)]">
-          <div className="absolute left-1/2 top-[55%] h-14 w-16 -translate-x-1/2 -translate-y-1/2 rounded-md bg-gradient-to-b from-[#e8d5c0] to-[#7d8f78] shadow-[0_10px_24px_rgba(0,0,0,0.45)]" />
-          <motion.div
-            className="absolute top-2 left-2 rounded-md bg-[#1b3e2b] px-2 py-1 font-heading text-[10px] font-semibold text-emerald"
-            initial={{ opacity: 0, x: -10 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ delay: 0.15, duration: 0.4 }}
+      <div className="absolute inset-3 overflow-hidden rounded-xl border border-white/10 copper-border shadow-[0_16px_40px_rgba(0,0,0,0.4)]">
+        <Image
+          src="/landing/after-card.png"
+          alt=""
+          fill
+          sizes="(max-width: 768px) 90vw, 320px"
+          className="object-cover object-top"
+          aria-hidden
+        />
+        <motion.div
+          className="absolute top-2 left-2 rounded-md bg-[#1b3e2b] px-2 py-1 font-heading text-[10px] font-semibold text-emerald"
+          initial={{ opacity: 0, x: -10 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ delay: 0.15, duration: 0.4 }}
+        >
+          −35%
+        </motion.div>
+      </div>
+    </div>
+  )
+}
+
+function CompetitorParserDemo() {
+  const [phase, setPhase] = useState(0)
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setPhase((p) => (p + 1) % 3)
+    }, 2000)
+    return () => window.clearInterval(id)
+  }, [])
+
+  return (
+    <div
+      className="relative aspect-[16/10] w-full overflow-hidden rounded-lg bg-[#0c0e12] select-none"
+      role="img"
+      aria-label="Демо умного парсера: ссылка конкурента превращается в структуру карточки"
+    >
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_30%_40%,rgba(5,150,105,0.14),transparent_60%)]" />
+
+      <div className="absolute inset-3 flex flex-col gap-2">
+        <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-[#14171d]/90 px-2.5 py-2">
+          <Link2 className="size-3.5 shrink-0 text-emerald" aria-hidden />
+          <motion.span
+            className="truncate font-heading text-[10px] text-text-muted"
+            key={phase}
+            initial={{ opacity: 0.4 }}
+            animate={{ opacity: 1 }}
           >
-            −35%
-          </motion.div>
-          <motion.div
-            className="absolute top-2 right-2 rounded-md border border-copper/50 bg-loft/80 px-2 py-1 font-heading text-[10px] text-copper"
-            initial={{ opacity: 0, y: -8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.35, duration: 0.4 }}
+            ozon.ru/product/competitor-sku-48291
+          </motion.span>
+          <motion.span
+            className="ml-auto shrink-0 rounded bg-emerald/15 px-1.5 py-0.5 font-heading text-[9px] text-emerald"
+            animate={{ opacity: phase === 0 ? [0.5, 1, 0.5] : 1 }}
+            transition={{ duration: 1.2, repeat: phase === 0 ? Infinity : 0 }}
           >
-            Хит продаж
-          </motion.div>
+            {phase === 0 ? "Парсинг…" : "Готово"}
+          </motion.span>
         </div>
-        <div className="space-y-1.5 border-t border-white/8 px-3 py-2.5">
-          <div className="h-1.5 w-3/4 rounded-full bg-white/15" />
-          <div className="h-1.5 w-1/2 rounded-full bg-white/10" />
+
+        <div className="grid flex-1 grid-cols-[1fr_1.15fr] gap-2">
+          <div className="relative overflow-hidden rounded-lg border border-white/8 bg-[#12141a]">
+            <motion.div
+              className="absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r from-transparent via-emerald to-transparent"
+              animate={{ y: phase === 0 ? [0, 72, 0] : 72 }}
+              transition={{
+                duration: 1.6,
+                ease: "easeInOut",
+                repeat: phase === 0 ? Infinity : 0,
+              }}
+            />
+            <div className="absolute left-1/2 top-1/2 h-12 w-14 -translate-x-1/2 -translate-y-1/2 rounded-md bg-gradient-to-b from-copper/50 to-sage/70" />
+            <span className="absolute bottom-1.5 left-1.5 font-heading text-[9px] text-text-muted uppercase">
+              Фото
+            </span>
+          </div>
+
+          <div className="flex flex-col justify-center gap-1.5 rounded-lg border border-white/8 bg-[#12141a] px-2.5 py-2">
+            {["Структура карточки", "Характеристики", "Галерея 6 фото"].map(
+              (label, i) => (
+                <motion.div
+                  key={label}
+                  className="flex items-center gap-2"
+                  initial={{ opacity: 0, x: 8 }}
+                  animate={{
+                    opacity: phase >= 1 ? 1 : 0.25,
+                    x: phase >= 1 ? 0 : 8,
+                  }}
+                  transition={{
+                    delay: phase >= 1 ? i * 0.12 : 0,
+                    duration: 0.35,
+                  }}
+                >
+                  <span
+                    className={cn(
+                      "size-1.5 rounded-full",
+                      phase >= 2 ? "bg-emerald" : "bg-white/25"
+                    )}
+                  />
+                  <span className="font-heading text-[10px] text-foreground/90">
+                    {label}
+                  </span>
+                </motion.div>
+              )
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function SmartSeoDemo() {
+  return (
+    <div
+      className="relative aspect-[16/10] w-full overflow-hidden rounded-lg bg-[#0c0e12] select-none"
+      role="img"
+      aria-label="Демо Smart SEO: негативные отзывы закрываются инфографикой"
+    >
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_70%_20%,rgba(194,166,140,0.12),transparent_55%)]" />
+
+      <div className="absolute inset-3 grid grid-cols-2 gap-2">
+        <div className="flex flex-col gap-1.5 rounded-lg border border-white/8 bg-[#12141a] p-2">
+          <span className="font-heading text-[9px] tracking-wide text-amber uppercase">
+            Негатив конкурентов
+          </span>
+          {[
+            "Тонкий материал",
+            "Нет размеров",
+            "Фото не как в жизни",
+          ].map((pain, i) => (
+            <motion.div
+              key={pain}
+              className="flex items-start gap-1.5 rounded-md border border-white/5 bg-loft/50 px-1.5 py-1"
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.1 + i * 0.12 }}
+            >
+              <MessageSquareWarning
+                className="mt-0.5 size-3 shrink-0 text-copper/80"
+                aria-hidden
+              />
+              <span className="font-heading text-[9px] leading-snug text-text-muted">
+                {pain}
+              </span>
+            </motion.div>
+          ))}
+        </div>
+
+        <div className="relative overflow-hidden rounded-lg border border-emerald/25 bg-[#12141a] p-2">
+          <span className="font-heading text-[9px] tracking-wide text-emerald uppercase">
+            Закрытие болей
+          </span>
+          <div className="relative mt-2 flex flex-col items-center justify-center py-1">
+            <div className="h-10 w-12 rounded-md bg-gradient-to-b from-[#e8d5c0] to-[#7d8f78] shadow-[0_8px_18px_rgba(0,0,0,0.4)]" />
+            <motion.div
+              className="absolute top-0 right-0 rounded bg-[#1b3e2b] px-1.5 py-0.5 font-heading text-[8px] font-semibold text-emerald"
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ delay: 0.45 }}
+            >
+              Плотность ✓
+            </motion.div>
+            <motion.div
+              className="absolute bottom-1 left-0 rounded border border-copper/40 bg-loft/80 px-1.5 py-0.5 font-heading text-[8px] text-copper"
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.65 }}
+            >
+              Таблица размеров
+            </motion.div>
+          </div>
           <motion.p
-            className="pt-0.5 font-heading text-sm font-semibold text-foreground"
+            className="mt-2 font-heading text-[9px] text-emerald/90"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            transition={{ delay: 0.55 }}
+            transition={{ delay: 0.85 }}
           >
-            4 990 ₽{" "}
-            <span className="text-[11px] font-normal text-text-muted line-through">
-              7 690 ₽
-            </span>
+            SEO + инфографика → ТОП
           </motion.p>
         </div>
       </div>
+    </div>
+  )
+}
+
+function UltraHdDemo() {
+  const [shine, setShine] = useState(0)
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setShine((s) => (s + 1) % 3)
+    }, 1600)
+    return () => window.clearInterval(id)
+  }, [])
+
+  const textures = [
+    { label: "Кожа", from: "#8b5a3c", to: "#3d2418" },
+    { label: "Ткань", from: "#6b7c6e", to: "#2f3a34" },
+    { label: "Металл", from: "#c9c4bc", to: "#6a6560" },
+  ] as const
+
+  return (
+    <div
+      className="relative aspect-[16/10] w-full overflow-hidden rounded-lg bg-[#0c0e12] select-none"
+      role="img"
+      aria-label="Демо 3D Ultra-HD: студийный рендер текстур кожи, ткани и металла"
+    >
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(16,185,129,0.1),transparent_65%)]" />
+
+      <div className="absolute inset-3 flex items-end justify-center gap-2 pb-6">
+        {textures.map((tex, i) => {
+          const active = shine === i
+          return (
+            <motion.div
+              key={tex.label}
+              className="relative flex flex-col items-center gap-1.5"
+              animate={{
+                y: active ? -4 : 0,
+                scale: active ? 1.05 : 1,
+              }}
+              transition={{ type: "spring", stiffness: 320, damping: 22 }}
+            >
+              <div
+                className="relative h-14 w-12 overflow-hidden rounded-md border border-white/15 shadow-[0_12px_28px_rgba(0,0,0,0.45)]"
+                style={{
+                  background: `linear-gradient(145deg, ${tex.from}, ${tex.to})`,
+                }}
+              >
+                <motion.div
+                  className="absolute inset-0 bg-gradient-to-br from-white/35 via-transparent to-transparent"
+                  animate={{ opacity: active ? 0.85 : 0.25 }}
+                />
+                <motion.div
+                  className="absolute -inset-y-2 w-6 -skew-x-12 bg-white/25 blur-[1px]"
+                  animate={{
+                    x: active ? [-20, 48] : -20,
+                    opacity: active ? [0, 0.7, 0] : 0,
+                  }}
+                  transition={{ duration: 1.1, ease: "easeInOut" }}
+                />
+              </div>
+              <span
+                className={cn(
+                  "font-heading text-[9px] tracking-wide uppercase",
+                  active ? "text-emerald" : "text-text-muted"
+                )}
+              >
+                {tex.label}
+              </span>
+            </motion.div>
+          )
+        })}
+      </div>
+
+      <span className="absolute top-2 right-2 flex items-center gap-1 rounded-md border border-emerald/30 bg-loft/80 px-2 py-0.5 font-heading text-[9px] text-emerald">
+        <Gem className="size-3" aria-hidden />
+        Ultra-HD
+      </span>
     </div>
   )
 }
@@ -366,6 +628,30 @@ const FEATURES: Feature[] = [
     icon: BadgePercent,
     demo: <InfographicDemo />,
   },
+  {
+    id: "competitor-parser",
+    title: "Умный парсер & Сканер конкурентов",
+    description:
+      "Вставляешь ссылку на товар конкурента — система парсит фото, структуру и характеристики.",
+    icon: Link2,
+    demo: <CompetitorParserDemo />,
+  },
+  {
+    id: "smart-seo",
+    title: "Smart SEO & Закрытие негатива",
+    description:
+      "AI генерирует описание и инфографику на основе анализа частых негативных отзывов конкурентов, закрывая боли покупателей и выводя карточку в ТОП.",
+    icon: MessageSquareWarning,
+    demo: <SmartSeoDemo />,
+  },
+  {
+    id: "ultra-hd",
+    title: "3D Ultra-HD качество",
+    description:
+      "Студийный рендер текстур кожи, ткани и металла для максимального CTR.",
+    icon: Gem,
+    demo: <UltraHdDemo />,
+  },
 ]
 
 const cardVariants = {
@@ -389,55 +675,55 @@ function FeaturesSection() {
     <section
       id="features"
       ref={sectionRef}
-      className="relative isolate scroll-mt-24 bg-gradient-to-b from-[#0f1115] via-[#141b17] to-[#0f1115] py-20 sm:py-28"
+      className="relative isolate scroll-mt-24 py-20 sm:py-28"
     >
       <div className="pointer-events-none absolute inset-0 -z-10" aria-hidden>
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_60%_40%_at_50%_0%,rgba(16,185,129,0.08),transparent_55%)]" />
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_40%_30%_at_8%_70%,rgba(27,62,43,0.35),transparent_50%)]" />
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_35%_28%_at_92%_40%,rgba(16,185,129,0.07),transparent_50%)]" />
-        <div className="absolute inset-0 opacity-[0.035] noise-texture" />
+        <div className="absolute -left-28 top-1/3 size-72 rounded-full bg-[#059669]/10 blur-[120px]" />
+        <div className="absolute -right-24 bottom-1/4 size-80 rounded-full bg-[#1b3e2b]/20 blur-[120px]" />
       </div>
 
       <div className="mx-auto max-w-6xl px-5">
-        <SectionHeader
-          align="center"
-          title="Возможности"
-          subtitle="Студийный свет, чистая вырезка, 360° и инфографика — всё в одном пайплайне CARD AI"
-          className="mb-12 sm:mb-14"
-        />
+        <div className="section-glass rounded-3xl px-5 py-10 sm:px-8 sm:py-12 lg:px-10">
+          <SectionHeader
+            align="center"
+            title="Возможности"
+            subtitle="Студийный свет, вырезка, 360°, парсер конкурентов, Smart SEO и Ultra-HD — всё в одном пайплайне CARD AI"
+            className="mb-12 sm:mb-14"
+          />
 
-        <div className="grid gap-5 sm:grid-cols-2 lg:gap-6">
-          {FEATURES.map((feature, i) => {
-            const Icon = feature.icon
-            return (
-              <motion.div
-                key={feature.id}
-                custom={i}
-                variants={cardVariants}
-                initial="hidden"
-                animate={inView ? "show" : "hidden"}
-              >
-                <GlassCard className="group flex h-full flex-col gap-4 copper-border" padding="md">
-                  <div className="overflow-hidden rounded-lg border border-white/5">
-                    {feature.demo}
-                  </div>
-                  <div className="flex items-start gap-3">
-                    <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg border border-emerald/25 bg-emerald/10 text-emerald transition-colors group-hover:border-emerald/40 group-hover:bg-emerald/15">
-                      <Icon className="size-4" strokeWidth={1.75} aria-hidden />
-                    </span>
-                    <div className="min-w-0">
-                      <h3 className="font-heading text-lg font-semibold tracking-tight text-foreground">
-                        {feature.title}
-                      </h3>
-                      <p className="mt-1.5 text-sm leading-relaxed text-text-muted">
-                        {feature.description}
-                      </p>
+          <div className="grid gap-5 sm:grid-cols-2 lg:gap-6">
+            {FEATURES.map((feature, i) => {
+              const Icon = feature.icon
+              return (
+                <motion.div
+                  key={feature.id}
+                  custom={i}
+                  variants={cardVariants}
+                  initial="hidden"
+                  animate={inView ? "show" : "hidden"}
+                >
+                  <GlassCard className="group flex h-full flex-col gap-4" padding="md">
+                    <div className="overflow-hidden rounded-lg border border-white/5">
+                      {feature.demo}
                     </div>
-                  </div>
-                </GlassCard>
-              </motion.div>
-            )
-          })}
+                    <div className="flex items-start gap-3">
+                      <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg border border-emerald/25 bg-emerald/10 text-emerald transition-colors group-hover:border-emerald/40 group-hover:bg-emerald/15">
+                        <Icon className="size-4" strokeWidth={1.75} aria-hidden />
+                      </span>
+                      <div className="min-w-0">
+                        <h3 className="font-heading text-lg font-semibold tracking-tight text-foreground">
+                          {feature.title}
+                        </h3>
+                        <p className="mt-1.5 text-sm leading-relaxed text-text-muted">
+                          {feature.description}
+                        </p>
+                      </div>
+                    </div>
+                  </GlassCard>
+                </motion.div>
+              )
+            })}
+          </div>
         </div>
       </div>
     </section>

@@ -1,14 +1,8 @@
 "use client"
 
 import { Star } from "lucide-react"
-import { useEffect, useRef, useState } from "react"
-import {
-  motion,
-  useAnimationFrame,
-  useInView,
-  useMotionValue,
-  useReducedMotion,
-} from "framer-motion"
+import { useRef, type CSSProperties } from "react"
+import { motion, useInView, useReducedMotion } from "framer-motion"
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { GlassCard } from "@/components/ui/glass-card"
@@ -81,7 +75,7 @@ function Stars({ rating }: { rating: number }) {
 function TestimonialCard({ testimonial }: { testimonial: Testimonial }) {
   return (
     <GlassCard
-      className="w-[min(100vw-2.5rem,320px)] shrink-0 copper-border sm:w-[340px]"
+      className="w-[min(100vw-2.5rem,320px)] shrink-0 sm:w-[340px]"
       padding="md"
       hoverLift={false}
     >
@@ -129,72 +123,30 @@ function MarqueeRow({
   direction: "left" | "right"
   durationSec: number
 }) {
-  const loop = [...items, ...items]
-  const trackRef = useRef<HTMLDivElement>(null)
-  const x = useMotionValue(0)
-  const [paused, setPaused] = useState(false)
   const reduceMotion = useReducedMotion()
-  const halfWidthRef = useRef(0)
-
-  useEffect(() => {
-    const measure = () => {
-      const el = trackRef.current
-      if (!el) return
-      halfWidthRef.current = el.scrollWidth / 2
-      if (direction === "right" && x.get() === 0) {
-        x.set(-halfWidthRef.current)
-      }
-    }
-    measure()
-    window.addEventListener("resize", measure)
-    return () => window.removeEventListener("resize", measure)
-  }, [direction, items, x])
-
-  useAnimationFrame((_, delta) => {
-    if (paused || reduceMotion) return
-    const half = halfWidthRef.current
-    if (half <= 0) return
-
-    const pxPerMs = half / (durationSec * 1000)
-    const current = x.get()
-
-    if (direction === "left") {
-      let next = current - pxPerMs * delta
-      if (next <= -half) next += half
-      x.set(next)
-    } else {
-      let next = current + pxPerMs * delta
-      if (next >= 0) next -= half
-      x.set(next)
-    }
-  })
+  /** Two identical halves → translate ±50% loops without a seam */
+  const loop = reduceMotion ? items : [...items, ...items]
 
   return (
-    <div
-      className="relative overflow-hidden"
-      onMouseEnter={() => setPaused(true)}
-      onMouseLeave={() => setPaused(false)}
-      onFocusCapture={() => setPaused(true)}
-      onBlurCapture={() => setPaused(false)}
-    >
+    <div className="marquee-row marquee-fade-edges relative overflow-hidden py-1">
       <div
-        className="pointer-events-none absolute inset-y-0 left-0 z-10 w-16 bg-gradient-to-r from-[#0f1115] via-[#0f1115]/85 to-transparent sm:w-28"
-        aria-hidden
-      />
-      <div
-        className="pointer-events-none absolute inset-y-0 right-0 z-10 w-16 bg-gradient-to-l from-[#0f1115] via-[#0f1115]/85 to-transparent sm:w-28"
-        aria-hidden
-      />
-
-      <motion.div
-        ref={trackRef}
-        className="flex w-max gap-4 py-1 will-change-transform"
-        style={{ x }}
+        className={cn(
+          "flex w-max gap-4 will-change-transform",
+          !reduceMotion &&
+            (direction === "left"
+              ? "animate-marquee-left"
+              : "animate-marquee-right")
+        )}
+        style={
+          {
+            "--marquee-duration": `${durationSec}s`,
+          } as CSSProperties
+        }
       >
         {loop.map((item, index) => (
           <TestimonialCard key={`${item.id}-${index}`} testimonial={item} />
         ))}
-      </motion.div>
+      </div>
     </div>
   )
 }
@@ -210,27 +162,27 @@ function TestimonialsSection() {
     <section
       id="testimonials"
       ref={sectionRef}
-      className="relative isolate scroll-mt-24 bg-gradient-to-b from-[#0f1115] via-[#141b17] to-[#0f1115] py-20 sm:py-28"
+      className="relative isolate scroll-mt-24 py-20 sm:py-28"
     >
       <div className="pointer-events-none absolute inset-0 -z-10" aria-hidden>
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_50%_35%_at_50%_100%,rgba(16,185,129,0.07),transparent_55%)]" />
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_35%_30%_at_90%_20%,rgba(27,62,43,0.3),transparent_50%)]" />
-        <div className="absolute inset-0 opacity-[0.035] noise-texture" />
+        <div className="absolute -right-32 top-1/4 size-72 rounded-full bg-[#1b3e2b]/20 blur-[120px]" />
+        <div className="absolute -left-28 bottom-1/3 size-64 rounded-full bg-[#059669]/10 blur-[120px]" />
       </div>
 
       <div className="mx-auto max-w-6xl px-5">
-        <motion.div
-          initial={{ opacity: 0, y: 24 }}
-          animate={inView ? { opacity: 1, y: 0 } : { opacity: 0, y: 24 }}
-          transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-        >
-          <SectionHeader
-            align="center"
-            title="Отзывы продавцов"
-            subtitle="Селлеры Ozon и Wildberries уже собирают карточки в CARD AI — без студии и долгой ретуши"
-            className="mb-12 sm:mb-14"
-          />
-        </motion.div>
+        <div className="section-glass mb-10 rounded-3xl px-5 py-10 sm:mb-12 sm:px-8 sm:py-12">
+          <motion.div
+            initial={{ opacity: 0, y: 24 }}
+            animate={inView ? { opacity: 1, y: 0 } : { opacity: 0, y: 24 }}
+            transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+          >
+            <SectionHeader
+              align="center"
+              title="Отзывы продавцов"
+              subtitle="Селлеры Ozon и Wildberries уже собирают карточки в CARD AI — без студии и долгой ретуши"
+            />
+          </motion.div>
+        </div>
       </div>
 
       <motion.div

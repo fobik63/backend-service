@@ -145,6 +145,14 @@ const SALE_LAYERS: CanvasLayer[] = [
     locked: false,
     opacity: 1,
     zIndex: 3,
+    x: 72,
+    y: 6,
+    chip: {
+      label: "−30%",
+      bgColor: "#E11D48",
+      borderRadius: 8,
+      iconId: "icon_spark",
+    },
   },
   {
     id: "layer_price",

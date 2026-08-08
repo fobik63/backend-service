@@ -1,17 +1,41 @@
 "use client"
 
-import { Play, Sparkles, X } from "lucide-react"
+import {
+  Crown,
+  Footprints,
+  Grip,
+  Leaf,
+  Maximize2,
+  Play,
+  Sparkles,
+  Star,
+  Wind,
+  X,
+  XIcon,
+} from "lucide-react"
 import Image from "next/image"
 import { useRouter } from "next/navigation"
 import {
   useCallback,
   useEffect,
+  useId,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react"
 import { AnimatePresence, motion } from "framer-motion"
+import { Dialog as DialogPrimitive } from "@base-ui/react/dialog"
 
+import { TropicalLeaves } from "@/components/landing/tropical-leaves"
+import {
+  Dialog,
+  DialogDescription,
+  DialogHeader,
+  DialogOverlay,
+  DialogPortal,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Button } from "@/components/ui/button"
 import { GlassButton } from "@/components/ui/glass-button"
 import { cn } from "@/lib/utils"
 
@@ -28,24 +52,129 @@ const fadeUp = {
   }),
 }
 
-function BeforeAfterSlider() {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const [position, setPosition] = useState(52)
-  const dragging = useRef(false)
-  const interacted = useRef(false)
+const AUTO_ROTATE_MS = 30_000
 
-  const updateFromClientX = useCallback((clientX: number) => {
-    const el = containerRef.current
-    if (!el) return
-    const rect = el.getBoundingClientRect()
-    const next = ((clientX - rect.left) / rect.width) * 100
-    setPosition(Math.min(96, Math.max(4, next)))
-  }, [])
+type ProductPair = {
+  id: string
+  label: string
+  beforeSrc: string
+  afterSrc: string
+  beforeAlt: string
+  afterAlt: string
+}
+
+/** Real cutout «До» + finished marketplace card «После». */
+const PRODUCT_EXAMPLES: ProductPair[] = [
+  {
+    id: "sneakers",
+    label: "Кроссовки",
+    beforeSrc: "/landing/before-product.png",
+    afterSrc: "/landing/after-card.png",
+    beforeAlt: "Сырое фото кроссовок до обработки",
+    afterAlt: "Готовая карточка кроссовок с инфографикой",
+  },
+  {
+    id: "perfume",
+    label: "Парфюм",
+    beforeSrc: "/landing/before-perfume.png",
+    afterSrc: "/landing/after-perfume.png",
+    beforeAlt: "Вырезанный флакон парфюма на студийном фоне",
+    afterAlt: "Готовая карточка парфюма с инфографикой",
+  },
+  {
+    id: "stationery",
+    label: "Канцелярия",
+    beforeSrc: "/landing/before-stationery.png",
+    afterSrc: "/landing/after-stationery.png",
+    beforeAlt: "Вырезанный набор карандашей на студийном фоне",
+    afterAlt: "Готовая карточка канцелярии с инфографикой",
+  },
+  {
+    id: "cosmetics",
+    label: "Косметика",
+    beforeSrc: "/landing/before-cosmetics.png",
+    afterSrc: "/landing/after-cosmetics.png",
+    beforeAlt: "Вырезанная баночка крема на студийном фоне",
+    afterAlt: "Готовая карточка косметики с инфографикой",
+  },
+]
+
+function ExampleLayer({
+  example,
+  mode,
+  priority,
+}: {
+  example: ProductPair
+  mode: "before" | "after"
+  priority?: boolean
+}) {
+  const src = mode === "before" ? example.beforeSrc : example.afterSrc
+  const alt = mode === "before" ? example.beforeAlt : example.afterAlt
+  return (
+    <div className="absolute inset-0">
+      <Image
+        src={src}
+        alt={alt}
+        fill
+        priority={priority}
+        sizes="(max-width: 768px) 100vw, 36rem"
+        className="object-cover object-center"
+      />
+      <span
+        className={cn(
+          "absolute top-3 rounded-md px-2 py-1 font-heading text-[11px] font-semibold tracking-wide",
+          mode === "before"
+            ? "left-3 bg-loft/80 text-foreground backdrop-blur-sm"
+            : "right-3 bg-emerald/90 text-loft"
+        )}
+      >
+        {mode === "before" ? "До" : "После"}
+      </span>
+    </div>
+  )
+}
+
+type CompareFrameProps = {
+  example: ProductPair
+  position: number
+  onPositionChange: (value: number) => void
+  onInteract: () => void
+  className?: string
+  sliderId: string
+  showMaximize?: boolean
+  onMaximize?: () => void
+  priority?: boolean
+}
+
+function CompareFrame({
+  example,
+  position,
+  onPositionChange,
+  onInteract,
+  className,
+  sliderId,
+  showMaximize = false,
+  onMaximize,
+  priority,
+}: CompareFrameProps) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const dragging = useRef(false)
+
+  const updateFromClientX = useCallback(
+    (clientX: number) => {
+      const el = containerRef.current
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      const next = ((clientX - rect.left) / rect.width) * 100
+      onPositionChange(Math.min(96, Math.max(4, next)))
+    },
+    [onPositionChange]
+  )
 
   const onHandlePointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     e.stopPropagation()
     e.preventDefault()
-    interacted.current = true
+    onInteract()
     dragging.current = true
     e.currentTarget.setPointerCapture(e.pointerId)
     updateFromClientX(e.clientX)
@@ -65,65 +194,37 @@ function BeforeAfterSlider() {
     }
   }
 
-  useEffect(() => {
-    const id = window.setTimeout(() => {
-      if (!interacted.current) setPosition(48)
-    }, 900)
-    const id2 = window.setTimeout(() => {
-      if (!interacted.current) setPosition(58)
-    }, 1600)
-    return () => {
-      window.clearTimeout(id)
-      window.clearTimeout(id2)
-    }
-  }, [])
+  const clipInset = Math.min(96, Math.max(4, 100 - position))
 
   return (
     <div
       ref={containerRef}
       className={cn(
-        "relative aspect-[4/5] w-full max-w-md overflow-hidden rounded-2xl",
-        "border border-white/10 bg-loft-surface copper-border",
+        "relative isolate overflow-hidden rounded-2xl",
+        "bg-[#14161c] copper-border",
         "shadow-[0_24px_80px_rgba(0,0,0,0.45)]",
-        "select-none"
+        "select-none",
+        className
       )}
       role="img"
-      aria-label="Сравнение: сырое фото товара и готовая карточка Ozon"
+      aria-label={`Сравнение до/после: ${example.label}`}
     >
-      {/* After — готовая карточка (pointer-events isolated) */}
-      <div className="pointer-events-none absolute inset-0">
-        <Image
-          src="/landing/after-card.png"
-          alt="Готовая карточка Ozon с инфографикой"
-          fill
-          priority
-          sizes="(max-width: 768px) 100vw, 28rem"
-          className="object-cover object-center"
-        />
-        <span className="absolute right-3 top-3 rounded-md bg-emerald/90 px-2 py-1 font-heading text-[11px] font-semibold tracking-wide text-loft">
-          После
-        </span>
+      {/* After — finished render with studio background */}
+      <div className="pointer-events-none absolute inset-0 z-0">
+        <ExampleLayer example={example} mode="after" priority={priority} />
       </div>
 
-      {/* Before — сырое фото, клип по ползунку */}
+      {/* Before — full-size layer clipped from the right so product switch never drops the mask */}
       <div
-        className="pointer-events-none absolute inset-0 overflow-hidden"
-        style={{ clipPath: `inset(0 ${100 - position}% 0 0)` }}
+        className="pointer-events-none absolute inset-0 z-[1] will-change-[clip-path]"
+        style={{
+          clipPath: `inset(0 ${clipInset}% 0 0)`,
+          WebkitClipPath: `inset(0 ${clipInset}% 0 0)`,
+        }}
       >
-        <Image
-          src="/landing/before-product.png"
-          alt="Сырое фото товара до обработки"
-          fill
-          priority
-          sizes="(max-width: 768px) 100vw, 28rem"
-          className="object-cover object-center"
-        />
-        <span className="absolute left-3 top-3 rounded-md bg-loft/80 px-2 py-1 font-heading text-[11px] font-semibold tracking-wide text-foreground backdrop-blur-sm">
-          До
-        </span>
+        <ExampleLayer example={example} mode="before" priority={priority} />
       </div>
 
-      {/* Divider + handle — единственная зона drag */}
       <div
         className="absolute inset-y-0 z-20 w-12 -translate-x-1/2 touch-none cursor-ew-resize"
         style={{ left: `${position}%` }}
@@ -138,9 +239,13 @@ function BeforeAfterSlider() {
         aria-label="Разделитель до/после"
         tabIndex={0}
         onKeyDown={(e) => {
-          interacted.current = true
-          if (e.key === "ArrowLeft") setPosition((p) => Math.max(4, p - 2))
-          if (e.key === "ArrowRight") setPosition((p) => Math.min(96, p + 2))
+          onInteract()
+          if (e.key === "ArrowLeft") {
+            onPositionChange(Math.min(96, Math.max(4, position - 2)))
+          }
+          if (e.key === "ArrowRight") {
+            onPositionChange(Math.min(96, Math.max(4, position + 2)))
+          }
         }}
       >
         <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-white/80" />
@@ -153,52 +258,283 @@ function BeforeAfterSlider() {
         </div>
       </div>
 
-      {/* Bottom range — отдельный контроллер, stopPropagation */}
       <div
-        className="absolute inset-x-0 bottom-0 z-30 flex justify-center px-4 pb-3 pt-8"
+        className="absolute inset-x-0 bottom-0 z-30 flex items-end justify-center gap-3 px-4 pb-3 pt-8"
         onPointerDown={(e) => e.stopPropagation()}
       >
-        <label className="sr-only" htmlFor="hero-compare-slider">
+        <label className="sr-only" htmlFor={sliderId}>
           Ползунок сравнения до и после
         </label>
         <input
-          id="hero-compare-slider"
+          id={sliderId}
           type="range"
           min={4}
           max={96}
           value={position}
           onChange={(e) => {
-            interacted.current = true
-            setPosition(Number(e.target.value))
+            onInteract()
+            onPositionChange(Number(e.target.value))
           }}
           onPointerDown={(e) => {
             e.stopPropagation()
-            interacted.current = true
+            onInteract()
           }}
-          className="h-2 w-[min(80%,16rem)] cursor-pointer appearance-none rounded-full bg-white/15 accent-emerald"
+          className="h-2 w-[min(70%,14rem)] cursor-pointer appearance-none rounded-full bg-white/15 accent-emerald"
         />
       </div>
+
+      {showMaximize && onMaximize ? (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            onMaximize()
+          }}
+          className={cn(
+            "absolute bottom-3 right-3 z-40 inline-flex items-center gap-1.5 rounded-lg",
+            "border border-white/15 bg-loft/80 px-2.5 py-1.5",
+            "font-heading text-[11px] font-medium text-foreground backdrop-blur-md",
+            "shadow-[0_8px_24px_rgba(0,0,0,0.35)] transition-colors hover:bg-loft hover:border-emerald/40"
+          )}
+          aria-label="Раскрыть на весь экран"
+        >
+          <Maximize2 className="size-3.5 text-emerald" aria-hidden />
+          <span className="hidden sm:inline">Раскрыть на весь экран</span>
+        </button>
+      ) : null}
     </div>
   )
 }
 
+function BeforeAfterSlider() {
+  const baseId = useId()
+  const [activeIndex, setActiveIndex] = useState(0)
+  const [position, setPosition] = useState(52)
+  const [fullscreenOpen, setFullscreenOpen] = useState(false)
+  const interacted = useRef(false)
+  const example = PRODUCT_EXAMPLES[activeIndex]
+
+  const markInteracted = useCallback(() => {
+    interacted.current = true
+  }, [])
+
+  const goToExample = useCallback((index: number) => {
+    setActiveIndex(index)
+    setPosition(52)
+    interacted.current = false
+  }, [])
+
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      if (!interacted.current) setPosition(48)
+    }, 900)
+    const id2 = window.setTimeout(() => {
+      if (!interacted.current) setPosition(58)
+    }, 1600)
+    return () => {
+      window.clearTimeout(id)
+      window.clearTimeout(id2)
+    }
+  }, [activeIndex])
+
+  useEffect(() => {
+    if (fullscreenOpen) return
+    const id = window.setInterval(() => {
+      setActiveIndex((prev) => (prev + 1) % PRODUCT_EXAMPLES.length)
+      setPosition(52)
+      interacted.current = false
+    }, AUTO_ROTATE_MS)
+    return () => window.clearInterval(id)
+  }, [fullscreenOpen, activeIndex])
+
+  return (
+    <div className="flex w-full max-w-md flex-col items-center gap-3">
+      <div className="relative w-full">
+        <CompareFrame
+          key={example.id}
+          example={example}
+          position={position}
+          onPositionChange={setPosition}
+          onInteract={markInteracted}
+          sliderId={`${baseId}-compare`}
+          showMaximize
+          onMaximize={() => setFullscreenOpen(true)}
+          priority={activeIndex === 0}
+          className="aspect-[4/5] w-full"
+        />
+      </div>
+
+      <div
+        className="flex items-center gap-2"
+        role="tablist"
+        aria-label="Примеры товаров"
+      >
+        {PRODUCT_EXAMPLES.map((item, index) => {
+          const active = index === activeIndex
+          return (
+            <button
+              key={item.id}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              aria-label={item.label}
+              title={item.label}
+              onClick={() => goToExample(index)}
+              className={cn(
+                "h-2 rounded-full transition-all duration-300",
+                active
+                  ? "w-6 bg-emerald shadow-[0_0_12px_rgba(16,185,129,0.45)]"
+                  : "w-2 bg-white/25 hover:bg-white/45"
+              )}
+            />
+          )
+        })}
+      </div>
+
+      <Dialog open={fullscreenOpen} onOpenChange={setFullscreenOpen}>
+        <DialogPortal>
+          <DialogOverlay className="bg-loft/85 backdrop-blur-md" />
+          <DialogPrimitive.Popup
+            data-slot="dialog-content"
+            className={cn(
+              "fixed top-1/2 left-1/2 z-50 w-fit max-w-[calc(100%-1.5rem)] -translate-x-1/2 -translate-y-1/2",
+              "outline-none",
+              "data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95",
+              "data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
+            )}
+          >
+            <DialogHeader className="sr-only">
+              <DialogTitle>
+                Сравнение до и после — {example.label}
+              </DialogTitle>
+              <DialogDescription>
+                Полноэкранный просмотр карточки товара с инфографикой
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="relative flex w-fit max-w-full flex-col items-center gap-3">
+              <DialogPrimitive.Close
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="absolute -top-2 -right-2 z-50 border border-white/15 bg-loft/80 text-foreground backdrop-blur-md hover:bg-loft sm:-right-3"
+                  />
+                }
+              >
+                <XIcon className="size-4" />
+                <span className="sr-only">Закрыть</span>
+              </DialogPrimitive.Close>
+
+              <CompareFrame
+                key={`fs-${example.id}`}
+                example={example}
+                position={position}
+                onPositionChange={setPosition}
+                onInteract={markInteracted}
+                sliderId={`${baseId}-compare-fs`}
+                priority
+                className="aspect-[3/4] h-auto max-h-[85vh] w-auto max-w-full"
+              />
+
+              <div className="flex items-center gap-2">
+                {PRODUCT_EXAMPLES.map((item, index) => {
+                  const active = index === activeIndex
+                  return (
+                    <button
+                      key={`fs-${item.id}`}
+                      type="button"
+                      aria-label={item.label}
+                      title={item.label}
+                      onClick={() => goToExample(index)}
+                      className={cn(
+                        "h-2 rounded-full transition-all duration-300",
+                        active
+                          ? "w-6 bg-emerald"
+                          : "w-2 bg-white/25 hover:bg-white/45"
+                      )}
+                    />
+                  )
+                })}
+              </div>
+            </div>
+          </DialogPrimitive.Popup>
+        </DialogPortal>
+      </Dialog>
+    </div>
+  )
+}
+
+const DEMO_360_CALLOUTS = [
+  {
+    id: "light",
+    Icon: Leaf,
+    label: "Лёгкие для максимального комфорта",
+    className: "left-3 top-[18%] max-w-[9.5rem] sm:left-5 sm:top-[16%]",
+  },
+  {
+    id: "mesh",
+    Icon: Wind,
+    label: "Дышащий сетчатый материал",
+    className: "right-3 top-[22%] max-w-[9rem] sm:right-5 sm:top-[20%]",
+  },
+  {
+    id: "sole",
+    Icon: Footprints,
+    label: "Эргономичная подошва снижает нагрузку",
+    className: "left-3 bottom-[30%] max-w-[10rem] sm:left-5 sm:bottom-[28%]",
+  },
+  {
+    id: "grip",
+    Icon: Grip,
+    label: "Надёжное сцепление с поверхностью",
+    className: "right-3 bottom-[32%] max-w-[9.5rem] sm:right-5 sm:bottom-[30%]",
+  },
+] as const
+
 function Demo360Viewer({ onClose }: { onClose: () => void }) {
-  const [rotation, setRotation] = useState(0)
+  const [rotation, setRotation] = useState(18)
+  const [isDragging, setIsDragging] = useState(false)
+  const [overlaysVisible, setOverlaysVisible] = useState(true)
   const dragging = useRef(false)
   const lastX = useRef(0)
   const auto = useRef(true)
+  const resumeTimer = useRef<number | null>(null)
+  const overlayTimer = useRef<number | null>(null)
 
   useEffect(() => {
     const id = window.setInterval(() => {
-      if (!auto.current) return
-      setRotation((r) => (r + 0.9) % 360)
+      if (!auto.current || dragging.current) return
+      setRotation((r) => (r + 0.55) % 360)
     }, 32)
     return () => window.clearInterval(id)
   }, [])
 
+  useEffect(() => {
+    return () => {
+      if (resumeTimer.current) window.clearTimeout(resumeTimer.current)
+      if (overlayTimer.current) window.clearTimeout(overlayTimer.current)
+    }
+  }, [])
+
+  const pauseOverlays = () => {
+    setOverlaysVisible(false)
+    if (overlayTimer.current) window.clearTimeout(overlayTimer.current)
+  }
+
+  const revealOverlaysSoon = () => {
+    if (overlayTimer.current) window.clearTimeout(overlayTimer.current)
+    overlayTimer.current = window.setTimeout(() => {
+      setOverlaysVisible(true)
+    }, 420)
+  }
+
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     auto.current = false
     dragging.current = true
+    setIsDragging(true)
+    pauseOverlays()
+    if (resumeTimer.current) window.clearTimeout(resumeTimer.current)
     lastX.current = e.clientX
     e.currentTarget.setPointerCapture(e.pointerId)
   }
@@ -207,21 +543,28 @@ function Demo360Viewer({ onClose }: { onClose: () => void }) {
     if (!dragging.current) return
     const dx = e.clientX - lastX.current
     lastX.current = e.clientX
-    setRotation((r) => (r + dx * 0.65) % 360)
+    setRotation((r) => (r + dx * 0.72) % 360)
   }
 
   const onPointerUp = (e: ReactPointerEvent<HTMLDivElement>) => {
     dragging.current = false
+    setIsDragging(false)
+    revealOverlaysSoon()
     if (e.currentTarget.hasPointerCapture(e.pointerId)) {
       e.currentTarget.releasePointerCapture(e.pointerId)
     }
-    window.setTimeout(() => {
+    if (resumeTimer.current) window.clearTimeout(resumeTimer.current)
+    resumeTimer.current = window.setTimeout(() => {
       auto.current = true
-    }, 1400)
+    }, 1800)
   }
 
   const face = ((rotation % 360) + 360) % 360
   const depth = Math.cos((face * Math.PI) / 180)
+  const absDepth = Math.abs(depth)
+  const productScaleX = 0.42 + absDepth * 0.58
+  const shadowScaleX = 0.55 + absDepth * 0.55
+  const shadowOpacity = 0.22 + absDepth * 0.38
 
   return (
     <div
@@ -241,7 +584,7 @@ function Demo360Viewer({ onClose }: { onClose: () => void }) {
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.96, y: 8 }}
         transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
-        className="relative z-10 w-full max-w-lg overflow-hidden rounded-2xl border border-white/10 bg-loft-surface copper-border shadow-[0_32px_100px_rgba(0,0,0,0.55)]"
+        className="relative z-10 w-full max-w-lg overflow-hidden rounded-2xl bg-loft-surface copper-border shadow-[0_32px_100px_rgba(0,0,0,0.55)]"
       >
         <div className="flex items-center justify-between border-b border-white/8 px-4 py-3">
           <div>
@@ -249,7 +592,7 @@ function Demo360Viewer({ onClose }: { onClose: () => void }) {
               Demo 360°
             </p>
             <p className="text-sm text-muted-foreground">
-              Перетащите, чтобы вращать товар
+              Вращается только товар — плашки остаются на месте
             </p>
           </div>
           <button
@@ -263,31 +606,188 @@ function Demo360Viewer({ onClose }: { onClose: () => void }) {
         </div>
 
         <div
-          className="relative aspect-[4/3] touch-none cursor-ew-resize select-none bg-[radial-gradient(ellipse_at_center,rgba(16,185,129,0.12),transparent_65%)]"
+          className="relative aspect-[4/5] touch-none cursor-ew-resize select-none overflow-hidden sm:aspect-[4/3.4]"
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onPointerCancel={onPointerUp}
+          style={{
+            background:
+              "radial-gradient(ellipse 70% 55% at 50% 42%, #8a7355 0%, #5c4634 42%, #2a2118 100%)",
+          }}
         >
-          <div className="absolute inset-x-10 bottom-10 h-px bg-gradient-to-r from-transparent via-white/25 to-transparent" />
+          {/* Studio atmosphere (static) */}
           <div
-            className="absolute left-1/2 top-[48%] h-40 w-40 -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-2xl border border-white/15 bg-loft shadow-[0_20px_50px_rgba(0,0,0,0.45)]"
+            className="pointer-events-none absolute inset-0"
+            aria-hidden
             style={{
-              transform: `translate(-50%, -50%) rotateY(${face}deg) scaleX(${0.78 + Math.abs(depth) * 0.22})`,
-              boxShadow: `0 ${14 + (1 - Math.abs(depth)) * 10}px 40px rgba(0,0,0,0.5)`,
+              background:
+                "radial-gradient(ellipse at 50% 28%, rgba(255,240,210,0.18), transparent 55%)",
             }}
+          />
+          <div
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-1/3"
+            aria-hidden
+            style={{
+              background:
+                "linear-gradient(to top, rgba(20,14,10,0.55), transparent)",
+            }}
+          />
+
+          {/* Circular 3D podium — static, does not rotate */}
+          <div
+            className="pointer-events-none absolute left-1/2 bottom-[14%] z-[5] w-[72%] max-w-[22rem] -translate-x-1/2"
+            aria-hidden
+            style={{ perspective: "900px" }}
           >
-            <Image
-              src="/landing/after-card.png"
-              alt="Товар 360"
-              fill
-              className="object-cover"
-              sizes="16rem"
-            />
+            <div
+              className="relative mx-auto h-[4.5rem] w-full"
+              style={{ transformStyle: "preserve-3d" }}
+            >
+              <div
+                className="absolute inset-x-[6%] top-0 h-10 rounded-[100%]"
+                style={{
+                  background:
+                    "radial-gradient(ellipse at 40% 35%, #e8d7bc 0%, #c4a882 38%, #8a6b48 72%, #5a422c 100%)",
+                  boxShadow:
+                    "inset 0 2px 6px rgba(255,255,255,0.35), inset 0 -8px 16px rgba(0,0,0,0.35), 0 18px 36px rgba(0,0,0,0.45)",
+                  transform: "rotateX(68deg)",
+                }}
+              />
+              <div
+                className="absolute inset-x-[8%] top-[1.65rem] h-5 rounded-[100%]"
+                style={{
+                  background:
+                    "linear-gradient(180deg, #7a5a3a 0%, #4a3422 55%, #2e2014 100%)",
+                  boxShadow: "0 10px 24px rgba(0,0,0,0.4)",
+                  transform: "rotateX(68deg)",
+                }}
+              />
+              <div
+                className="absolute inset-x-[18%] top-[2.35rem] h-2 rounded-[100%] bg-black/35 blur-md"
+              />
+            </div>
           </div>
-          <div className="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full border border-white/10 bg-loft/70 px-3 py-1 font-heading text-[11px] text-emerald backdrop-blur-md">
+
+          {/* Rotating product + shadow only */}
+          <div
+            className="pointer-events-none absolute left-1/2 top-[50%] z-10 w-[78%] max-w-[22rem] -translate-x-1/2 -translate-y-1/2"
+            style={{ perspective: "1200px" }}
+          >
+            <div
+              className="relative mx-auto aspect-[16/9] w-full"
+              style={{
+                transform: `rotateY(${face}deg) scaleX(${productScaleX})`,
+                transformStyle: "preserve-3d",
+                transition: isDragging ? undefined : "transform 40ms linear",
+              }}
+            >
+              <div
+                className="absolute left-1/2 top-[88%] h-4 w-[72%] -translate-x-1/2 rounded-[100%] blur-[6px]"
+                style={{
+                  background: `rgba(0,0,0,${shadowOpacity})`,
+                  transform: `scaleX(${shadowScaleX})`,
+                }}
+              />
+              <Image
+                src="/landing/sneaker-transparent.png"
+                alt="Кроссовки NEXORA — обзор 360°"
+                fill
+                priority
+                sizes="(max-width: 640px) 90vw, 28rem"
+                className="object-contain object-center drop-shadow-[0_18px_28px_rgba(0,0,0,0.45)]"
+                draggable={false}
+              />
+            </div>
+          </div>
+
+          {/* Static infographic overlays — fade in when spin stops */}
+          <div
+            className={cn(
+              "pointer-events-none absolute inset-0 z-20 transition-opacity duration-500 ease-out",
+              overlaysVisible ? "opacity-100" : "opacity-0"
+            )}
+          >
+            <div className="absolute left-3 top-3 flex flex-col gap-1.5 sm:left-4 sm:top-4">
+              <span className="inline-flex w-fit items-center gap-1 rounded-md bg-gradient-to-r from-copper to-[#8a5230] px-2 py-1 font-heading text-[10px] font-semibold text-loft shadow-[0_8px_20px_rgba(0,0,0,0.35)]">
+                <Star className="size-3 fill-current" aria-hidden />
+                Хит продаж
+              </span>
+              <span className="w-fit rounded-md bg-[#1b3e2b] px-2 py-1 font-heading text-[10px] font-semibold text-emerald shadow-[0_8px_20px_rgba(0,0,0,0.35)]">
+                −35%
+              </span>
+            </div>
+
+            <div className="absolute right-3 top-3 text-right sm:right-4 sm:top-4">
+              <p className="font-heading text-lg font-semibold tracking-[0.08em] text-white sm:text-xl">
+                NEXORA
+              </p>
+              <p className="font-heading text-[9px] tracking-[0.22em] text-white/55 uppercase">
+                Premium Shoes
+              </p>
+            </div>
+
+            {DEMO_360_CALLOUTS.map(({ id, Icon, label, className }) => (
+              <div
+                key={id}
+                className={cn(
+                  "absolute flex items-start gap-1.5 rounded-md border border-white/12 bg-loft/70 px-2 py-1.5 backdrop-blur-md",
+                  "shadow-[0_8px_20px_rgba(0,0,0,0.35)]",
+                  className
+                )}
+              >
+                <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-emerald/20 text-emerald">
+                  <Icon className="size-3" aria-hidden />
+                </span>
+                <p className="font-heading text-[10px] leading-snug text-foreground">
+                  {label}
+                </p>
+              </div>
+            ))}
+
+            <div className="absolute inset-x-0 bottom-0 border-t border-white/8 bg-loft/55 px-4 pb-11 pt-3 backdrop-blur-sm sm:px-5">
+              <div className="flex items-end justify-between gap-3">
+                <div>
+                  <p className="font-heading text-xl font-semibold text-foreground sm:text-2xl">
+                    4 990 ₽{" "}
+                    <span className="text-xs font-normal text-text-muted line-through">
+                      7 690 ₽
+                    </span>
+                  </p>
+                  <div className="mt-1.5 inline-flex items-center gap-1.5 rounded-md border border-white/10 bg-loft/60 px-2 py-1">
+                    <Crown className="size-3 text-copper" aria-hidden />
+                    <span className="font-heading text-[9px] leading-tight text-text-muted">
+                      Премиальное качество для активной жизни
+                    </span>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="mb-1 font-heading text-[9px] tracking-wide text-text-muted uppercase">
+                    Размеры:
+                  </p>
+                  <div className="flex gap-1">
+                    {[40, 41, 42, 43, 44].map((size) => (
+                      <span
+                        key={size}
+                        className={cn(
+                          "flex size-6 items-center justify-center rounded-sm font-heading text-[10px]",
+                          size === 42
+                            ? "bg-copper text-loft"
+                            : "border border-white/15 bg-white/5 text-foreground/80"
+                        )}
+                      >
+                        {size}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="pointer-events-none absolute bottom-3 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 rounded-full border border-white/10 bg-loft/75 px-3 py-1 font-heading text-[11px] text-emerald backdrop-blur-md">
             <Play className="size-3" />
-            {Math.round(face)}°
+            {Math.round(face)}° · потяните для вращения
           </div>
         </div>
 
@@ -323,87 +823,90 @@ function HeroSection() {
   return (
     <section className="relative isolate min-h-[100svh] overflow-hidden pt-28 pb-16 sm:pt-32">
       <div className="pointer-events-none absolute inset-0 -z-10" aria-hidden>
-        <div className="absolute inset-0 bg-gradient-to-b from-[#0f1115] via-[#141b17] to-[#0f1115]" />
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_60%_at_50%_-10%,rgba(16,185,129,0.14),transparent_55%)]" />
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_50%_40%_at_90%_40%,rgba(27,62,43,0.45),transparent_60%)]" />
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_40%_30%_at_10%_70%,rgba(16,185,129,0.08),transparent_55%)]" />
-        <div className="absolute inset-0 opacity-[0.04] noise-texture" />
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_60%_at_50%_-10%,rgba(16,185,129,0.12),transparent_55%)]" />
+        <div className="absolute -left-24 top-1/4 size-72 rounded-full bg-[#059669]/10 blur-[120px]" />
+        <div className="absolute -right-20 top-1/3 size-80 rounded-full bg-[#1b3e2b]/20 blur-[120px]" />
+        <TropicalLeaves />
       </div>
 
-      <div className="mx-auto grid max-w-6xl items-center gap-12 px-5 lg:grid-cols-[1.05fr_0.95fr] lg:gap-16">
-        <div className="flex flex-col items-start">
-          <motion.p
-            custom={0}
-            variants={fadeUp}
-            initial="hidden"
-            animate="show"
-            className="mb-4 font-heading text-sm font-medium tracking-[0.18em] text-emerald uppercase"
-          >
-            CARD AI
-          </motion.p>
+      <div className="mx-auto max-w-6xl px-5">
+        <div className="section-glass relative overflow-hidden rounded-3xl px-6 py-10 sm:px-10 sm:py-14 lg:px-12">
+          <div className="grid items-center gap-12 lg:grid-cols-[1.05fr_0.95fr] lg:gap-16">
+            <div className="flex flex-col items-start">
+              <motion.p
+                custom={0}
+                variants={fadeUp}
+                initial="hidden"
+                animate="show"
+                className="mb-4 font-heading text-sm font-medium tracking-[0.18em] text-emerald uppercase"
+              >
+                CARD AI
+              </motion.p>
 
-          <motion.h1
-            custom={1}
-            variants={fadeUp}
-            initial="hidden"
-            animate="show"
-            className="max-w-xl font-heading text-3xl font-semibold leading-[1.12] tracking-tight text-foreground sm:text-4xl lg:text-[2.75rem]"
-          >
-            Создавай продающие карточки для Ozon и WB за 10 секунд с помощью AI
-          </motion.h1>
+              <motion.h1
+                custom={1}
+                variants={fadeUp}
+                initial="hidden"
+                animate="show"
+                className="max-w-xl font-heading text-3xl font-semibold leading-[1.12] tracking-tight text-foreground sm:text-4xl lg:text-[2.75rem]"
+              >
+                Создавай продающие карточки для Ozon и WB за 10 секунд с помощью AI
+              </motion.h1>
 
-          <motion.p
-            custom={2}
-            variants={fadeUp}
-            initial="hidden"
-            animate="show"
-            className="mt-5 max-w-lg text-base leading-relaxed text-text-muted sm:text-lg"
-          >
-            Автоматическая вырезка фона, студийный софтбокс и идеальная
-            типографика без дизайнеров
-          </motion.p>
+              <motion.p
+                custom={2}
+                variants={fadeUp}
+                initial="hidden"
+                animate="show"
+                className="mt-5 max-w-lg text-base leading-relaxed text-text-muted sm:text-lg"
+              >
+                Автоматическая вырезка фона, студийный софтбокс и идеальная
+                типографика без дизайнеров
+              </motion.p>
 
-          <motion.div
-            custom={3}
-            variants={fadeUp}
-            initial="hidden"
-            animate="show"
-            className="mt-8 flex flex-wrap items-center gap-3"
-          >
-            <GlassButton
-              size="lg"
-              icon={Sparkles}
-              onClick={() => router.push("/editor")}
+              <motion.div
+                custom={3}
+                variants={fadeUp}
+                initial="hidden"
+                animate="show"
+                className="mt-8 flex flex-wrap items-center gap-3"
+              >
+                <GlassButton
+                  size="lg"
+                  icon={Sparkles}
+                  onClick={() => router.push("/editor")}
+                >
+                  Сгенерировать бесплатно
+                </GlassButton>
+                <GlassButton
+                  size="lg"
+                  icon={Play}
+                  className="border border-white/12 !bg-none bg-white/[0.04] text-foreground shadow-none [background-image:none]"
+                  onClick={() => setDemoOpen(true)}
+                >
+                  Посмотреть демо 360°
+                </GlassButton>
+              </motion.div>
+            </div>
+
+            <motion.div
+              initial={{ opacity: 0, scale: 0.94, y: 36 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              transition={{
+                delay: 0.28,
+                duration: 0.7,
+                ease: [0.22, 1, 0.36, 1],
+              }}
+              className="relative mx-auto flex w-full justify-center lg:justify-end"
             >
-              Сгенерировать бесплатно
-            </GlassButton>
-            <GlassButton
-              size="lg"
-              icon={Play}
-              className="border border-white/12 !bg-none bg-white/[0.04] text-foreground shadow-none [background-image:none]"
-              onClick={() => setDemoOpen(true)}
-            >
-              Посмотреть демо 360°
-            </GlassButton>
-          </motion.div>
+              <div
+                className="pointer-events-none absolute -inset-8 -z-10 rounded-full bg-emerald/10 blur-3xl"
+                aria-hidden
+              />
+              <BeforeAfterSlider />
+            </motion.div>
+          </div>
         </div>
-
-        <motion.div
-          initial={{ opacity: 0, scale: 0.94, y: 36 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          transition={{
-            delay: 0.28,
-            duration: 0.7,
-            ease: [0.22, 1, 0.36, 1],
-          }}
-          className="relative mx-auto flex w-full justify-center lg:justify-end"
-        >
-          <div
-            className="pointer-events-none absolute -inset-8 -z-10 rounded-full bg-emerald/10 blur-3xl"
-            aria-hidden
-          />
-          <BeforeAfterSlider />
-        </motion.div>
       </div>
 
       <AnimatePresence>

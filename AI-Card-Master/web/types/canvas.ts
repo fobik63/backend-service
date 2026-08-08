@@ -35,6 +35,16 @@ export type CanvasLayer = {
   locked: boolean
   opacity: number
   zIndex: number
+  /** Top-left position on canvas as % of width/height (0–100). */
+  x?: number
+  y?: number
+  /** Element size as % of canvas (image / product / text box). */
+  width?: number
+  height?: number
+  /** Uniform scale multiplier (1 = 100%). */
+  scale?: number
+  /** Rotation in degrees (clockwise), around element center. */
+  rotation?: number
   /** Typography content — present on `type: "text"` layers. */
   text?: string
   textStyle?: TextLayerStyle

@@ -1,31 +1,36 @@
-import { Send } from "lucide-react"
+"use client"
+
+import { Mail, Send } from "lucide-react"
 import Link from "next/link"
 
 const DOC_LINKS = [
-  { href: "/legal/terms", label: "Оферта" },
-  { href: "/legal/privacy", label: "Политика конфиденциальности" },
+  { href: "/terms", label: "Оферта" },
+  { href: "/privacy", label: "Политика конфиденциальности" },
 ] as const
 
 const PRODUCT_LINKS = [
-  { href: "#features", label: "Возможности" },
-  { href: "#testimonials", label: "Отзывы" },
-  { href: "#pricing", label: "Цены" },
-  { href: "#faq", label: "FAQ" },
+  { href: "/landing#features", label: "Возможности" },
+  { href: "/landing#testimonials", label: "Отзывы" },
+  { href: "/landing#pricing", label: "Цены" },
+  { href: "/landing#faq", label: "FAQ" },
 ] as const
 
 const TELEGRAM_SUPPORT_URL = "https://t.me/cardai_support"
+const SUPPORT_EMAIL = "support@cardai.pro"
 
 function Footer() {
   return (
-    <footer className="relative isolate bg-gradient-to-b from-[#0f1115] via-[#141b17] to-[#0f1115]">
+    <footer className="relative isolate">
       <div
         className="pointer-events-none absolute inset-0 -z-10"
         aria-hidden
       >
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_50%_40%_at_50%_0%,rgba(16,185,129,0.06),transparent_55%)]" />
+        <div className="absolute -left-20 bottom-0 size-64 rounded-full bg-[#1b3e2b]/20 blur-[120px]" />
+        <div className="absolute -right-16 top-0 size-56 rounded-full bg-[#059669]/10 blur-[120px]" />
       </div>
 
       <div className="mx-auto max-w-6xl px-5 pt-14 pb-8">
+        <div className="section-glass rounded-3xl px-6 py-10 sm:px-8 sm:py-12">
         <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-4 lg:gap-8">
           {/* Brand */}
           <div className="sm:col-span-2 lg:col-span-1">
@@ -54,6 +59,16 @@ function Footer() {
                   <a
                     href={link.href}
                     className="text-sm text-text-muted transition-colors hover:text-foreground"
+                    onClick={(e) => {
+                      if (!link.href.includes("#")) return
+                      const id = link.href.split("#")[1]
+                      if (!id) return
+                      const el = document.getElementById(id)
+                      if (!el) return
+                      e.preventDefault()
+                      el.scrollIntoView({ behavior: "smooth", block: "start" })
+                      window.history.replaceState(null, "", `#${id}`)
+                    }}
                   >
                     {link.label}
                   </a>
@@ -108,11 +123,20 @@ function Footer() {
                   @cardai_support
                 </a>
               </li>
+              <li>
+                <a
+                  href={`mailto:${SUPPORT_EMAIL}`}
+                  className="inline-flex items-center gap-2 text-sm text-text-muted transition-colors hover:text-emerald"
+                >
+                  <Mail className="size-3.5 shrink-0" aria-hidden />
+                  {SUPPORT_EMAIL}
+                </a>
+              </li>
             </ul>
           </div>
         </div>
 
-        <div className="mt-12 flex flex-col gap-4 border-t border-white/8 pt-6 sm:flex-row sm:items-center sm:justify-between">
+        <div className="mt-12 flex flex-col gap-4 border-t border-white/5 pt-6 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-sm text-text-muted">
             © 2026 CARD AI Inc.
           </p>
@@ -133,6 +157,7 @@ function Footer() {
               All Systems Operational
             </span>
           </div>
+        </div>
         </div>
       </div>
     </footer>

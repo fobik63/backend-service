@@ -273,7 +273,7 @@ async def get_yookassa_dependency() -> YooKassaService:
 async def list_tariffs(
     payments: PaymentApplicationService = Depends(get_payment_application_service),
 ) -> list[TariffResponse]:
-    """Return the commercial tariff grid (Старт / Про / Полугодовой / Годовая)."""
+    """Return the commercial tariff grid (Pro Lite / Pro / Business)."""
 
     cached = await get_cached_tariffs()
     if cached is not None:

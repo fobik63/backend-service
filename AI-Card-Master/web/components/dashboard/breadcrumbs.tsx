@@ -4,7 +4,8 @@ import { ChevronRight } from "lucide-react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 
-import { DASHBOARD_BREADCRUMB_LABELS } from "@/lib/constants/dashboard-nav"
+import { DASHBOARD_BREADCRUMB_KEYS } from "@/lib/constants/dashboard-nav"
+import { useI18n } from "@/lib/i18n"
 import { cn } from "@/lib/utils"
 
 type BreadcrumbsProps = {
@@ -13,12 +14,14 @@ type BreadcrumbsProps = {
 
 function Breadcrumbs({ className }: BreadcrumbsProps) {
   const pathname = usePathname()
+  const { t } = useI18n()
   const segments = pathname.split("/").filter(Boolean)
 
   const crumbs = segments.map((segment, index) => {
     const href = `/${segments.slice(0, index + 1).join("/")}`
+    const key = DASHBOARD_BREADCRUMB_KEYS[segment]
     const label =
-      DASHBOARD_BREADCRUMB_LABELS[segment] ??
+      (key ? t(key) : null) ??
       decodeURIComponent(segment).replace(/-/g, " ")
     const isLast = index === segments.length - 1
 
@@ -30,7 +33,7 @@ function Breadcrumbs({ className }: BreadcrumbsProps) {
   }
 
   return (
-    <nav aria-label="Хлебные крошки" className={cn("min-w-0", className)}>
+    <nav aria-label={t("nav.breadcrumbs")} className={cn("min-w-0", className)}>
       <ol className="flex flex-wrap items-center gap-1 text-sm">
         {crumbs.map((crumb) => (
           <li key={crumb.href} className="flex items-center gap-1">

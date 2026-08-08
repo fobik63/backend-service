@@ -33,42 +33,43 @@ class TariffPlan:
 
 
 # Strict product tariff grid (1 generation = 1 ИИкоин).
+# Public names: Start (free UI) / Pro Lite / Pro / Business.
 TARIFF_CATALOG: Final[Mapping[TariffCode, TariffPlan]] = {
     TariffCode.START: TariffPlan(
         code=TariffCode.START,
-        title="Старт",
+        title="Pro Lite",
         duration_days=7,
         ai_coins=45,
         price_rub=Decimal("319.00"),
         subscription_status=SubscriptionStatus.START,
-        description="Подписка на 7 дней, 45 ИИкоинов",
+        description="Быстрый тест: подписка на 7 дней, 45 ИИкоинов",
     ),
     TariffCode.PRO: TariffPlan(
         code=TariffCode.PRO,
-        title="Про",
+        title="Pro",
         duration_days=30,
         ai_coins=200,
-        price_rub=Decimal("1490.00"),
+        price_rub=Decimal("990.00"),
         subscription_status=SubscriptionStatus.PRO,
-        description="Подписка на 30 дней, 200 ИИкоинов",
+        description="Основной тариф: подписка на 30 дней, 200 ИИкоинов",
     ),
     TariffCode.HALF_YEAR: TariffPlan(
         code=TariffCode.HALF_YEAR,
-        title="Полугодовой",
+        title="Business",
         duration_days=180,
         ai_coins=1200,
         price_rub=Decimal("5990.00"),
         subscription_status=SubscriptionStatus.HALF_YEAR,
-        description="Подписка на 180 дней, 1200 ИИкоинов",
+        description="Масштабирование: подписка на 180 дней, 1200 ИИкоинов",
     ),
     TariffCode.YEAR: TariffPlan(
         code=TariffCode.YEAR,
-        title="Годовая",
+        title="Business",
         duration_days=365,
         ai_coins=3000,
         price_rub=Decimal("8990.00"),
         subscription_status=SubscriptionStatus.YEAR,
-        description="Подписка на 365 дней, 3000 ИИкоинов",
+        description="Масштабирование: подписка на 365 дней, 3000 ИИкоинов",
     ),
 }
 

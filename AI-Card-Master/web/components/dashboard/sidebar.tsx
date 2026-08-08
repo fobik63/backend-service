@@ -9,6 +9,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { buttonVariants } from "@/components/ui/button"
 import { DASHBOARD_NAV } from "@/lib/constants/dashboard-nav"
+import { useI18n } from "@/lib/i18n"
 import { cn } from "@/lib/utils"
 
 type SidebarUser = {
@@ -27,6 +28,8 @@ type SidebarProps = {
   balance?: SidebarBalance
   className?: string
   onNavigate?: () => void
+  onOpenProfile?: () => void
+  onTopUp?: () => void
 }
 
 const DEFAULT_USER: SidebarUser = {
@@ -44,6 +47,9 @@ function isNavActive(pathname: string, href: string) {
   if (href === "/projects") {
     return pathname === "/projects" || pathname === "/projects/"
   }
+  if (href === "/editor") {
+    return pathname === "/editor" || pathname.startsWith("/editor/")
+  }
   return pathname === href || pathname.startsWith(`${href}/`)
 }
 
@@ -52,8 +58,11 @@ function Sidebar({
   balance = DEFAULT_BALANCE,
   className,
   onNavigate,
+  onOpenProfile,
+  onTopUp,
 }: SidebarProps) {
   const pathname = usePathname()
+  const { t } = useI18n()
   const initials = user.name
     .split(" ")
     .map((part) => part[0])
@@ -67,7 +76,7 @@ function Sidebar({
         "flex h-full w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground",
         className
       )}
-      aria-label="Навигация личного кабинета"
+      aria-label={t("nav.ariaSidebar")}
     >
       <div className="flex h-14 items-center border-b border-sidebar-border px-4">
         <BrandLogo />
@@ -78,6 +87,7 @@ function Sidebar({
           {DASHBOARD_NAV.map((item) => {
             const Icon = item.icon
             const active = isNavActive(pathname, item.href)
+            const label = t(`nav.${item.id}`)
 
             return (
               <li key={item.href}>
@@ -99,7 +109,7 @@ function Sidebar({
                     )}
                     aria-hidden
                   />
-                  <span className="truncate">{item.label}</span>
+                  <span className="truncate">{label}</span>
                 </Link>
               </li>
             )
@@ -111,12 +121,12 @@ function Sidebar({
         <div className="rounded-lg border border-white/8 bg-white/[0.03] p-3">
           <div className="mb-2 flex items-center gap-2 text-xs text-text-muted">
             <Coins className="size-3.5 text-amber" aria-hidden />
-            <span>Баланс монет</span>
+            <span>{t("nav.coins")}</span>
           </div>
           <p className="mb-3 font-heading text-sm font-semibold tracking-tight text-sidebar-foreground">
             {balance.current}{" "}
             <span className="font-normal text-text-muted">
-              / {balance.limit} монет
+              / {balance.limit}
             </span>
           </p>
           <div
@@ -125,7 +135,7 @@ function Sidebar({
             aria-valuenow={balance.current}
             aria-valuemin={0}
             aria-valuemax={balance.limit}
-            aria-label="Использовано монет"
+            aria-label={t("nav.coins")}
           >
             <div
               className="h-full rounded-full bg-gradient-to-r from-emerald to-emerald-deep"
@@ -137,17 +147,39 @@ function Sidebar({
               }}
             />
           </div>
-          <Link
-            href="/dashboard/billing"
-            onClick={onNavigate}
-            className={cn(buttonVariants({ size: "sm" }), "w-full gap-1.5")}
-          >
-            <Plus className="size-3.5" aria-hidden />
-            Пополнить
-          </Link>
+          {onTopUp ? (
+            <button
+              type="button"
+              onClick={() => {
+                onTopUp()
+                onNavigate?.()
+              }}
+              className={cn(buttonVariants({ size: "sm" }), "w-full gap-1.5")}
+            >
+              <Plus className="size-3.5" aria-hidden />
+              {t("nav.topUp")}
+            </button>
+          ) : (
+            <Link
+              href="/pricing"
+              onClick={onNavigate}
+              className={cn(buttonVariants({ size: "sm" }), "w-full gap-1.5")}
+            >
+              <Plus className="size-3.5" aria-hidden />
+              {t("nav.topUp")}
+            </Link>
+          )}
         </div>
 
-        <div className="flex items-center gap-3 rounded-lg px-1 py-1">
+        <button
+          type="button"
+          onClick={() => {
+            onOpenProfile?.()
+            onNavigate?.()
+          }}
+          className="flex w-full items-center gap-3 rounded-lg px-1 py-1 text-left transition-colors hover:bg-white/[0.04] outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          aria-label={t("common.profile")}
+        >
           <Avatar size="default">
             {user.avatarUrl ? (
               <AvatarImage src={user.avatarUrl} alt={user.name} />
@@ -167,7 +199,7 @@ function Sidebar({
               {user.statusLabel}
             </Badge>
           </div>
-        </div>
+        </button>
       </div>
     </aside>
   )

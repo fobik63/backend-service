@@ -15,8 +15,10 @@ import {
   type Project,
 } from "@/lib/constants/mock-projects"
 import { getApiErrorMessage } from "@/lib/api"
+import { useI18n } from "@/lib/i18n"
 
 function ProjectsView() {
+  const { t } = useI18n()
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -37,7 +39,7 @@ function ProjectsView() {
         setProjects(MOCK_PROJECTS)
       } catch (error) {
         if (cancelled) return
-        const message = getApiErrorMessage(error, "Не удалось загрузить проекты")
+        const message = getApiErrorMessage(error, t("projects.loadError"))
         setLoadError(message)
         toast.error(message)
       } finally {
@@ -49,7 +51,7 @@ function ProjectsView() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [t])
 
   const filtered = useMemo(() => {
     const q = deferredQuery.trim().toLowerCase()
@@ -67,28 +69,23 @@ function ProjectsView() {
     setMarketplace("all")
   }
 
-  const handleDownload = (id: string) => {
-    const project = projects.find((item) => item.id === id)
-    if (!project || project.status !== "ready") return
-    toast.success(`Архив «${project.title}» готовится к скачиванию`)
-  }
-
   const handleDelete = (id: string) => {
     const project = projects.find((item) => item.id === id)
     setProjects((prev) => prev.filter((item) => item.id !== id))
-    toast.message(project ? `Удалён: ${project.title}` : "Проект удалён")
+    toast.message(
+      project
+        ? `${t("projects.deleted")}: ${project.title}`
+        : t("projects.deleted")
+    )
   }
 
   return (
     <section className="mx-auto w-full max-w-7xl space-y-6">
       <header className="space-y-1.5">
         <h1 className="font-heading text-2xl font-semibold tracking-tight">
-          Мои проекты
+          {t("projects.title")}
         </h1>
-        <p className="text-sm text-muted-foreground">
-          Карточки товаров для Ozon и Wildberries — поиск, фильтры и быстрые
-          действия
-        </p>
+        <p className="text-sm text-muted-foreground">{t("projects.subtitle")}</p>
       </header>
 
       <ProjectsToolbar
@@ -114,7 +111,7 @@ function ProjectsView() {
               setLoadError(null)
             }}
           >
-            Показать локальные данные
+            {t("projects.showLocal")}
           </button>
         </div>
       ) : filtered.length === 0 ? (
@@ -131,7 +128,6 @@ function ProjectsView() {
               key={project.id}
               project={project}
               index={index}
-              onDownload={handleDownload}
               onDelete={handleDelete}
             />
           ))}

@@ -7,6 +7,7 @@ import {
 } from "next/font/google";
 
 import { AppProviders } from "@/components/providers/app-providers";
+import { AppAtmosphere } from "@/components/shared/app-atmosphere";
 
 import "./globals.css";
 
@@ -48,8 +49,9 @@ export default function RootLayout({
   return (
     <html lang="ru" className="dark" suppressHydrationWarning>
       <body
-        className={`${inter.variable} ${montserrat.variable} ${roboto.variable} ${spaceGrotesk.variable} font-sans antialiased`}
+        className={`${inter.variable} ${montserrat.variable} ${roboto.variable} ${spaceGrotesk.variable} relative min-h-dvh bg-transparent font-sans antialiased text-foreground`}
       >
+        <AppAtmosphere />
         <AppProviders>{children}</AppProviders>
       </body>
     </html>

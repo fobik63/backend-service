@@ -269,7 +269,7 @@ async def test_claim_free_generations_and_activate_discount() -> None:
 
     amount, percent, offer_id = await service.resolve_checkout_amount(
         user_id=user_id,
-        catalog_price_rub=Decimal("1490.00"),
+        catalog_price_rub=Decimal("990.00"),
     )
     assert percent == 30
     assert offer_id == discount_offer.id

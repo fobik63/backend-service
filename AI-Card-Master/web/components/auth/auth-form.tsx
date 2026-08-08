@@ -17,8 +17,12 @@ import { GlassButton } from "@/components/ui/glass-button"
 import { GlassCard } from "@/components/ui/glass-card"
 import { Input } from "@/components/ui/input"
 import { apiClient } from "@/lib/api"
-import { getApiErrorMessage, NETWORK_ERROR_MESSAGES } from "@/lib/api/errors"
-import { APP_NAME } from "@/lib/constants/api"
+import {
+  getApiErrorMessage,
+  isNetworkError,
+  NETWORK_ERROR_MESSAGES,
+} from "@/lib/api/errors"
+import { APP_NAME, DEFAULT_API_BASE_URL } from "@/lib/constants/api"
 import { useAuthStore } from "@/lib/store"
 import { cn } from "@/lib/utils"
 import {
@@ -54,12 +58,21 @@ type AuthFormProps = {
   hideHomeLink?: boolean
 }
 
+const IS_DEV =
+  process.env.NODE_ENV === "development" ||
+  process.env.NEXT_PUBLIC_AUTH_DEV_BYPASS === "1"
+
 function persistSession(tokens: AuthSessionResponse["tokens"]) {
   if (typeof window !== "undefined") {
     window.localStorage.setItem("access_token", tokens.access_token)
     window.localStorage.setItem("refresh_token", tokens.refresh_token)
   }
   useAuthStore.getState().setAccessToken(tokens.access_token)
+}
+
+function enterLocalDevSession() {
+  const token = `dev-local-${Date.now()}`
+  persistSession({ access_token: token, refresh_token: `dev-refresh-${Date.now()}` })
 }
 
 function FieldError({ message }: { message?: string }) {
@@ -83,6 +96,7 @@ function AuthForm({
   const [isPending, startTransition] = useTransition()
   const [formError, setFormError] = useState<string | null>(null)
   const [sendingOtp, setSendingOtp] = useState(false)
+  const [backendOffline, setBackendOffline] = useState(false)
 
   const credentialsForm = useForm<AuthCredentialsValues>({
     resolver: zodResolver(authCredentialsSchema),
@@ -127,16 +141,34 @@ function AuthForm({
     })
   }
 
+  const notifyOfflineDev = () => {
+    setBackendOffline(true)
+    toast.message("Локальный режим", {
+      description: `Бэкенд недоступен (${DEFAULT_API_BASE_URL}). Можно протестировать интерфейс без сервера.`,
+      duration: 8_000,
+      action: IS_DEV
+        ? {
+            label: "Demo-вход",
+            onClick: () => {
+              enterLocalDevSession()
+              finishAuth("Demo-вход (бэкенд недоступен)")
+            },
+          }
+        : undefined,
+    })
+  }
+
   const mapAuthError = (err: unknown, fallback: string) => {
-    if (
-      typeof err === "object" &&
-      err !== null &&
-      "code" in err &&
-      (err as { code?: string }).code === "ERR_NETWORK"
-    ) {
-      return `${NETWORK_ERROR_MESSAGES.offline}. Проверьте, что API запущен и NEXT_PUBLIC_API_BASE_URL указывает на /api/v1`
+    if (isNetworkError(err)) {
+      if (IS_DEV) notifyOfflineDev()
+      return `${NETWORK_ERROR_MESSAGES.offline}. Запустите API на ${DEFAULT_API_BASE_URL}`
     }
     return getApiErrorMessage(err, fallback)
+  }
+
+  const continueAsLocalDev = () => {
+    enterLocalDevSession()
+    finishAuth("Demo-вход (локальный режим)")
   }
 
   const onCredentialsSubmit = credentialsForm.handleSubmit(async (values) => {
@@ -296,6 +328,30 @@ function AuthForm({
         </h1>
         <p className="text-sm text-muted-foreground">{subtitle}</p>
       </div>
+
+      {IS_DEV && backendOffline ? (
+        <div
+          className="mb-5 rounded-xl border border-copper/30 bg-copper/10 px-3.5 py-3"
+          role="status"
+        >
+          <p className="text-sm text-foreground/90">
+            Бэкенд недоступен — можно проверить UI локально.
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Ожидается {DEFAULT_API_BASE_URL}
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="mt-3 h-9 w-full border-white/15 bg-transparent"
+            disabled={busy}
+            onClick={continueAsLocalDev}
+          >
+            Продолжить в demo-режиме
+          </Button>
+        </div>
+      ) : null}
 
       {mode === "otp" && otpStep === 1 ? (
         <form onSubmit={onOtpEmailSubmit} className="space-y-4" noValidate>

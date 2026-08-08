@@ -57,7 +57,7 @@ function ProjectsEmptyState({
                 </p>
               </div>
               <Link
-                href="/dashboard/create"
+                href="/editor"
                 className={cn(glassButtonVariants({ size: "lg" }), "gap-2")}
               >
                 <Plus className="size-5" aria-hidden />

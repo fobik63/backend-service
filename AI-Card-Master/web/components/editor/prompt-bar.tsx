@@ -1,7 +1,6 @@
 "use client"
 
 import {
-  Archive,
   ChevronDown,
   Download,
   FileImage,
@@ -12,10 +11,12 @@ import {
 import { useState, type FormEvent } from "react"
 import { toast } from "sonner"
 
+import { ExportButton } from "@/components/editor/export-button"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -24,67 +25,45 @@ import {
 import { GlassButton } from "@/components/ui/glass-button"
 import { Input } from "@/components/ui/input"
 import { getApiErrorMessage } from "@/lib/api"
+import { useI18n } from "@/lib/i18n"
 import { useEditorStore } from "@/lib/store/editor-store"
 import { cn } from "@/lib/utils"
 
-type ExportFormat = "png" | "webp" | "zip"
-
-const EXPORT_OPTIONS: {
-  id: ExportFormat
-  label: string
-  description: string
-  icon: typeof FileImage
-}[] = [
-  {
-    id: "png",
-    label: "PNG 1080×1440",
-    description: "Ultra-HD для маркетплейсов",
-    icon: FileImage,
-  },
-  {
-    id: "webp",
-    label: "WebP",
-    description: "Лёгкий веб-формат",
-    icon: ImageIcon,
-  },
-  {
-    id: "zip",
-    label: "ZIP с исходниками",
-    description: "Слои и ассеты проекта",
-    icon: Archive,
-  },
-]
-
-const PROMPT_PLACEHOLDER =
-  "Опишите желаемый дизайн... (например: «Сделай заголовок синим шрифтом Inter, цену 12900 в красный бэйдж и перемести товар вправо»)"
-
-function exportToastLabel(format: ExportFormat): string {
-  switch (format) {
-    case "png":
-      return "PNG 1080×1440"
-    case "webp":
-      return "WebP"
-    case "zip":
-      return "ZIP с исходниками"
-  }
-}
+type ExportFormat = "png" | "webp"
 
 type PromptBarProps = {
   className?: string
+  projectTitle?: string
 }
 
-function PromptBar({ className }: PromptBarProps) {
+function PromptBar({ className, projectTitle }: PromptBarProps) {
+  const { t } = useI18n()
   const [prompt, setPrompt] = useState("")
   const [generating, setGenerating] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [exportFormat, setExportFormat] = useState<ExportFormat>("png")
   const setBusyKind = useEditorStore((s) => s.setBusyKind)
 
+  const exportOptions = [
+    {
+      id: "png" as const,
+      label: t("editor.exportPng"),
+      description: t("editor.exportPngDesc"),
+      icon: FileImage,
+    },
+    {
+      id: "webp" as const,
+      label: t("editor.exportWebp"),
+      description: t("editor.exportWebpDesc"),
+      icon: ImageIcon,
+    },
+  ]
+
   const handleGenerate = async (e?: FormEvent) => {
     e?.preventDefault()
     const trimmed = prompt.trim()
     if (!trimmed) {
-      toast.error("Введите описание дизайна")
+      toast.error(t("editor.promptRequired"))
       return
     }
     if (generating) return
@@ -93,9 +72,9 @@ function PromptBar({ className }: PromptBarProps) {
     setBusyKind("generating")
     try {
       await new Promise((r) => setTimeout(r, 1600))
-      toast.success("Карточка сгенерирована")
+      toast.success(t("editor.generateSuccess"))
     } catch (error) {
-      toast.error(getApiErrorMessage(error, "Не удалось сгенерировать карточку"))
+      toast.error(getApiErrorMessage(error, t("editor.generateError")))
     } finally {
       setGenerating(false)
       setBusyKind("idle")
@@ -108,15 +87,20 @@ function PromptBar({ className }: PromptBarProps) {
     setExporting(true)
     try {
       await new Promise((r) => setTimeout(r, 900))
-      toast.success(`Скачивание: ${exportToastLabel(format)}`)
+      toast.success(
+        `${t("editor.download")}: ${
+          format === "png" ? t("editor.exportPng") : t("editor.exportWebp")
+        }`
+      )
     } catch (error) {
-      toast.error(getApiErrorMessage(error, "Не удалось экспортировать карточку"))
+      toast.error(getApiErrorMessage(error, t("export.error")))
     } finally {
       setExporting(false)
     }
   }
 
-  const activeExport = EXPORT_OPTIONS.find((o) => o.id === exportFormat)!
+  const activeExport =
+    exportOptions.find((o) => o.id === exportFormat) ?? exportOptions[0]
 
   return (
     <footer
@@ -124,7 +108,7 @@ function PromptBar({ className }: PromptBarProps) {
         "shrink-0 border-t border-white/8 bg-loft-surface/95 backdrop-blur-sm",
         className
       )}
-      aria-label="Панель AI-промпта"
+      aria-label={t("editor.promptBarAria")}
     >
       <form
         onSubmit={handleGenerate}
@@ -139,8 +123,8 @@ function PromptBar({ className }: PromptBarProps) {
             id="editor-ai-prompt"
             value={prompt}
             disabled={generating}
-            placeholder={PROMPT_PLACEHOLDER}
-            aria-label="AI-промпт"
+            placeholder={t("editor.promptPlaceholder")}
+            aria-label={t("editor.promptAria")}
             onChange={(e) => setPrompt(e.target.value)}
             className={cn(
               "h-12 border-white/10 bg-loft/60 pl-10 text-sm md:text-sm",
@@ -166,7 +150,7 @@ function PromptBar({ className }: PromptBarProps) {
             ) : (
               <Sparkles className="size-4" aria-hidden />
             )}
-            {generating ? "Генерация…" : "Сгенерировать через AI"}
+            {generating ? t("editor.generating") : t("editor.generate")}
           </GlassButton>
 
           <div className="inline-flex h-12 overflow-hidden rounded-lg border border-white/12 bg-loft/50">
@@ -188,16 +172,16 @@ function PromptBar({ className }: PromptBarProps) {
               )}
               <span className="hidden sm:inline">
                 {exportFormat === "png"
-                  ? "Скачать Ultra-HD PNG"
-                  : `Скачать ${activeExport.label}`}
+                  ? t("editor.downloadPng")
+                  : `${t("editor.download")} ${activeExport.label}`}
               </span>
-              <span className="sm:hidden">Скачать</span>
+              <span className="sm:hidden">{t("editor.download")}</span>
             </Button>
 
             <DropdownMenu>
               <DropdownMenuTrigger
                 disabled={exporting}
-                aria-label="Формат экспорта"
+                aria-label={t("editor.exportFormat")}
                 className={cn(
                   "inline-flex h-full w-9 items-center justify-center rounded-none border-l border-white/12",
                   "text-muted-foreground outline-none transition-colors",
@@ -209,39 +193,45 @@ function PromptBar({ className }: PromptBarProps) {
                 <ChevronDown className="size-4" aria-hidden />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" side="top" className="min-w-56">
-                <DropdownMenuLabel>Формат экспорта</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                {EXPORT_OPTIONS.map((opt) => {
-                  const Icon = opt.icon
-                  const selected = opt.id === exportFormat
-                  return (
-                    <DropdownMenuItem
-                      key={opt.id}
-                      onClick={() => handleExport(opt.id)}
-                      className={cn(
-                        "gap-2.5 py-2",
-                        selected && "bg-emerald/10 text-emerald"
-                      )}
-                    >
-                      <Icon
+                <DropdownMenuGroup>
+                  <DropdownMenuLabel>
+                    {t("editor.exportFormat")}
+                  </DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  {exportOptions.map((opt) => {
+                    const Icon = opt.icon
+                    const selected = opt.id === exportFormat
+                    return (
+                      <DropdownMenuItem
+                        key={opt.id}
+                        onClick={() => handleExport(opt.id)}
                         className={cn(
-                          "size-4",
-                          selected ? "text-emerald" : "text-muted-foreground"
+                          "gap-2.5 py-2",
+                          selected && "bg-emerald/10 text-emerald"
                         )}
-                        aria-hidden
-                      />
-                      <span className="flex min-w-0 flex-col gap-0.5">
-                        <span className="text-sm font-medium">{opt.label}</span>
-                        <span className="text-[11px] text-muted-foreground">
-                          {opt.description}
+                      >
+                        <Icon
+                          className={cn(
+                            "size-4",
+                            selected ? "text-emerald" : "text-muted-foreground"
+                          )}
+                          aria-hidden
+                        />
+                        <span className="flex min-w-0 flex-col gap-0.5">
+                          <span className="text-sm font-medium">{opt.label}</span>
+                          <span className="text-[11px] text-muted-foreground">
+                            {opt.description}
+                          </span>
                         </span>
-                      </span>
-                    </DropdownMenuItem>
-                  )
-                })}
+                      </DropdownMenuItem>
+                    )
+                  })}
+                </DropdownMenuGroup>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
+
+          <ExportButton projectTitle={projectTitle} />
         </div>
       </form>
     </footer>

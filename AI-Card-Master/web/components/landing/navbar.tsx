@@ -11,9 +11,20 @@ import { cn } from "@/lib/utils"
 
 const NAV_LINKS = [
   { href: "#features", label: "Возможности" },
+  { href: "#pricing", label: "Тарифы" },
   { href: "#testimonials", label: "Отзывы" },
+  { href: "#faq", label: "FAQ" },
   { href: "#cta", label: "Начать" },
 ] as const
+
+function scrollToHash(hash: string) {
+  const id = hash.replace(/^#/, "")
+  const el = document.getElementById(id)
+  if (!el) return false
+  el.scrollIntoView({ behavior: "smooth", block: "start" })
+  window.history.replaceState(null, "", `#${id}`)
+  return true
+}
 
 function CardLogoIcon({ className }: { className?: string }) {
   return (
@@ -108,6 +119,9 @@ function Navbar() {
               <a
                 href={link.href}
                 className="rounded-lg px-3 py-2 text-sm text-text-muted transition-colors hover:text-foreground"
+                onClick={(e) => {
+                  if (scrollToHash(link.href)) e.preventDefault()
+                }}
               >
                 {link.label}
               </a>
@@ -156,7 +170,10 @@ function Navbar() {
                   <a
                     href={link.href}
                     className="block rounded-lg px-3 py-2.5 text-sm text-text-muted transition-colors hover:bg-white/[0.04] hover:text-foreground"
-                    onClick={() => setMobileOpen(false)}
+                    onClick={(e) => {
+                      setMobileOpen(false)
+                      if (scrollToHash(link.href)) e.preventDefault()
+                    }}
                   >
                     {link.label}
                   </a>

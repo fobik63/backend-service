@@ -43,7 +43,7 @@ function ApiKeyField({
   error?: string
   disabled?: boolean
 }) {
-  const [visible, setVisible] = useState(false)
+  const [showKey, setShowKey] = useState(false)
 
   return (
     <div>
@@ -54,9 +54,10 @@ function ApiKeyField({
         {label}
       </label>
       <div className="relative">
-        <Input
+        {/* Native input: Base UI Input does not reliably toggle type password/text */}
+        <input
           id={id}
-          type={visible ? "text" : "password"}
+          type={showKey ? "text" : "password"}
           autoComplete="off"
           spellCheck={false}
           placeholder={placeholder}
@@ -64,20 +65,27 @@ function ApiKeyField({
           onChange={(e) => onChange(e.target.value)}
           aria-invalid={!!error}
           disabled={disabled}
-          className="h-10 bg-loft-surface/60 pr-10 font-mono text-sm"
+          className={cn(
+            "h-10 w-full min-w-0 rounded-lg border border-input bg-loft-surface/60 px-2.5 py-1 pr-10 font-mono text-sm outline-none transition-colors",
+            "placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50",
+            "disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50",
+            "aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20"
+          )}
         />
         <button
           type="button"
-          aria-label={visible ? "Скрыть ключ" : "Показать ключ"}
+          aria-label={showKey ? "Скрыть ключ" : "Показать ключ"}
+          aria-pressed={showKey}
           className={cn(
-            "absolute top-1/2 right-2 flex size-7 -translate-y-1/2 items-center justify-center rounded-md",
+            "absolute top-1/2 right-2 z-10 flex size-7 -translate-y-1/2 items-center justify-center rounded-md",
             "text-text-muted transition-colors hover:bg-muted hover:text-foreground",
-            "outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            "outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+            "disabled:pointer-events-none disabled:opacity-50"
           )}
-          onClick={() => setVisible((v) => !v)}
+          onClick={() => setShowKey((prev) => !prev)}
           disabled={disabled}
         >
-          {visible ? (
+          {showKey ? (
             <EyeOff className="size-3.5" aria-hidden />
           ) : (
             <Eye className="size-3.5" aria-hidden />

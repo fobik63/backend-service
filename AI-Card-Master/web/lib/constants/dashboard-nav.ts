@@ -2,14 +2,20 @@ import {
   Coins,
   FolderKanban,
   ImagePlus,
-  Lightbulb,
-  Rotate3d,
   Settings,
   type LucideIcon,
 } from "lucide-react"
 
+export type DashboardNavId =
+  | "projects"
+  | "editor"
+  | "pricing"
+  | "settings"
+
 export type DashboardNavItem = {
   href: string
+  id: DashboardNavId
+  /** Fallback RU label — prefer i18n `nav.{id}` at render time. */
   label: string
   icon: LucideIcon
 }
@@ -17,43 +23,48 @@ export type DashboardNavItem = {
 export const DASHBOARD_NAV: DashboardNavItem[] = [
   {
     href: "/projects",
+    id: "projects",
     label: "Мои проекты",
     icon: FolderKanban,
   },
   {
-    href: "/dashboard/create",
+    href: "/editor",
+    id: "editor",
     label: "Создать карточку",
     icon: ImagePlus,
   },
   {
-    href: "/dashboard/photo-studio",
-    label: "Фотостудия (Свет)",
-    icon: Lightbulb,
-  },
-  {
-    href: "/dashboard/360",
-    label: "360° Генерация",
-    icon: Rotate3d,
-  },
-  {
-    href: "/dashboard/billing",
+    href: "/pricing",
+    id: "pricing",
     label: "Тарифы и баланс",
     icon: Coins,
   },
   {
-    href: "/dashboard/settings",
+    href: "/settings",
+    id: "settings",
     label: "Настройки",
     icon: Settings,
   },
 ]
 
-/** Breadcrumb labels by path segment. */
+/** Breadcrumb i18n key by path segment (`nav.*`). */
+export const DASHBOARD_BREADCRUMB_KEYS: Record<string, string> = {
+  dashboard: "nav.dashboard",
+  projects: "nav.projects",
+  editor: "nav.editor",
+  create: "nav.editor",
+  pricing: "nav.pricing",
+  billing: "nav.pricing",
+  settings: "nav.settings",
+}
+
+/** @deprecated Prefer DASHBOARD_BREADCRUMB_KEYS + useI18n */
 export const DASHBOARD_BREADCRUMB_LABELS: Record<string, string> = {
   dashboard: "Кабинет",
   projects: "Мои проекты",
+  editor: "Создать карточку",
   create: "Создать карточку",
-  "photo-studio": "Фотостудия",
-  "360": "360° Генерация",
+  pricing: "Тарифы и баланс",
   billing: "Тарифы и баланс",
   settings: "Настройки",
 }

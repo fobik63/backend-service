@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 import { useRef } from "react"
 import { motion, useInView } from "framer-motion"
 
+import { TropicalLeaves } from "@/components/landing/tropical-leaves"
 import { GlassButton } from "@/components/ui/glass-button"
 
 function CallToActionSection() {
@@ -18,26 +19,18 @@ function CallToActionSection() {
       ref={sectionRef}
       className="relative isolate scroll-mt-24 px-5 py-16 sm:py-24"
     >
-      <div className="relative mx-auto max-w-6xl overflow-hidden rounded-3xl border border-white/10">
-        {/* Deep emerald → loft gradient */}
+      <div className="relative mx-auto max-w-6xl overflow-hidden rounded-3xl section-glass copper-border">
+        {/* Soft emerald wash over glass */}
         <div
-          className="absolute inset-0 bg-gradient-to-br from-[#059669] via-[#047857] to-[#0f1115]"
+          className="absolute inset-0 bg-gradient-to-br from-[#059669]/35 via-[#047857]/20 to-transparent"
           aria-hidden
         />
 
-        {/* Soft blur orbs */}
         <div className="pointer-events-none absolute inset-0" aria-hidden>
-          <div className="absolute -left-16 top-1/2 size-64 -translate-y-1/2 rounded-full bg-emerald/40 blur-3xl" />
-          <div className="absolute -right-10 -top-20 size-72 rounded-full bg-[#10b981]/25 blur-3xl" />
-          <div className="absolute bottom-0 left-1/3 size-56 rounded-full bg-[#0f1115]/60 blur-3xl" />
-          <div className="absolute inset-0 bg-[radial-gradient(ellipse_70%_60%_at_50%_120%,rgba(15,17,21,0.55),transparent_55%)]" />
-          <div
-            className="absolute inset-0 opacity-[0.06]"
-            style={{
-              backgroundImage:
-                "url(\"data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E\")",
-            }}
-          />
+          <div className="absolute -left-16 top-1/2 size-64 -translate-y-1/2 rounded-full bg-[#059669]/10 blur-[120px]" />
+          <div className="absolute -right-10 -top-20 size-72 rounded-full bg-[#1b3e2b]/20 blur-[120px]" />
+          <div className="absolute bottom-0 left-1/3 size-56 rounded-full bg-[#0d0f12]/50 blur-[120px]" />
+          <TropicalLeaves className="text-emerald" />
         </div>
 
         <motion.div
@@ -46,13 +39,13 @@ function CallToActionSection() {
           animate={inView ? { opacity: 1, y: 0 } : { opacity: 0, y: 28 }}
           transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
         >
-          <p className="mb-3 font-heading text-sm font-medium tracking-[0.18em] text-white/70 uppercase">
+          <p className="mb-3 font-heading text-sm font-medium tracking-[0.18em] text-emerald/80 uppercase">
             Старт за минуту
           </p>
-          <h2 className="max-w-2xl font-heading text-2xl font-semibold tracking-tight text-white sm:text-3xl lg:text-4xl">
+          <h2 className="max-w-2xl font-heading text-2xl font-semibold tracking-tight text-foreground sm:text-3xl lg:text-4xl">
             Готовы собрать первую продающую карточку?
           </h2>
-          <p className="mt-4 max-w-lg text-sm leading-relaxed text-white/75 sm:text-base">
+          <p className="mt-4 max-w-lg text-sm leading-relaxed text-text-muted sm:text-base">
             Без студии, дизайнеров и подписки на старте — загрузите фото и
             получите карточку для Ozon или WB
           </p>

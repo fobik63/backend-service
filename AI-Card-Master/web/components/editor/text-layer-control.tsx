@@ -30,6 +30,7 @@ import { Slider } from "@/components/ui/slider"
 import {
   FEATURE_CHIP_BG_PRESETS,
   FEATURE_CHIP_ICONS,
+  nextBadgePosition,
 } from "@/lib/constants/mock-editor"
 import { useEditorStore } from "@/lib/store/editor-store"
 import {
@@ -154,6 +155,7 @@ function TextLayerControl({ className }: { className?: string }) {
   const selectedLayerId = useEditorStore((s) => s.selectedLayerId)
   const updateLayer = useEditorStore((s) => s.updateLayer)
   const addLayer = useEditorStore((s) => s.addLayer)
+  const flashLayer = useEditorStore((s) => s.flashLayer)
 
   const layer = layers.find((l) => l.id === selectedLayerId)
   const isText = layer?.type === "text"
@@ -174,6 +176,20 @@ function TextLayerControl({ className }: { className?: string }) {
 
   const addFeatureChip = () => {
     const label = chipDraft.label.trim() || "Преимущество"
+    const existing = layers.find(
+      (l) =>
+        l.chip &&
+        l.chip.label.trim().toLocaleLowerCase("ru-RU") ===
+          label.toLocaleLowerCase("ru-RU")
+    )
+    if (existing) {
+      flashLayer(existing.id)
+      toast.message(`Плашка «${label}» уже на холсте`)
+      return
+    }
+
+    const chipCount = layers.filter((l) => l.chip).length
+    const pos = nextBadgePosition(chipCount)
     const maxZ = layers.reduce((m, l) => Math.max(m, l.zIndex), 0)
     const id = `chip_${Date.now()}`
     addLayer({
@@ -184,9 +200,13 @@ function TextLayerControl({ className }: { className?: string }) {
       locked: false,
       opacity: 1,
       zIndex: maxZ + 1,
+      x: pos.x,
+      y: pos.y,
+      scale: 1,
+      rotation: 0,
       chip: { ...chipDraft, label },
     })
-    toast.success(`Плашка «${label}» добавлена`)
+    toast.success(`Плашка «${label}» на холсте`)
   }
 
   const ChipIcon = CHIP_ICON_MAP[chipDraft.iconId] ?? CircleCheck

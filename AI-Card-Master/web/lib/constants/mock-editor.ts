@@ -22,6 +22,12 @@ export const MOCK_EDITOR_LAYERS: CanvasLayer[] = [
     locked: false,
     opacity: 1,
     zIndex: 1,
+    x: 27,
+    y: 23,
+    width: 46,
+    height: 38,
+    scale: 1,
+    rotation: 0,
   },
   {
     id: "layer_title",
@@ -31,6 +37,11 @@ export const MOCK_EDITOR_LAYERS: CanvasLayer[] = [
     locked: false,
     opacity: 1,
     zIndex: 2,
+    x: 8,
+    y: 68,
+    width: 84,
+    scale: 1,
+    rotation: 0,
     text: "Название товара",
     textStyle: { ...DEFAULT_TEXT_STYLE },
   },
@@ -42,6 +53,16 @@ export const MOCK_EDITOR_LAYERS: CanvasLayer[] = [
     locked: false,
     opacity: 0.95,
     zIndex: 3,
+    x: 72,
+    y: 6,
+    scale: 1,
+    rotation: 0,
+    chip: {
+      label: "Хит",
+      bgColor: "#059669",
+      borderRadius: 8,
+      iconId: "icon_star",
+    },
   },
   {
     id: "layer_icon",
@@ -51,6 +72,16 @@ export const MOCK_EDITOR_LAYERS: CanvasLayer[] = [
     locked: false,
     opacity: 1,
     zIndex: 4,
+    x: 8,
+    y: 86,
+    scale: 1,
+    rotation: 0,
+    chip: {
+      label: "Натуральный состав",
+      bgColor: "#14171d",
+      borderRadius: 10,
+      iconId: "icon_check",
+    },
   },
 ]
 
@@ -80,10 +111,41 @@ export const TEXT_PRESETS = [
 ] as const
 
 export const BADGE_PRESETS = [
-  { id: "badge_hit", label: "Хит продаж", tone: "emerald" },
-  { id: "badge_new", label: "Новинка", tone: "copper" },
-  { id: "badge_sale", label: "−30%", tone: "amber" },
-  { id: "badge_eco", label: "Eco", tone: "sage" },
+  {
+    id: "badge_hit",
+    label: "Хит продаж",
+    tone: "emerald" as const,
+    bgColor: "#059669",
+    iconId: "icon_star",
+  },
+  {
+    id: "badge_sale",
+    label: "−30%",
+    tone: "amber" as const,
+    bgColor: "#E11D48",
+    iconId: "icon_spark",
+  },
+  {
+    id: "badge_guarantee",
+    label: "Гарантия",
+    tone: "copper" as const,
+    bgColor: "#F59E0B",
+    iconId: "icon_shield",
+  },
+  {
+    id: "badge_new",
+    label: "Новинка",
+    tone: "copper" as const,
+    bgColor: "#B87333",
+    iconId: "icon_spark",
+  },
+  {
+    id: "badge_eco",
+    label: "Eco",
+    tone: "sage" as const,
+    bgColor: "#1B3E2B",
+    iconId: "icon_leaf",
+  },
 ] as const
 
 export const ICON_PRESETS = [
@@ -94,3 +156,15 @@ export const ICON_PRESETS = [
   { id: "icon_spark", label: "Искра" },
   { id: "icon_box", label: "Коробка" },
 ] as const
+
+/** Default drop spot for the next badge/chip (% of canvas). */
+export function nextBadgePosition(
+  existingChipCount: number
+): { x: number; y: number } {
+  const col = existingChipCount % 2
+  const row = Math.floor(existingChipCount / 2)
+  return {
+    x: 58 + col * 14,
+    y: 5 + row * 9,
+  }
+}

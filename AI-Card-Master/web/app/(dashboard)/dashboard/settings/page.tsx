@@ -1,5 +1,5 @@
-import { ProfileSettings } from "@/components/dashboard/settings"
+import { redirect } from "next/navigation"
 
-export default function SettingsPage() {
-  return <ProfileSettings />
+export default function LegacySettingsPage() {
+  redirect("/settings")
 }

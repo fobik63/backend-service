@@ -27,8 +27,8 @@ function GlassCard({
     <div
       data-slot="glass-card"
       className={cn(
-        "rounded-xl border border-white/10",
-        "bg-[rgba(22,24,30,0.75)] backdrop-blur-md",
+        "rounded-xl border border-white/5 copper-border",
+        "bg-[#14171d]/60 backdrop-blur-xl",
         "shadow-[0_8px_30px_rgba(0,0,0,0.25)]",
         "transition-[transform,box-shadow] duration-300 ease-out",
         hoverLift &&

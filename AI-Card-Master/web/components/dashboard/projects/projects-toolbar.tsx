@@ -76,7 +76,7 @@ function ProjectsToolbar({
       </div>
 
       <Link
-        href="/dashboard/create"
+        href="/editor"
         className={cn(
           buttonVariants({ variant: "default", size: "lg" }),
           "h-10 gap-2 bg-gradient-to-br from-emerald to-emerald-deep text-primary-foreground shadow-[0_0_18px_rgba(16,185,129,0.22)] hover:brightness-110"

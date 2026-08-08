@@ -1285,7 +1285,7 @@
           "payments"
         ],
         "summary": "List Tariffs",
-        "description": "Return the commercial tariff grid (Старт / Про / Полугодовой / Годовая).",
+        "description": "Return the commercial tariff grid (Pro Lite / Pro / Business).",
         "operationId": "list_tariffs_api_v1_payments_tariffs_get",
         "responses": {
           "200": {
