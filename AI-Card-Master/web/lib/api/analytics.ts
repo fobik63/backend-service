@@ -2,6 +2,7 @@ import { apiClient } from "@/lib/api/client"
 import {
   delay,
   IS_MOCK,
+  MOCK_COMPETITOR_PAINS,
   MOCK_EYE_OF_GOD_DASHBOARD,
   MOCK_EYE_OF_GOD_DELAY_MS,
 } from "@/lib/constants/mock"
@@ -35,6 +36,12 @@ export type EyeOfGodCompetitorSummary = {
   brand?: string | null
   url?: string | null
   price_rub?: number | null
+  feedbacks?: number | null
+  /** Heuristic: feedbacks × ~12.5 until MPSTATS/MarketGuru. */
+  estimated_purchases?: number | null
+  /** Оценочная выручка: estimated_purchases × price_rub. */
+  estimated_revenue_rub?: number | null
+  is_niche_revenue_leader?: boolean
   conversion_triggers?: string[]
   weaknesses?: string[]
   advice_reliability_pct?: number
@@ -124,6 +131,7 @@ export async function enqueueEyeOfGodSpy(
         title: c.title,
         brand: c.brand,
         price_rub: c.price_rub,
+        feedbacks: c.feedbacks,
       })),
     }
   }
@@ -197,4 +205,160 @@ export async function pollEyeOfGodSpyJob(
   }
 
   throw new Error("Таймаут ожидания анализа «Глаз Бога»")
+}
+
+/** Keyword TOP-N competitor card from WB search. */
+export type NicheCompetitorCard = {
+  rank: number
+  article: string
+  title?: string | null
+  brand?: string | null
+  price_rub?: number | null
+  rating?: number | null
+  feedbacks?: number | null
+  url: string
+  estimated_purchases?: number | null
+  estimated_revenue_rub?: number | null
+  /** Client-side WB CDN thumbnail (when article is numeric nm_id). */
+  thumbnail_url?: string | null
+}
+
+export type CompetitorsSearchResponse = {
+  query: string
+  count: number
+  competitors: NicheCompetitorCard[]
+}
+
+export type CompetitorReviewsCollectionResponse = {
+  articles: string[]
+  competitors_processed: number
+  reviews_fetched: number
+  complaint_texts: string[]
+  by_article: Array<{
+    article: string
+    reviews_fetched: number
+    complaint_texts: string[]
+    warning?: string | null
+  }>
+  warnings: string[]
+}
+
+export type BuyerPain = {
+  rank: number
+  title: string
+  summary: string
+  evidence_quotes: string[]
+}
+
+export type InfographicOffer = {
+  pain_rank: number
+  offer_text: string
+}
+
+export type CompetitorPainsAnalysisResponse = {
+  pains: BuyerPain[]
+  recommendations: InfographicOffer[]
+  provider: string
+  model_name: string
+  input_tokens: number
+  output_tokens: number
+}
+
+export async function searchCompetitors(options: {
+  query: string
+  limit?: number
+}): Promise<CompetitorsSearchResponse> {
+  if (IS_MOCK) {
+    await delay(MOCK_EYE_OF_GOD_DELAY_MS)
+    const limit = options.limit ?? 5
+    const competitors = MOCK_EYE_OF_GOD_DASHBOARD.competitors
+      .slice(0, limit)
+      .map((c) => ({
+        rank: c.rank,
+        article: c.article,
+        title: c.title,
+        brand: c.brand,
+        price_rub: c.price_rub,
+        feedbacks: c.feedbacks,
+        url:
+          c.url ??
+          `https://www.wildberries.ru/catalog/${c.article}/detail.aspx`,
+        estimated_purchases: c.estimated_purchases,
+        estimated_revenue_rub: c.estimated_revenue_rub,
+      }))
+    return {
+      query: options.query.trim(),
+      count: competitors.length,
+      competitors,
+    }
+  }
+
+  const { data } = await apiClient.post<CompetitorsSearchResponse>(
+    "/analytics/competitors",
+    {
+      query: options.query.trim(),
+      limit: options.limit ?? 5,
+    },
+    { skipErrorToast: true, timeout: 60_000 },
+  )
+  return data
+}
+
+export async function collectCompetitorReviews(options: {
+  articles: string[]
+  maxReviewsPerArticle?: number
+}): Promise<CompetitorReviewsCollectionResponse> {
+  if (IS_MOCK) {
+    await delay(800)
+    const articles = options.articles.slice(0, 10)
+    const complaint_texts = [
+      "жидкий, стекает с рук",
+      "плохо пахнет химией",
+      "не увлажняет, кожа снова сухая через час",
+      "маленький объём за такие деньги",
+      "вызывает раздражение",
+    ]
+    return {
+      articles,
+      competitors_processed: articles.length,
+      reviews_fetched: complaint_texts.length * Math.max(articles.length, 1),
+      complaint_texts,
+      by_article: articles.map((article) => ({
+        article,
+        reviews_fetched: complaint_texts.length,
+        complaint_texts,
+      })),
+      warnings: [],
+    }
+  }
+
+  const { data } = await apiClient.post<CompetitorReviewsCollectionResponse>(
+    "/analytics/competitors/reviews",
+    {
+      articles: options.articles,
+      max_reviews_per_article: options.maxReviewsPerArticle ?? 40,
+    },
+    { skipErrorToast: true, timeout: 120_000 },
+  )
+  return data
+}
+
+export async function analyzeCompetitorPains(options: {
+  complaintTexts: string[]
+  productContext?: string
+}): Promise<CompetitorPainsAnalysisResponse> {
+  if (IS_MOCK) {
+    await delay(1000)
+    return { ...MOCK_COMPETITOR_PAINS }
+  }
+
+  const { data } = await apiClient.post<CompetitorPainsAnalysisResponse>(
+    "/analytics/competitors/reviews/analyze",
+    {
+      complaint_texts: options.complaintTexts,
+      product_context: options.productContext ?? "",
+    },
+    { skipErrorToast: true, timeout: 180_000 },
+  )
+  return data
 }

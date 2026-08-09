@@ -15,15 +15,20 @@ class MobilePlatform(StrEnum):
 _IOS_USER_AGENTS: tuple[str, ...] = (
     "Wildberries/6.5.2000 (iPhone; iOS 17.5.1; Scale/3.00)",
     "Wildberries/6.4.9000 (iPhone; iOS 16.7.2; Scale/3.00)",
+    "Wildberries/6.3.5000 (iPhone; iOS 17.2; Scale/3.00)",
     "Ozon/17.42.0 (iPhone; iOS 17.4; Scale/3.00)",
+    "Ozon/17.44.1 (iPhone; iOS 18.0; Scale/3.00)",
     "OzonApp/17.40.1 CFNetwork/1496.0.7 Darwin/23.5.0",
+    "OzonApp/17.43.0 CFNetwork/1568.200.51 Darwin/24.0.0",
 )
 
 _ANDROID_USER_AGENTS: tuple[str, ...] = (
     "Wildberries/5.78.5000 (Linux; Android 14; Pixel 8 Build/UQ1A)",
     "Wildberries/5.76.3000 (Linux; Android 13; SM-S911B)",
+    "Wildberries/5.80.1000 (Linux; Android 14; SM-A546E)",
     "ozonapp_android/17.42.0+arm64-v8a (Android 14; Google Pixel 7)",
     "ozonapp_android/17.38.1 (Android 13; samsung SM-A546E)",
+    "ozonapp_android/17.45.0 (Android 14; Xiaomi 2312DRA50G)",
 )
 
 _WB_IOS_HEADERS: dict[str, str] = {

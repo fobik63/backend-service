@@ -17,6 +17,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
 } from "react"
 
 import { GenerationBusyOverlay } from "@/components/editor/generation-busy-overlay"
@@ -24,6 +25,7 @@ import {
   CANVAS_HEIGHT,
   CANVAS_WIDTH,
 } from "@/lib/constants/mock-editor"
+import { resetLayerToDefaults, recoverCanvasAfterRenderError } from "@/lib/editor/canvas-error-recovery"
 import {
   FABRIC_EXPORT_PRESETS,
   fabricCanvasToPngBytes,
@@ -42,6 +44,7 @@ import {
 import {
   createSoftboxSourceCanvas,
   paintSoftboxInPlace,
+  SOFTBOX_UPDATE_MS,
   softboxOverlayStyle,
 } from "@/lib/editor/softbox"
 import {
@@ -179,15 +182,31 @@ function applySmartSnap(
 }
 
 async function safeBuildLayer(
-  builder: () => Promise<EngineObject> | EngineObject
+  layer: CanvasLayer,
+  builder: (layer: CanvasLayer) => Promise<EngineObject> | EngineObject
 ): Promise<EngineObject | null> {
   try {
-    return await builder()
+    return await builder(layer)
   } catch (err) {
     if (process.env.NODE_ENV !== "production") {
-      console.error("[fabric-canvas] layer build failed", err)
+      console.error("[fabric-canvas] layer build failed", layer.id, err)
     }
-    return null
+    // Reset corrupt transform/style, then retry once with store defaults.
+    try {
+      resetLayerToDefaults(layer.id)
+      const recovered =
+        useEditorStore.getState().layers.find((l) => l.id === layer.id) ?? layer
+      return await builder(recovered)
+    } catch (retryErr) {
+      if (process.env.NODE_ENV !== "production") {
+        console.error(
+          "[fabric-canvas] layer rebuild after reset failed",
+          layer.id,
+          retryErr
+        )
+      }
+      return null
+    }
   }
 }
 
@@ -355,6 +374,7 @@ function isFabricCanvasAlive(canvas: FabricCanvas | null | undefined): boolean {
 /**
  * Update softbox wash in-place on the existing Fabric.Image element.
  * Never recreates layers / never setElement on slider ticks (avoids canvas resize races).
+ * Lost light object / dead canvas → quiet return (must not trip Error Boundary).
  */
 function applySoftboxToFabric(
   canvas: FabricCanvas,
@@ -365,23 +385,30 @@ function applySoftboxToFabric(
     if (!isFabricCanvasAlive(canvas)) return
 
     const img = findSoftboxImage(canvas)
-    const bg = findBackgroundGroup(canvas)
     if (!img) return
+    const bg = findBackgroundGroup(canvas)
 
     const caching = !options.preview && !options.hideSoftboxForCssOverlay
-    img.set({
-      objectCaching: caching,
-      opacity: options.hideSoftboxForCssOverlay ? 0 : 1,
-    })
-    bg?.set({ objectCaching: caching })
+    const hide = options.hideSoftboxForCssOverlay
 
-    if (options.hideSoftboxForCssOverlay) {
-      canvas.backgroundColor = "rgba(0,0,0,0)"
-      img.setCoords()
-      bg?.setCoords()
-      if (isFabricCanvasAlive(canvas)) canvas.requestRenderAll()
+    // While CSS overlay is active, hide Fabric softbox once — skip paint + redundant renders.
+    if (hide) {
+      if ((img.opacity ?? 1) !== 0 || canvas.backgroundColor !== "rgba(0,0,0,0)") {
+        img.set({ objectCaching: false, opacity: 0 })
+        bg?.set({ objectCaching: false })
+        canvas.backgroundColor = "rgba(0,0,0,0)"
+        img.setCoords()
+        bg?.setCoords()
+        if (isFabricCanvasAlive(canvas)) canvas.requestRenderAll()
+      }
       return
     }
+
+    img.set({
+      objectCaching: caching,
+      opacity: 1,
+    })
+    bg?.set({ objectCaching: caching })
 
     const el = img.getElement()
     if (!(el instanceof HTMLCanvasElement)) return
@@ -403,6 +430,31 @@ function applySoftboxToFabric(
       console.error("[fabric-canvas] softbox redraw failed", err)
     }
   }
+}
+
+/** Cheap CSS softbox preview — re-renders alone; does not remount Fabric. */
+function SoftboxScrubOverlay() {
+  const softbox = useEditorStore((s) => s.softbox)
+  const softboxScrubbing = useEditorStore((s) => s.softboxScrubbing)
+  const backgroundPreviewUrl = useEditorStore((s) => s.backgroundPreviewUrl)
+
+  if (!softboxScrubbing || backgroundPreviewUrl) return null
+
+  let style: CSSProperties
+  try {
+    style = softboxOverlayStyle(softbox)
+  } catch {
+    return null
+  }
+
+  return (
+    <div
+      aria-hidden
+      data-export-chrome="true"
+      className="pointer-events-none absolute inset-0"
+      style={style}
+    />
+  )
 }
 
 async function buildBackgroundLayer(args: {
@@ -774,13 +826,7 @@ function applyTransformFromLayer(obj: EngineObject, layer: CanvasLayer) {
   })
 }
 
-function EditorFabricCanvas({
-  scale,
-  softbox,
-}: {
-  scale: number
-  softbox: SoftboxSettings
-}) {
+function EditorFabricCanvas({ scale }: { scale: number }) {
   const layers = useEditorStore((s) => s.layers)
   const selectedLayerId = useEditorStore((s) => s.selectedLayerId)
   const flashLayerId = useEditorStore((s) => s.flashLayerId)
@@ -796,7 +842,6 @@ function EditorFabricCanvas({
   const productPreviewUrl = useEditorStore((s) => s.productPreviewUrl)
   const backgroundPreviewUrl = useEditorStore((s) => s.backgroundPreviewUrl)
   const generationEpoch = useEditorStore((s) => s.generationEpoch)
-  const softboxScrubbing = useEditorStore((s) => s.softboxScrubbing)
   const busyKind = useEditorStore((s) => s.busyKind)
   const busyProgress = useEditorStore((s) => s.busyProgress)
   const setBusyKind = useEditorStore((s) => s.setBusyKind)
@@ -815,6 +860,8 @@ function EditorFabricCanvas({
   }>({ layerId: null, wasAlreadySelected: false, moved: false })
   const fittedProductUrlRef = useRef<string | null>(null)
   const sceneKeyRef = useRef<string>("")
+  /** Consecutive silent scene recoveries — capped to avoid loops. */
+  const sceneRecoveriesRef = useRef(0)
   /** Bumped after each successful scene rebuild — ZIP waits on this. */
   const sceneEpochRef = useRef(0)
   const scaleRef = useRef(scale)
@@ -1061,6 +1108,60 @@ function EditorFabricCanvas({
       if (layer.chip) startChipInlineEdit(target, layer)
     })
 
+    /** Delete/Backspace removes the selection unless IText is actively editing. */
+    const onCanvasKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Backspace" && event.key !== "Delete") return
+
+      const domTarget = event.target
+      if (
+        domTarget instanceof HTMLElement &&
+        (domTarget.isContentEditable ||
+          domTarget.tagName === "INPUT" ||
+          domTarget.tagName === "TEXTAREA" ||
+          domTarget.tagName === "SELECT")
+      ) {
+        return
+      }
+
+      const active = canvas.getActiveObject() as
+        | (EngineObject & { isEditing?: boolean })
+        | undefined
+      if (!active) return
+      // While editing text, let Backspace/Delete remove characters.
+      if (active.isEditing === true) return
+      if (isSmartGuideObject(active) || active.layerRole === "background") {
+        return
+      }
+
+      event.preventDefault()
+      event.stopPropagation()
+
+      const targets = (canvas.getActiveObjects() as EngineObject[]).filter(
+        (obj) =>
+          !isSmartGuideObject(obj) &&
+          obj.layerRole !== "background" &&
+          (obj as IText).isEditing !== true
+      )
+      if (targets.length === 0) return
+
+      const layerIds = targets
+        .map((obj) => obj.layerId)
+        .filter((id): id is string => Boolean(id))
+
+      for (const obj of targets) {
+        canvas.remove(obj)
+      }
+      canvas.discardActiveObject()
+      canvas.requestRenderAll()
+
+      const { removeLayer } = useEditorStore.getState()
+      for (const id of layerIds) {
+        removeLayer(id)
+      }
+    }
+
+    window.addEventListener("keydown", onCanvasKeyDown)
+
     registerFabricExporter({
       getCanvas: () => fabricRef.current,
       getSceneEpoch: () => sceneEpochRef.current,
@@ -1075,6 +1176,7 @@ function EditorFabricCanvas({
     })
 
     return () => {
+      window.removeEventListener("keydown", onCanvasKeyDown)
       if (guideRaf) cancelAnimationFrame(guideRaf)
       registerFabricExporter(null)
       try {
@@ -1179,21 +1281,21 @@ function EditorFabricCanvas({
             const latest =
               useEditorStore.getState().layers.find((l) => l.id === layer.id) ??
               layer
-            const product = await safeBuildLayer(() =>
-              buildProductObject(latest, productPreviewUrl)
+            const product = await safeBuildLayer(latest, (l) =>
+              buildProductObject(l, productPreviewUrl)
             )
             if (product) built.push(product)
             continue
           }
 
           if (layer.type === "text") {
-            const text = await safeBuildLayer(() => buildTextObject(layer))
+            const text = await safeBuildLayer(layer, (l) => buildTextObject(l))
             if (text) built.push(text)
             continue
           }
 
           if (layer.type === "shape" && layer.chip) {
-            const chip = await safeBuildLayer(() => buildChipObject(layer))
+            const chip = await safeBuildLayer(layer, (l) => buildChipObject(l))
             if (chip) built.push(chip)
           }
         }
@@ -1223,6 +1325,7 @@ function EditorFabricCanvas({
         )
         canvas.calcOffset()
         sceneEpochRef.current += 1
+        sceneRecoveriesRef.current = 0
         setSceneError(null)
         const busy = useEditorStore.getState().busyKind
         if (busy === "generating" || busy === "loading-image") {
@@ -1230,11 +1333,25 @@ function EditorFabricCanvas({
         }
       } catch (err) {
         if (cancelled) return
-        const message =
-          err instanceof Error ? err.message : "Не удалось собрать сцену холста"
-        setSceneError(message)
         if (process.env.NODE_ENV !== "production") {
           console.error("[fabric-canvas] scene rebuild failed", err)
+        }
+        if (sceneRecoveriesRef.current >= 3) {
+          setSceneError(
+            err instanceof Error
+              ? err.message
+              : "Не удалось собрать сцену холста"
+          )
+          return
+        }
+        sceneRecoveriesRef.current += 1
+        // Silent recover: reset selected layer + softbox, then rebuild — no crash plate.
+        recoverCanvasAfterRenderError(
+          useEditorStore.getState().selectedLayerId
+        )
+        if (!cancelled) {
+          setSceneError(null)
+          setRebuildNonce((n) => n + 1)
         }
       }
     }
@@ -1255,36 +1372,84 @@ function EditorFabricCanvas({
     setBusyKind,
   ])
 
-  // Softbox-only updates: CSS overlay while scrubbing + in-place paint via rAF (no layer rebuild).
+  // Softbox updates: imperative store.subscribe — does not re-render this Fabric host.
+  // Debounce + rAF coalesce paints; scrubbing uses CSS overlay (sibling) instead of heavy paint.
   useEffect(() => {
-    const canvas = fabricRef.current
-    if (!canvas || !ready || !isFabricCanvasAlive(canvas)) return
+    if (!ready) return
 
-    const useCssOverlay = softboxScrubbing && !backgroundPreviewUrl
+    let debounceTimer = 0
     let raf = 0
+    let lastScrubbing: boolean | null = null
 
-    const run = () => {
+    const runApply = () => {
       raf = 0
       try {
-        if (!isFabricCanvasAlive(fabricRef.current)) return
-        applySoftboxToFabric(fabricRef.current!, softbox, {
-          preview: softboxScrubbing,
+        const canvas = fabricRef.current
+        if (!isFabricCanvasAlive(canvas)) return
+        const state = useEditorStore.getState()
+        const useCssOverlay =
+          state.softboxScrubbing && !state.backgroundPreviewUrl
+        applySoftboxToFabric(canvas!, state.softbox, {
+          preview: state.softboxScrubbing,
           hideSoftboxForCssOverlay: useCssOverlay,
         })
       } catch (err) {
         if (process.env.NODE_ENV !== "production") {
-          console.error("[fabric-canvas] softbox rAF failed", err)
+          console.error("[fabric-canvas] softbox apply failed", err)
         }
       }
     }
 
-    // Always coalesce onto one animation frame — never mutate layer structure here.
-    raf = requestAnimationFrame(run)
+    const schedule = (immediate: boolean) => {
+      const state = useEditorStore.getState()
+      const scrubbing = state.softboxScrubbing
+      const scrubbingChanged = lastScrubbing !== scrubbing
+      lastScrubbing = scrubbing
+
+      // Mid-scrub value ticks: CSS overlay (SoftboxScrubOverlay) is the preview —
+      // do not touch Fabric at all after the initial hide on scrub start.
+      if (scrubbing && !scrubbingChanged && !immediate) {
+        return
+      }
+
+      window.clearTimeout(debounceTimer)
+      if (raf) {
+        cancelAnimationFrame(raf)
+        raf = 0
+      }
+
+      if (immediate || scrubbingChanged) {
+        raf = requestAnimationFrame(runApply)
+        return
+      }
+
+      debounceTimer = window.setTimeout(() => {
+        debounceTimer = 0
+        raf = requestAnimationFrame(runApply)
+      }, SOFTBOX_UPDATE_MS)
+    }
+
+    schedule(true)
+
+    const unsub = useEditorStore.subscribe((state, prev) => {
+      if (
+        state.softbox === prev.softbox &&
+        state.softboxScrubbing === prev.softboxScrubbing &&
+        state.backgroundPreviewUrl === prev.backgroundPreviewUrl
+      ) {
+        return
+      }
+      // Flush final paint as soon as scrub ends.
+      const scrubEnded = prev.softboxScrubbing && !state.softboxScrubbing
+      schedule(scrubEnded)
+    })
 
     return () => {
+      unsub()
+      window.clearTimeout(debounceTimer)
       if (raf) cancelAnimationFrame(raf)
     }
-  }, [ready, softbox, softboxScrubbing, backgroundPreviewUrl])
+  }, [ready])
 
   // Undo / external transform patches → Fabric objects
   useEffect(() => {
@@ -1361,14 +1526,7 @@ function EditorFabricCanvas({
           height: CANVAS_HEIGHT * scale,
         }}
       >
-        {softboxScrubbing && !backgroundPreviewUrl ? (
-          <div
-            aria-hidden
-            data-export-chrome="true"
-            className="pointer-events-none absolute inset-0"
-            style={softboxOverlayStyle(softbox)}
-          />
-        ) : null}
+        <SoftboxScrubOverlay />
         <canvas ref={canvasElRef} className="relative" />
       </div>
 

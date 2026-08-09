@@ -83,17 +83,23 @@ def build_product_card_parser_service(
         cfg.competitor_audit_proxy_urls or cfg.stock_parser_proxy_urls
     )
     timeout = cfg.stock_parser_timeout_seconds
+    delay_min = cfg.stock_parser_request_delay_min_seconds
+    delay_max = cfg.stock_parser_request_delay_max_seconds
 
     wb = WildberriesDeepClient(
         card_base_url=cfg.stock_parser_wb_card_base_url,
         dest=cfg.stock_parser_wb_dest,
         timeout_seconds=timeout,
         proxy_pool=proxy_pool,
+        request_delay_min_seconds=delay_min,
+        request_delay_max_seconds=delay_max,
     )
     ozon = OzonDeepClient(
         base_url=cfg.stock_parser_ozon_api_base_url,
         timeout_seconds=timeout,
         proxy_pool=proxy_pool,
+        request_delay_min_seconds=delay_min,
+        request_delay_max_seconds=delay_max,
     )
     return ProductCardParserService(
         scrapers={

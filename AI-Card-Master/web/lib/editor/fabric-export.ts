@@ -40,6 +40,15 @@ export function getFabricSceneEpoch(): number {
   return activeExporter?.getSceneEpoch() ?? 0
 }
 
+/** Live Fabric instance for the editor canvas (null if unmounted / not ready). */
+export function getActiveFabricCanvas(): FabricCanvas | null {
+  try {
+    return activeExporter?.getCanvas() ?? null
+  } catch {
+    return null
+  }
+}
+
 export function isFabricExporterReady(): boolean {
   const canvas = activeExporter?.getCanvas() ?? null
   if (!canvas || !activeExporter) return false

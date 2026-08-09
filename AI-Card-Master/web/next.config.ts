@@ -7,6 +7,11 @@ const nextConfig: NextConfig = {
     root: path.join(__dirname),
   },
   allowedDevOrigins: ["127.0.0.1", "localhost"],
+  serverExternalPackages: [
+    "puppeteer",
+    "puppeteer-extra",
+    "puppeteer-extra-plugin-stealth",
+  ],
 };
 
 export default nextConfig;

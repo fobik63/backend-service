@@ -14,11 +14,16 @@ export const NETWORK_ERROR_MESSAGES = {
 type ApiErrorBody = {
   detail?: string | { msg?: string }[];
   message?: string;
+  /** Flat parser / domain errors, e.g. `{ "error": "Товар не найден…" }`. */
+  error?: string;
 };
 
 function detailFromBody(data: unknown): string | null {
   if (!data || typeof data !== "object") return null;
   const body = data as ApiErrorBody;
+  if (typeof body.error === "string" && body.error.trim()) {
+    return body.error.trim();
+  }
   if (typeof body.message === "string" && body.message.trim()) {
     return body.message.trim();
   }

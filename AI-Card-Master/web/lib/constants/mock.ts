@@ -19,9 +19,6 @@ export const MOCK_PRODUCT_IMAGE = DEFAULT_PRODUCT_CUTOUT
 
 export const MOCK_GENERATE_DELAY_MS = 2500
 
-/** Delay for marketplace product parse in mock mode. */
-export const MOCK_PARSE_DELAY_MS = 900
-
 /** Delay for Eye of God spy enqueue/poll demo. */
 export const MOCK_EYE_OF_GOD_DELAY_MS = 1100
 
@@ -40,9 +37,34 @@ export type MockEyeOfGodCompetitor = {
   brand?: string | null
   url?: string | null
   price_rub?: number | null
+  feedbacks?: number | null
+  estimated_purchases?: number | null
+  estimated_revenue_rub?: number | null
+  is_niche_revenue_leader?: boolean
   conversion_triggers?: string[]
   weaknesses?: string[]
   advice_reliability_pct?: number
+}
+
+export type MockBuyerPain = {
+  rank: number
+  title: string
+  summary: string
+  evidence_quotes: string[]
+}
+
+export type MockInfographicOffer = {
+  pain_rank: number
+  offer_text: string
+}
+
+export type MockCompetitorPains = {
+  pains: MockBuyerPain[]
+  recommendations: MockInfographicOffer[]
+  provider: string
+  model_name: string
+  input_tokens: number
+  output_tokens: number
 }
 
 export type MockEyeOfGodDashboard = {
@@ -77,6 +99,10 @@ export const MOCK_EYE_OF_GOD_DASHBOARD: MockEyeOfGodDashboard = {
       brand: "Sage Mist",
       url: "https://www.wildberries.ru/catalog/178902345/detail.aspx",
       price_rub: 590,
+      feedbacks: 3200,
+      estimated_purchases: 40000,
+      estimated_revenue_rub: 23_600_000,
+      is_niche_revenue_leader: true,
       conversion_triggers: ["24ч увлажнение", "Эко-формула"],
       weaknesses: ["Нет до/после на первом слайде"],
       advice_reliability_pct: 84,
@@ -88,6 +114,10 @@ export const MOCK_EYE_OF_GOD_DASHBOARD: MockEyeOfGodDashboard = {
       title: "Крем для рук увлажняющий 100 мл",
       brand: "HydraLab",
       price_rub: 449,
+      feedbacks: 1800,
+      estimated_purchases: 22500,
+      estimated_revenue_rub: 10_102_500,
+      is_niche_revenue_leader: false,
       conversion_triggers: ["До/после", "Без парабенов"],
       weaknesses: ["Мелкий шрифт оффера"],
       advice_reliability_pct: 78,
@@ -99,9 +129,43 @@ export const MOCK_EYE_OF_GOD_DASHBOARD: MockEyeOfGodDashboard = {
       title: "Крем для рук с маслом ши",
       brand: "SoftCare",
       price_rub: 520,
+      feedbacks: 950,
+      estimated_purchases: 11875,
+      estimated_revenue_rub: 6_175_000,
+      is_niche_revenue_leader: false,
       conversion_triggers: ["Питание 12ч", "Быстро впитывается"],
       weaknesses: ["Слабый контраст плашек"],
       advice_reliability_pct: 71,
+    },
+    {
+      rank: 4,
+      article: "188776655",
+      marketplace: "wildberries",
+      title: "Крем-бальзам для сухой кожи рук",
+      brand: "Dermolux",
+      price_rub: 390,
+      feedbacks: 720,
+      estimated_purchases: 9000,
+      estimated_revenue_rub: 3_510_000,
+      is_niche_revenue_leader: false,
+      conversion_triggers: ["Аптечный уход", "Заживление трещин"],
+      weaknesses: ["Нет оффера на объём"],
+      advice_reliability_pct: 66,
+    },
+    {
+      rank: 5,
+      article: "167554433",
+      marketplace: "wildberries",
+      title: "Крем для рук с мочевиной 10%",
+      brand: "UreaCare",
+      price_rub: 610,
+      feedbacks: 540,
+      estimated_purchases: 6750,
+      estimated_revenue_rub: 4_117_500,
+      is_niche_revenue_leader: false,
+      conversion_triggers: ["Мочевина 10%", "Для трещин"],
+      weaknesses: ["Слабый первый слайд"],
+      advice_reliability_pct: 62,
     },
   ],
   badge_patterns: [
@@ -165,29 +229,55 @@ export const MOCK_EYE_OF_GOD_DASHBOARD: MockEyeOfGodDashboard = {
   notes: ["mock_demo"],
 }
 
-/**
- * Fake WB/Ozon parse payload — photo goes into the cutout, metadata fills
- * the product form so demos skip manual entry.
- */
-export const MOCK_PARSED_PRODUCT = {
-  marketplace: "wildberries" as const,
-  sku: "178902345",
-  product_url: "https://www.wildberries.ru/catalog/178902345/detail.aspx",
-  title: "Крем для рук Sage Mist 75 мл с экстрактом шалфея",
-  brand: "Sage Mist",
-  description:
-    "Оригинальное описание продавца: питательный крем для рук с экстрактом " +
-    "шалфея и маслами. Подходит для ежедневного ухода, быстро впитывается, " +
-    "не оставляет липкости. Объём 75 мл.",
-  characteristics: [
-    { name: "Категория", value: "Кремы для рук" },
-    { name: "Бренд", value: "Sage Mist" },
-    { name: "Объём", value: "75 мл" },
-    { name: "Страна бренда", value: "Россия" },
+/** Demo LLM pains + badge offers for «Глаз Бога» niche analysis. */
+export const MOCK_COMPETITOR_PAINS: MockCompetitorPains = {
+  pains: [
+    {
+      rank: 1,
+      title: "Жидкая текстура, стекает с рук",
+      summary:
+        "Покупатели жалуются, что крем слишком жидкий и не остаётся на коже — ощущение «напрасно намазал».",
+      evidence_quotes: [
+        "жидкий, стекает с рук",
+        "как вода, ничего не остаётся",
+      ],
+    },
+    {
+      rank: 2,
+      title: "Химический / резкий запах",
+      summary:
+        "Негатив по отдушке: «пахнет аптекой», «химия», из‑за запаха товар не донашивают.",
+      evidence_quotes: ["плохо пахнет химией", "резкий запах"],
+    },
+    {
+      rank: 3,
+      title: "Слабое увлажнение — эффект не держится",
+      summary:
+        "Через 30–60 минут кожа снова сухая; ожидают «24ч» и не получают.",
+      evidence_quotes: [
+        "не увлажняет, кожа снова сухая через час",
+        "эффект на полчаса",
+      ],
+    },
   ],
-  image_urls: [MOCK_PRODUCT_IMAGE, MOCK_CARD_IMAGE],
-  source_image_urls: [] as string[],
-  cached: true,
+  recommendations: [
+    {
+      pain_rank: 1,
+      offer_text: "Густая текстура — не стекает",
+    },
+    {
+      pain_rank: 2,
+      offer_text: "Мягкий аромат без химии",
+    },
+    {
+      pain_rank: 3,
+      offer_text: "Увлажнение до 24 часов",
+    },
+  ],
+  provider: "mock",
+  model_name: "mock-pains",
+  input_tokens: 0,
+  output_tokens: 0,
 }
 
 /** Minimal identity requested for mock login. */

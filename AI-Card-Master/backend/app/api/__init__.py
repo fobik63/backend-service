@@ -6,6 +6,7 @@ from app.api.admin import router as admin_router
 from app.api.admin import security_status_ws_router as admin_security_ws_router
 from app.api.ai import router as ai_router
 from app.api.ai_strategy import router as ai_strategy_router
+from app.api.analytics import analytics_alias_router
 from app.api.analytics import router as analytics_router
 from app.api.auth import auth_alias_router
 from app.api.auth import router as auth_router
@@ -53,6 +54,7 @@ __all__ = [
     "ab_tests_router",
     "ai_router",
     "ai_strategy_router",
+    "analytics_alias_router",
     "analytics_router",
     "auth_alias_router",
     "auth_router",

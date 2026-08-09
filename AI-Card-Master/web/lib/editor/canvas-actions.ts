@@ -3,12 +3,79 @@ import {
   TEXT_PRESETS,
   nextBadgePosition,
 } from "@/lib/constants/mock-editor"
-import { useEditorStore } from "@/lib/store/editor-store"
+import {
+  useEditorStore,
+  type EditorProductMeta,
+} from "@/lib/store/editor-store"
 import {
   DEFAULT_TEXT_STYLE,
   type CanvasLayer,
   type FeatureChipVariant,
 } from "@/types/canvas"
+
+const AI_PRODUCT_CONTEXT_MARKER = "--- Контекст товара ---"
+
+/** Build an AI-infographic prompt from marketplace product fields. */
+export function buildProductInfographicPrompt(
+  meta: Pick<EditorProductMeta, "title" | "brand" | "category" | "description">
+): string {
+  const title = meta.title.trim()
+  const brand = meta.brand.trim()
+  const category = meta.category.trim()
+  const description = meta.description.trim()
+  if (!title && !brand && !description) return ""
+
+  const lines: string[] = [
+    "Создай инфографику для карточки маркетплейса.",
+  ]
+  if (brand) lines.push(`Бренд: ${brand}`)
+  if (title) lines.push(`Товар: ${title}`)
+  if (category) lines.push(`Категория: ${category}`)
+  if (description) {
+    lines.push("", "Описание и ключевые свойства:", description)
+  }
+  return lines.join("\n").trim()
+}
+
+/** Seed PromptBar with product context after a successful parse. */
+export function seedAiPromptFromProduct(
+  meta: Pick<EditorProductMeta, "title" | "brand" | "category" | "description">
+): void {
+  const prompt = buildProductInfographicPrompt(meta)
+  if (!prompt || typeof window === "undefined") return
+  window.dispatchEvent(
+    new CustomEvent("editor:seed-prompt", { detail: prompt }),
+  )
+}
+
+/**
+ * Ensure generate requests always carry product description as AI context,
+ * even if the user shortened the visible prompt after seeding.
+ */
+export function enrichPromptWithProductContext(
+  prompt: string,
+  meta: Pick<EditorProductMeta, "title" | "brand" | "category" | "description">
+): string {
+  const trimmed = prompt.trim()
+  const description = meta.description.trim()
+  if (!description) return trimmed
+  if (trimmed.includes(description)) return trimmed
+
+  const brand = meta.brand.trim()
+  const title = meta.title.trim()
+  const category = meta.category.trim()
+  const contextLines = [
+    AI_PRODUCT_CONTEXT_MARKER,
+    brand ? `Бренд: ${brand}` : null,
+    title ? `Товар: ${title}` : null,
+    category ? `Категория: ${category}` : null,
+    "Описание:",
+    description,
+  ].filter((line): line is string => Boolean(line))
+
+  if (!trimmed) return contextLines.join("\n")
+  return `${trimmed}\n\n${contextLines.join("\n")}`
+}
 
 function normalizeBadgeLabel(label: string): string {
   return label.trim().toLocaleLowerCase("ru-RU").replace(/\s+/g, " ")

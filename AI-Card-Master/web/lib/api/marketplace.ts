@@ -4,8 +4,6 @@ import {
   delay,
   IS_MOCK,
   MOCK_GENERATE_DELAY_MS,
-  MOCK_PARSE_DELAY_MS,
-  MOCK_PARSED_PRODUCT,
   MOCK_SEO_RESULT,
 } from "@/lib/constants/mock"
 
@@ -41,8 +39,11 @@ export type FetchProductResponse = {
   marketplace: "wildberries" | "ozon"
   sku: string
   product_url: string
+  /** Normalized name from marketplace parsers. */
+  name?: string
   title: string
   brand?: string | null
+  category?: string | null
   description?: string | null
   characteristics?: { name: string; value: string }[]
   source_image_urls?: string[]
@@ -80,32 +81,33 @@ export function categoryFromCharacteristics(
   return found?.trim() || fallback
 }
 
-/** Article / URL → structured card (S3-backed images when available). */
+/**
+ * Bare numeric articles cannot be marketplace-detected from the string alone.
+ * Default to WB so the editor «артикул» flow works with `platform: auto`.
+ */
+function resolveParsePlatform(
+  input: string,
+  platform: "auto" | "wb" | "ozon",
+): "auto" | "wb" | "ozon" {
+  if (platform !== "auto") return platform
+  return /^\d{5,15}$/.test(input.trim()) ? "wb" : "auto"
+}
+
+/**
+ * Article / URL → structured card via FastAPI ``POST /api/v1/parser/fetch``.
+ * Auth bearer is attached by ``apiClient``; 404 body is
+ * ``{ error: "Товар не найден или заблокирован" }``.
+ */
 export async function fetchProductByArticle(
   input: string,
   platform: "auto" | "wb" | "ozon" = "auto",
 ): Promise<FetchProductResponse> {
-  if (IS_MOCK) {
-    await delay(MOCK_PARSE_DELAY_MS)
-    void platform
-    const trimmed = input.trim()
-    return {
-      ...MOCK_PARSED_PRODUCT,
-      characteristics: MOCK_PARSED_PRODUCT.characteristics.map((row) => ({
-        ...row,
-      })),
-      image_urls: [...MOCK_PARSED_PRODUCT.image_urls],
-      source_image_urls: [...MOCK_PARSED_PRODUCT.source_image_urls],
-      sku: /^\d{6,}$/.test(trimmed) ? trimmed : MOCK_PARSED_PRODUCT.sku,
-      product_url: trimmed.startsWith("http")
-        ? trimmed
-        : MOCK_PARSED_PRODUCT.product_url,
-    }
-  }
+  const trimmed = input.trim()
+  const resolvedPlatform = resolveParsePlatform(trimmed, platform)
 
   const { data } = await apiClient.post<FetchProductResponse>(
     "/parser/fetch",
-    { input, platform },
+    { input: trimmed, platform: resolvedPlatform },
     { timeout: 120_000, skipErrorToast: true },
   )
   return data

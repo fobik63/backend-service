@@ -73,6 +73,7 @@ def test_build_dashboard_aggregates_badges_triggers_keywords() -> None:
             title="Крем для рук увлажнение",
             brand="BrandA",
             price_rub=499.0,
+            feedbacks=100,
         ),
         CompetitorDiscoveryHit(
             rank=2,
@@ -82,6 +83,7 @@ def test_build_dashboard_aggregates_badges_triggers_keywords() -> None:
             title="Крем для рук питание",
             brand="BrandB",
             price_rub=590.0,
+            feedbacks=2000,
         ),
     ]
     scrapes = [
@@ -126,6 +128,14 @@ def test_build_dashboard_aggregates_badges_triggers_keywords() -> None:
 
     assert dashboard.competitors_analyzed == 2
     assert len(dashboard.competitors) == 2
+    assert dashboard.competitors[0].feedbacks == 100
+    assert dashboard.competitors[0].estimated_purchases == 1250
+    assert dashboard.competitors[0].estimated_revenue_rub == 623_750.0
+    assert dashboard.competitors[0].is_niche_revenue_leader is False
+    # 2000 × 12.5 × 590 = 14_750_000 — niche leader by heuristic GMV
+    assert dashboard.competitors[1].estimated_purchases == 25_000
+    assert dashboard.competitors[1].estimated_revenue_rub == 14_750_000.0
+    assert dashboard.competitors[1].is_niche_revenue_leader is True
     assert dashboard.badge_patterns
     assert any("парабенов" in item.text.casefold() for item in dashboard.badge_patterns)
     assert dashboard.strong_triggers

@@ -35,6 +35,8 @@ import {
 } from "@/components/ui/sheet"
 import { TEXT_PRESETS } from "@/lib/constants/mock-editor"
 import { addTextPresetToCanvas } from "@/lib/editor/canvas-actions"
+import { SOFTBOX_UPDATE_MS } from "@/lib/editor/softbox"
+import { useDebounce } from "@/lib/hooks/use-debounce"
 import { useI18n } from "@/lib/i18n"
 import {
   useEditorStore,
@@ -207,10 +209,11 @@ function SoftboxParamsSection() {
     (s) => s.commitHistoryTransaction,
   )
 
+  // Local slider state — UI updates immediately without thrashing the Fabric host.
   const [draft, setDraft] = useState<SoftboxSettings>(softbox)
   const draftRef = useRef(draft)
   const scrubbingRef = useRef(false)
-  const rafRef = useRef(0)
+  const debouncedDraft = useDebounce(draft, SOFTBOX_UPDATE_MS)
   const disabled = !draft.enabled
 
   useEffect(() => {
@@ -221,11 +224,19 @@ function SoftboxParamsSection() {
 
   useEffect(() => {
     return () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current)
       if (scrubbingRef.current) {
         scrubbingRef.current = false
-        useEditorStore.getState().setSoftboxScrubbing(false)
-        useEditorStore.getState().commitHistoryTransaction()
+        const store = useEditorStore.getState()
+        store.setSoftbox({
+          intensity: draftRef.current.intensity,
+          colorTempK: draftRef.current.colorTempK,
+          lightAngle: draftRef.current.lightAngle,
+          softboxDiffusion: draftRef.current.softboxDiffusion,
+          lightElevation: draftRef.current.lightElevation,
+          enabled: draftRef.current.enabled,
+        })
+        store.setSoftboxScrubbing(false)
+        store.commitHistoryTransaction()
       }
     }
   }, [])
@@ -241,13 +252,18 @@ function SoftboxParamsSection() {
     })
   }
 
-  const scheduleStoreCommit = () => {
-    if (rafRef.current) return
-    rafRef.current = requestAnimationFrame(() => {
-      rafRef.current = 0
-      pushDraftToStore(draftRef.current)
+  // Debounced store commit while scrubbing — canvas softbox applies from store, not every input tick.
+  useEffect(() => {
+    if (!scrubbingRef.current) return
+    useEditorStore.getState().setSoftbox({
+      intensity: debouncedDraft.intensity,
+      colorTempK: debouncedDraft.colorTempK,
+      lightAngle: debouncedDraft.lightAngle,
+      softboxDiffusion: debouncedDraft.softboxDiffusion,
+      lightElevation: debouncedDraft.lightElevation,
+      enabled: debouncedDraft.enabled,
     })
-  }
+  }, [debouncedDraft])
 
   const beginScrub = () => {
     if (scrubbingRef.current) return
@@ -258,10 +274,6 @@ function SoftboxParamsSection() {
 
   const endScrub = () => {
     if (!scrubbingRef.current) return
-    if (rafRef.current) {
-      cancelAnimationFrame(rafRef.current)
-      rafRef.current = 0
-    }
     pushDraftToStore(draftRef.current)
     scrubbingRef.current = false
     setSoftboxScrubbing(false)
@@ -273,7 +285,6 @@ function SoftboxParamsSection() {
     setDraft((prev) => {
       const next = { ...prev, ...patch }
       draftRef.current = next
-      scheduleStoreCommit()
       return next
     })
   }

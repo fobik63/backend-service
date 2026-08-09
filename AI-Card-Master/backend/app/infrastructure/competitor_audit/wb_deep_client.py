@@ -53,15 +53,23 @@ class WildberriesDeepClient:
         proxy_pool: ProxyPool | None = None,
         transport: MobileJsonTransport | None = None,
         max_reviews: int = MAX_REVIEWS_PER_CARD,
+        request_delay_min_seconds: float | None = None,
+        request_delay_max_seconds: float | None = None,
     ) -> None:
         self._card_base_url = card_base_url.rstrip("/")
         self._content_base_url = content_base_url.rstrip("/")
         self._dest = dest
         self._max_reviews = max(1, min(max_reviews, MAX_REVIEWS_PER_CARD))
+        transport_kwargs: dict[str, float] = {}
+        if request_delay_min_seconds is not None:
+            transport_kwargs["request_delay_min_seconds"] = request_delay_min_seconds
+        if request_delay_max_seconds is not None:
+            transport_kwargs["request_delay_max_seconds"] = request_delay_max_seconds
         self._transport = transport or MobileJsonTransport(
             marketplace=ParserMarketplace.WILDBERRIES,
             proxy_pool=proxy_pool,
             timeout_seconds=timeout_seconds,
+            **transport_kwargs,
         )
 
     async def scrape_card(
@@ -136,6 +144,48 @@ class WildberriesDeepClient:
             reviews_high=high,
             scrape_warnings=warnings,
             raw_fragments=raw_fragments,
+        )
+
+    async def fetch_low_rating_reviews(
+        self,
+        article: str,
+        *,
+        limit: int = MAX_REVIEWS_PER_CARD,
+    ) -> list[CompetitorReview]:
+        """Fetch 1–3★ reviews for one nm_id (analytics complaint-corpus path).
+
+        Resolves ``root``/``imt`` via card detail when possible, then pulls
+        feedbacks1/2.wb.ru. Does not scrape gallery/description/specs.
+        """
+
+        raw = str(article).strip()
+        if not raw.isdigit():
+            raise ParserSchemaError(
+                f"Invalid Wildberries article (nm_id): {article!r}",
+                marketplace=ParserMarketplace.WILDBERRIES,
+            )
+        nm_id = int(raw)
+        cap = max(1, min(int(limit), MAX_REVIEWS_PER_CARD))
+
+        root_id = nm_id
+        try:
+            card_payload = await self._fetch_card_detail(nm_id)
+            product = _extract_wb_product(card_payload)
+            rid = product.get("root") or product.get("imt_id") or product.get("imtId")
+            if rid is not None:
+                root_id = int(rid)
+        except (ParserTransportError, ParserHttpError, ParserSchemaError) as exc:
+            logger.info(
+                "WB card detail unavailable for nm=%s; trying feedbacks by nm_id: %s",
+                nm_id,
+                exc,
+            )
+
+        feedback_payload = await self._fetch_feedbacks(root_id, nm_id)
+        return _map_wb_feedbacks(
+            feedback_payload,
+            limit=cap,
+            max_rating=3,
         )
 
     async def _fetch_card_detail(self, nm_id: int) -> dict[str, Any]:
@@ -278,7 +328,10 @@ def _map_wb_content(
 
 
 def _map_wb_feedbacks(
-    payload: dict[str, Any], *, limit: int
+    payload: dict[str, Any],
+    *,
+    limit: int,
+    max_rating: int | None = None,
 ) -> list[CompetitorReview]:
     items = payload.get("feedbacks") or payload.get("data") or []
     if isinstance(items, dict):
@@ -302,6 +355,8 @@ def _map_wb_feedbacks(
         except (TypeError, ValueError):
             continue
         if rating < 1 or rating > 5:
+            continue
+        if max_rating is not None and rating > max_rating:
             continue
         text = str(item.get("text") or item.get("comment") or "").strip()
         pros = item.get("pros") or item.get("advantages")

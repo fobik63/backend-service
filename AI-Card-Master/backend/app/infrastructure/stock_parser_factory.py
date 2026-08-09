@@ -29,6 +29,8 @@ def build_stock_parser_service(db_session: AsyncSession) -> StockParserService:
     settings = get_settings()
     proxy_pool = ProxyPool.from_csv(settings.stock_parser_proxy_urls)
     timeout = settings.stock_parser_timeout_seconds
+    delay_min = settings.stock_parser_request_delay_min_seconds
+    delay_max = settings.stock_parser_request_delay_max_seconds
 
     parsers = {
         ParserMarketplace.WILDBERRIES: WildberriesMobileClient(
@@ -36,11 +38,15 @@ def build_stock_parser_service(db_session: AsyncSession) -> StockParserService:
             dest=settings.stock_parser_wb_dest,
             timeout_seconds=timeout,
             proxy_pool=proxy_pool,
+            request_delay_min_seconds=delay_min,
+            request_delay_max_seconds=delay_max,
         ),
         ParserMarketplace.OZON: OzonMobileClient(
             base_url=settings.stock_parser_ozon_api_base_url,
             timeout_seconds=timeout,
             proxy_pool=proxy_pool,
+            request_delay_min_seconds=delay_min,
+            request_delay_max_seconds=delay_max,
         ),
     }
 

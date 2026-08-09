@@ -1,9 +1,15 @@
 "use client"
 
+import { AnimatePresence } from "framer-motion"
 import { Loader2, PackageSearch } from "lucide-react"
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 
+import {
+  AnalysisStatusBar,
+  FadeInBlock,
+  ProductMetaSkeleton,
+} from "@/components/editor/analysis-loading"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -12,17 +18,56 @@ import {
   fetchProductByArticle,
   getApiErrorMessage,
 } from "@/lib/api"
+import { seedAiPromptFromProduct } from "@/lib/editor/canvas-actions"
 import { useI18n } from "@/lib/i18n"
 import { useEditorStore } from "@/lib/store/editor-store"
+
+const PARSER_STATUS_KEYS = [
+  "editor.parserStatusCollecting",
+  "editor.parserStatusReading",
+  "editor.parserStatusFilling",
+] as const
 
 function ProductParserSection() {
   const { t } = useI18n()
   const productMeta = useEditorStore((s) => s.productMeta)
   const setProductMeta = useEditorStore((s) => s.setProductMeta)
   const applyParsedProduct = useEditorStore((s) => s.applyParsedProduct)
+  const setAiStudioBusy = useEditorStore((s) => s.setAiStudioBusy)
+  const generating = useEditorStore((s) => s.busyKind === "generating")
 
   const [articleInput, setArticleInput] = useState("")
   const [parsing, setParsing] = useState(false)
+  const [statusStep, setStatusStep] = useState(0)
+  const parsingRef = useRef(false)
+
+  const locked = parsing || generating
+
+  useEffect(() => {
+    parsingRef.current = parsing
+  }, [parsing])
+
+  useEffect(() => {
+    return () => {
+      if (parsingRef.current) setAiStudioBusy(false)
+    }
+  }, [setAiStudioBusy])
+
+  useEffect(() => {
+    if (!parsing) {
+      setStatusStep(0)
+      return
+    }
+
+    setStatusStep(0)
+    const timers = [
+      window.setTimeout(() => setStatusStep(1), 4500),
+      window.setTimeout(() => setStatusStep(2), 10000),
+    ]
+    return () => {
+      for (const id of timers) window.clearTimeout(id)
+    }
+  }, [parsing])
 
   const handleParse = async () => {
     const value = articleInput.trim()
@@ -30,8 +75,10 @@ function ProductParserSection() {
       toast.error(t("editor.parserInputRequired"))
       return
     }
+    if (parsing) return
 
     setParsing(true)
+    setAiStudioBusy(true)
     try {
       const product = await fetchProductByArticle(value, "auto")
       const images = [
@@ -39,30 +86,49 @@ function ProductParserSection() {
         ...(product.source_image_urls ?? []),
       ].filter((url, index, all) => url && all.indexOf(url) === index)
 
-      if (images.length === 0) {
-        toast.error(t("editor.parserNoImages"))
-        return
-      }
+      const name = (product.name || product.title || "").trim()
+      const category =
+        (product.category || "").trim() ||
+        categoryFromCharacteristics(product.characteristics)
+
+      const brand = product.brand ?? ""
+      const description = product.description ?? ""
 
       applyParsedProduct({
         images,
-        title: product.title,
-        category: categoryFromCharacteristics(product.characteristics),
-        brand: product.brand ?? "",
-        description: product.description ?? "",
+        title: name,
+        category,
+        brand,
+        description,
       })
-      toast.success(
-        t("editor.parserSuccess", {
-          title: product.title,
-          count: String(images.length),
-        }),
-      )
+      seedAiPromptFromProduct({
+        title: name,
+        category,
+        brand,
+        description,
+      })
+
+      if (images.length === 0) {
+        toast.message(t("editor.parserSuccessNoImages", { title: name }))
+      } else {
+        toast.success(
+          t("editor.parserSuccess", {
+            title: name,
+            count: String(images.length),
+          }),
+        )
+      }
     } catch (error) {
-      toast.error(getApiErrorMessage(error, t("editor.parserError")))
+      toast.error(getApiErrorMessage(error, t("editor.parserError")), {
+        description: t("editor.parserErrorHint"),
+      })
     } finally {
       setParsing(false)
+      setAiStudioBusy(false)
     }
   }
+
+  const statusLabel = t(PARSER_STATUS_KEYS[statusStep] ?? PARSER_STATUS_KEYS[0])
 
   return (
     <section className="space-y-2.5">
@@ -83,15 +149,17 @@ function ProductParserSection() {
           onChange={(e) => setArticleInput(e.target.value)}
           placeholder={t("editor.parserPlaceholder")}
           aria-label={t("editor.parserPlaceholder")}
+          disabled={locked}
           className="h-9 border-white/10 bg-white/[0.04] text-xs"
           onKeyDown={(e) => {
-            if (e.key === "Enter") void handleParse()
+            if (e.key === "Enter" && !locked) void handleParse()
           }}
         />
         <Button
           type="button"
           size="sm"
-          disabled={parsing}
+          disabled={locked}
+          aria-busy={parsing}
           onClick={() => void handleParse()}
           className="w-full gap-1.5"
         >
@@ -104,57 +172,90 @@ function ProductParserSection() {
         </Button>
       </div>
 
-      <div className="space-y-2 border-t border-white/8 pt-2.5">
-        <label className="block space-y-1">
-          <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-            {t("editor.parserProductTitle")}
-          </span>
-          <Input
-            value={productMeta.title}
-            onChange={(e) => setProductMeta({ title: e.target.value })}
-            placeholder={t("editor.parserProductTitlePlaceholder")}
-            className="h-8 border-white/10 bg-white/[0.04] text-xs"
+      <AnimatePresence mode="wait">
+        {parsing ? (
+          <AnalysisStatusBar
+            key="parser-status"
+            label={statusLabel}
+            accent="emerald"
+            step={statusStep + 1}
+            totalSteps={PARSER_STATUS_KEYS.length}
           />
-        </label>
+        ) : null}
+      </AnimatePresence>
 
-        <div className="grid grid-cols-2 gap-2">
-          <label className="block space-y-1">
-            <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-              {t("editor.parserCategory")}
-            </span>
-            <Input
-              value={productMeta.category}
-              onChange={(e) => setProductMeta({ category: e.target.value })}
-              placeholder={t("editor.parserCategoryPlaceholder")}
-              className="h-8 border-white/10 bg-white/[0.04] text-xs"
-            />
-          </label>
-          <label className="block space-y-1">
-            <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-              {t("editor.parserBrand")}
-            </span>
-            <Input
-              value={productMeta.brand}
-              onChange={(e) => setProductMeta({ brand: e.target.value })}
-              placeholder={t("editor.parserBrandPlaceholder")}
-              className="h-8 border-white/10 bg-white/[0.04] text-xs"
-            />
-          </label>
-        </div>
+      <AnimatePresence mode="wait">
+        {parsing ? (
+          <FadeInBlock
+            key="parser-skeleton"
+            aria-busy="true"
+            aria-live="polite"
+          >
+            <ProductMetaSkeleton />
+          </FadeInBlock>
+        ) : (
+          <FadeInBlock
+            key="parser-form"
+            className="space-y-2 border-t border-white/8 pt-2.5"
+          >
+            <label className="block space-y-1">
+              <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+                {t("editor.parserProductTitle")}
+              </span>
+              <Input
+                value={productMeta.title}
+                onChange={(e) => setProductMeta({ title: e.target.value })}
+                placeholder={t("editor.parserProductTitlePlaceholder")}
+                disabled={locked}
+                className="h-8 border-white/10 bg-white/[0.04] text-xs"
+              />
+            </label>
 
-        <label className="block space-y-1">
-          <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-            {t("editor.parserDescription")}
-          </span>
-          <Textarea
-            value={productMeta.description}
-            onChange={(e) => setProductMeta({ description: e.target.value })}
-            placeholder={t("editor.parserDescriptionPlaceholder")}
-            rows={4}
-            className="min-h-[5.5rem] resize-y border-white/10 bg-white/[0.04] text-xs"
-          />
-        </label>
-      </div>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="block space-y-1">
+                <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+                  {t("editor.parserCategory")}
+                </span>
+                <Input
+                  value={productMeta.category}
+                  onChange={(e) => setProductMeta({ category: e.target.value })}
+                  placeholder={t("editor.parserCategoryPlaceholder")}
+                  disabled={locked}
+                  className="h-8 border-white/10 bg-white/[0.04] text-xs"
+                />
+              </label>
+              <label className="block space-y-1">
+                <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+                  {t("editor.parserBrand")}
+                </span>
+                <Input
+                  value={productMeta.brand}
+                  onChange={(e) => setProductMeta({ brand: e.target.value })}
+                  placeholder={t("editor.parserBrandPlaceholder")}
+                  disabled={locked}
+                  className="h-8 border-white/10 bg-white/[0.04] text-xs"
+                />
+              </label>
+            </div>
+
+            <label className="block space-y-1">
+              <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+                {t("editor.parserDescription")}
+              </span>
+              <Textarea
+                value={productMeta.description}
+                onChange={(e) =>
+                  setProductMeta({ description: e.target.value })
+                }
+                placeholder={t("editor.parserDescriptionPlaceholder")}
+                rows={4}
+                disabled={locked}
+                className="min-h-[5.5rem] resize-y border-white/10 bg-white/[0.04] text-xs"
+              />
+            </label>
+          </FadeInBlock>
+        )}
+      </AnimatePresence>
     </section>
   )
 }

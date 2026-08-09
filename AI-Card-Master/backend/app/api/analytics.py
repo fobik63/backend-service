@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
@@ -16,6 +17,17 @@ from app.application.competitor_audit_service import (
     CompetitorAuditService,
     CompetitorAuditValidationError,
 )
+from app.application.competitor_pains_llm_service import CompetitorPainsLlmService
+from app.application.competitor_reviews_service import (
+    CompetitorReviewsCollectionService,
+    CompetitorReviewsUpstreamError,
+    CompetitorReviewsValidationError,
+)
+from app.application.competitors_search_service import (
+    CompetitorsSearchService,
+    CompetitorsSearchUpstreamError,
+    CompetitorsSearchValidationError,
+)
 from app.application.style_analytics_service import (
     StyleAnalyticsService,
     StyleAnalyticsValidationError,
@@ -24,8 +36,31 @@ from app.application.style_analytics_service import (
 from app.config.style_presets import load_style_presets
 from app.domain.competitor_audit import (
     MAX_LINKS_PER_REQUEST,
+    MAX_REVIEWS_PER_CARD,
     CompetitorAuditEnqueueRequest,
     CompetitorAuditJobStatus,
+)
+from app.domain.competitor_pains_llm import (
+    MAX_PRODUCT_CONTEXT_LENGTH,
+    CompetitorPainsAnalysisRequest,
+    CompetitorPainsConfigurationError,
+    CompetitorPainsLlmProvider,
+    CompetitorPainsUpstreamError,
+    CompetitorPainsValidationError,
+)
+from app.domain.competitor_reviews_collection import (
+    MAX_ARTICLES,
+    MAX_COMPLAINT_TEXTS,
+    MIN_ARTICLES,
+    CompetitorReviewsCollectionRequest,
+)
+from app.domain.competitors_search import (
+    DEFAULT_COMPETITORS_LIMIT,
+    MAX_COMPETITORS_LIMIT,
+    MIN_COMPETITORS_LIMIT,
+    MIN_QUERY_LENGTH,
+    MAX_QUERY_LENGTH,
+    CompetitorsSearchRequest,
 )
 from app.domain.eye_of_god_spy import (
     DEFAULT_TOP_COMPETITORS,
@@ -36,11 +71,19 @@ from app.domain.eye_of_god_spy import (
 from app.domain.style_analytics import InsightMetric, InsightPriority
 from app.infrastructure.celery_app import celery_app
 from app.infrastructure.competitor_audit_factory import build_competitor_audit_service
+from app.infrastructure.competitor_pains_llm_factory import (
+    build_competitor_pains_llm_service,
+)
+from app.infrastructure.competitor_reviews_factory import (
+    build_competitor_reviews_service,
+)
+from app.infrastructure.competitors_search_factory import build_competitors_search_service
 from app.infrastructure.persistence.style_analytics_repository import StyleAnalyticsRepository
 from app.models.database import get_db_session
 from app.models.user import User
 
 router = APIRouter(prefix="/api/v1/analytics", tags=["analytics"])
+analytics_alias_router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
 
 class StrictAPIModel(BaseModel):
@@ -246,6 +289,129 @@ class EyeOfGodSpyJobResponse(StrictAPIModel):
     completed_at: str | None = None
 
 
+class CompetitorsSearchBody(StrictAPIModel):
+    """Keyword search for TOP-N Wildberries competitor cards."""
+
+    query: str = Field(
+        min_length=MIN_QUERY_LENGTH,
+        max_length=MAX_QUERY_LENGTH,
+        description='Keyword query, e.g. "крем для рук увлажняющий".',
+    )
+    limit: int = Field(
+        default=DEFAULT_COMPETITORS_LIMIT,
+        ge=MIN_COMPETITORS_LIMIT,
+        le=MAX_COMPETITORS_LIMIT,
+        description="How many TOP competitors to return (default 10).",
+    )
+
+
+class CompetitorCardResponse(StrictAPIModel):
+    """One competitor card from WB search SERP."""
+
+    rank: int = Field(ge=1, le=MAX_COMPETITORS_LIMIT)
+    article: str
+    title: str | None = None
+    brand: str | None = None
+    price_rub: float | None = None
+    rating: float | None = None
+    feedbacks: int | None = None
+    url: str
+    estimated_purchases: int | None = Field(
+        default=None,
+        description="Heuristic: feedbacks × ~12.5 (until MPSTATS/MarketGuru).",
+    )
+    estimated_revenue_rub: float | None = Field(
+        default=None,
+        description="Оценочная выручка: estimated_purchases × price_rub.",
+    )
+
+
+class CompetitorsSearchResponse(StrictAPIModel):
+    """TOP-N competitor cards: article, price, rating, feedbacks."""
+
+    query: str
+    count: int = Field(ge=0, le=MAX_COMPETITORS_LIMIT)
+    competitors: list[CompetitorCardResponse]
+
+
+class CompetitorReviewsCollectionBody(StrictAPIModel):
+    """Collect 1–3★ complaint texts for TOP-N competitor nm_ids."""
+
+    articles: list[str] = Field(
+        min_length=MIN_ARTICLES,
+        max_length=MAX_ARTICLES,
+        description="nm_id list from TOP-10 competitors search.",
+    )
+    max_reviews_per_article: int = Field(
+        default=MAX_REVIEWS_PER_CARD,
+        ge=1,
+        le=MAX_REVIEWS_PER_CARD,
+    )
+
+
+class CompetitorArticleReviewsResponse(StrictAPIModel):
+    """Per-competitor harvest summary."""
+
+    article: str
+    reviews_fetched: int = Field(ge=0)
+    complaint_texts: list[str]
+    warning: str | None = None
+
+
+class CompetitorReviewsCollectionResponse(StrictAPIModel):
+    """Unified complaint-text corpus for downstream pain analysis."""
+
+    articles: list[str]
+    competitors_processed: int = Field(ge=0, le=MAX_ARTICLES)
+    reviews_fetched: int = Field(ge=0)
+    complaint_texts: list[str] = Field(
+        description=(
+            'Flat list of complaint strings, e.g. "жидкий", "плохо пахнет".'
+        ),
+        max_length=MAX_COMPLAINT_TEXTS,
+    )
+    by_article: list[CompetitorArticleReviewsResponse]
+    warnings: list[str] = Field(default_factory=list)
+
+
+class CompetitorPainsAnalyzeBody(StrictAPIModel):
+    """POST body: complaint corpus from ``/competitors/reviews``."""
+
+    complaint_texts: list[str] = Field(
+        min_length=1,
+        max_length=MAX_COMPLAINT_TEXTS,
+        description="Negative review complaint strings from competitor cards.",
+    )
+    product_context: str = Field(
+        default="",
+        max_length=MAX_PRODUCT_CONTEXT_LENGTH,
+        description="Optional brief about OUR product to tailor offers.",
+    )
+
+
+class BuyerPainResponse(StrictAPIModel):
+    rank: int = Field(ge=1, le=3)
+    title: str
+    summary: str
+    evidence_quotes: list[str] = Field(default_factory=list)
+
+
+class InfographicOfferResponse(StrictAPIModel):
+    pain_rank: int = Field(ge=1, le=3)
+    offer_text: str
+
+
+class CompetitorPainsAnalysisResponse(StrictAPIModel):
+    """Structured LLM JSON: 3 buyer pains + matching infographic offers."""
+
+    pains: list[BuyerPainResponse]
+    recommendations: list[InfographicOfferResponse]
+    provider: CompetitorPainsLlmProvider
+    model_name: str
+    input_tokens: int = Field(ge=0)
+    output_tokens: int = Field(ge=0)
+
+
 async def get_style_analytics_service(
     db_session: AsyncSession = Depends(get_db_session),
 ) -> StyleAnalyticsService:
@@ -271,6 +437,211 @@ def get_competitor_audit_service(
         enqueue_analysis=False,
         require_claude_client=False,
     )
+
+
+async def get_competitors_search_service() -> AsyncIterator[CompetitorsSearchService]:
+    """Request-scoped WB keyword competitor search (closes HTTP transport)."""
+
+    service = build_competitors_search_service()
+    try:
+        yield service
+    finally:
+        await service.aclose()
+
+
+async def get_competitor_reviews_service() -> AsyncIterator[
+    CompetitorReviewsCollectionService
+]:
+    """Request-scoped WB low-rating reviews collector (closes HTTP transport)."""
+
+    service = build_competitor_reviews_service()
+    try:
+        yield service
+    finally:
+        await service.aclose()
+
+
+async def get_competitor_pains_llm_service() -> AsyncIterator[CompetitorPainsLlmService]:
+    """Request-scoped OpenAI / local-Ollama competitor pains analyzer."""
+
+    try:
+        service = build_competitor_pains_llm_service()
+    except CompetitorPainsConfigurationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    try:
+        yield service
+    finally:
+        await service.aclose()
+
+
+def _competitors_search_response(result) -> CompetitorsSearchResponse:
+    return CompetitorsSearchResponse(
+        query=result.query,
+        count=result.count,
+        competitors=[
+            CompetitorCardResponse(
+                rank=card.rank,
+                article=card.article,
+                title=card.title,
+                brand=card.brand,
+                price_rub=card.price_rub,
+                rating=card.rating,
+                feedbacks=card.feedbacks,
+                url=card.url,
+                estimated_purchases=card.estimated_purchases,
+                estimated_revenue_rub=card.estimated_revenue_rub,
+            )
+            for card in result.competitors
+        ],
+    )
+
+
+async def _run_competitors_search(
+    *,
+    query: str,
+    limit: int,
+    service: CompetitorsSearchService,
+) -> CompetitorsSearchResponse:
+    try:
+        request = CompetitorsSearchRequest(query=query, limit=limit)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=exc.errors(),
+        ) from exc
+
+    try:
+        result = await service.search(request)
+    except CompetitorsSearchValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    except CompetitorsSearchUpstreamError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+
+    return _competitors_search_response(result)
+
+
+def _competitor_reviews_response(result) -> CompetitorReviewsCollectionResponse:
+    return CompetitorReviewsCollectionResponse(
+        articles=list(result.articles),
+        competitors_processed=result.competitors_processed,
+        reviews_fetched=result.reviews_fetched,
+        complaint_texts=list(result.complaint_texts),
+        by_article=[
+            CompetitorArticleReviewsResponse(
+                article=item.article,
+                reviews_fetched=item.reviews_fetched,
+                complaint_texts=list(item.complaint_texts),
+                warning=item.warning,
+            )
+            for item in result.by_article
+        ],
+        warnings=list(result.warnings),
+    )
+
+
+async def _run_competitor_reviews_collection(
+    *,
+    articles: list[str],
+    max_reviews_per_article: int,
+    service: CompetitorReviewsCollectionService,
+) -> CompetitorReviewsCollectionResponse:
+    try:
+        request = CompetitorReviewsCollectionRequest(
+            articles=articles,
+            max_reviews_per_article=max_reviews_per_article,
+        )
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=exc.errors(),
+        ) from exc
+
+    try:
+        result = await service.collect_complaint_texts(request)
+    except CompetitorReviewsValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    except CompetitorReviewsUpstreamError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+
+    return _competitor_reviews_response(result)
+
+
+def _competitor_pains_response(result) -> CompetitorPainsAnalysisResponse:
+    return CompetitorPainsAnalysisResponse(
+        pains=[
+            BuyerPainResponse(
+                rank=item.rank,
+                title=item.title,
+                summary=item.summary,
+                evidence_quotes=list(item.evidence_quotes),
+            )
+            for item in result.pains
+        ],
+        recommendations=[
+            InfographicOfferResponse(
+                pain_rank=item.pain_rank,
+                offer_text=item.offer_text,
+            )
+            for item in result.recommendations
+        ],
+        provider=result.provider,
+        model_name=result.model_name,
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
+    )
+
+
+async def _run_competitor_pains_analysis(
+    *,
+    complaint_texts: list[str],
+    product_context: str,
+    service: CompetitorPainsLlmService,
+) -> CompetitorPainsAnalysisResponse:
+    try:
+        request = CompetitorPainsAnalysisRequest(
+            complaint_texts=complaint_texts,
+            product_context=product_context,
+        )
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=exc.errors(),
+        ) from exc
+
+    try:
+        result = await service.analyze_negative_reviews(request)
+    except CompetitorPainsValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    except CompetitorPainsConfigurationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    except CompetitorPainsUpstreamError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+
+    return _competitor_pains_response(result)
 
 
 def _analyze_links_job_response(job) -> AnalyzeLinksJobResponse:
@@ -569,4 +940,204 @@ async def get_style_preset_analytics(
             )
             for item in payload.ai_recommendations
         ],
+    )
+
+
+@router.post(
+    "/competitors",
+    response_model=CompetitorsSearchResponse,
+    status_code=status.HTTP_200_OK,
+    summary="TOP-10 WB competitors by keyword (search.wb.ru)",
+)
+async def search_competitors(
+    body: CompetitorsSearchBody,
+    current_user: User = Depends(get_current_user),
+    service: CompetitorsSearchService = Depends(get_competitors_search_service),
+) -> CompetitorsSearchResponse:
+    """Search Wildberries catalog and return TOP-N competitor cards.
+
+    Uses ``https://search.wb.ru/exactmatch/ru/common/v7/search`` (fallback v5)
+    and returns article, price, rating, and feedback count for each hit.
+    """
+
+    _ = current_user
+    return await _run_competitors_search(
+        query=body.query,
+        limit=body.limit,
+        service=service,
+    )
+
+
+@router.get(
+    "/competitors",
+    response_model=CompetitorsSearchResponse,
+    status_code=status.HTTP_200_OK,
+    summary="TOP-10 WB competitors by keyword (GET)",
+)
+async def search_competitors_get(
+    query: str = Query(
+        ...,
+        min_length=MIN_QUERY_LENGTH,
+        max_length=MAX_QUERY_LENGTH,
+        description='Keyword query, e.g. "крем для рук увлажняющий".',
+    ),
+    limit: int = Query(
+        default=DEFAULT_COMPETITORS_LIMIT,
+        ge=MIN_COMPETITORS_LIMIT,
+        le=MAX_COMPETITORS_LIMIT,
+    ),
+    current_user: User = Depends(get_current_user),
+    service: CompetitorsSearchService = Depends(get_competitors_search_service),
+) -> CompetitorsSearchResponse:
+    """GET variant of keyword competitor search."""
+
+    _ = current_user
+    return await _run_competitors_search(
+        query=query,
+        limit=limit,
+        service=service,
+    )
+
+
+@router.post(
+    "/competitors/reviews",
+    response_model=CompetitorReviewsCollectionResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Collect 1–3★ complaint texts for TOP-N competitors",
+)
+async def collect_competitor_reviews(
+    body: CompetitorReviewsCollectionBody,
+    current_user: User = Depends(get_current_user),
+    service: CompetitorReviewsCollectionService = Depends(
+        get_competitor_reviews_service
+    ),
+) -> CompetitorReviewsCollectionResponse:
+    """Asynchronously fetch low-rating reviews for TOP-10 competitor nm_ids.
+
+    Focuses on 1–3★ feedbacks and returns a flat ``complaint_texts`` array
+    (e.g. "жидкий", "плохо пахнет") for downstream pain analysis.
+    """
+
+    _ = current_user
+    return await _run_competitor_reviews_collection(
+        articles=body.articles,
+        max_reviews_per_article=body.max_reviews_per_article,
+        service=service,
+    )
+
+
+@analytics_alias_router.post(
+    "/competitors/reviews",
+    response_model=CompetitorReviewsCollectionResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Collect 1–3★ complaint texts (alias)",
+    description="Alias of ``POST /api/v1/analytics/competitors/reviews``.",
+)
+async def collect_competitor_reviews_alias(
+    body: CompetitorReviewsCollectionBody,
+    current_user: User = Depends(get_current_user),
+    service: CompetitorReviewsCollectionService = Depends(
+        get_competitor_reviews_service
+    ),
+) -> CompetitorReviewsCollectionResponse:
+    _ = current_user
+    return await _run_competitor_reviews_collection(
+        articles=body.articles,
+        max_reviews_per_article=body.max_reviews_per_article,
+        service=service,
+    )
+
+
+@router.post(
+    "/competitors/reviews/analyze",
+    response_model=CompetitorPainsAnalysisResponse,
+    status_code=status.HTTP_200_OK,
+    summary="LLM: 3 competitor pains + infographic offers",
+)
+async def analyze_competitor_negative_reviews(
+    body: CompetitorPainsAnalyzeBody,
+    current_user: User = Depends(get_current_user),
+    service: CompetitorPainsLlmService = Depends(get_competitor_pains_llm_service),
+) -> CompetitorPainsAnalysisResponse:
+    """Send collected competitor complaint texts to OpenAI or local Ollama (GPU).
+
+    System prompt: marketplace analyst → 3 main buyer pains + concrete
+    infographic offer texts for OUR card. Returns structured JSON.
+    """
+
+    _ = current_user
+    return await _run_competitor_pains_analysis(
+        complaint_texts=body.complaint_texts,
+        product_context=body.product_context,
+        service=service,
+    )
+
+
+@analytics_alias_router.post(
+    "/competitors/reviews/analyze",
+    response_model=CompetitorPainsAnalysisResponse,
+    status_code=status.HTTP_200_OK,
+    summary="LLM: 3 competitor pains + offers (alias)",
+    description="Alias of ``POST /api/v1/analytics/competitors/reviews/analyze``.",
+)
+async def analyze_competitor_negative_reviews_alias(
+    body: CompetitorPainsAnalyzeBody,
+    current_user: User = Depends(get_current_user),
+    service: CompetitorPainsLlmService = Depends(get_competitor_pains_llm_service),
+) -> CompetitorPainsAnalysisResponse:
+    _ = current_user
+    return await _run_competitor_pains_analysis(
+        complaint_texts=body.complaint_texts,
+        product_context=body.product_context,
+        service=service,
+    )
+
+
+@analytics_alias_router.post(
+    "/competitors",
+    response_model=CompetitorsSearchResponse,
+    status_code=status.HTTP_200_OK,
+    summary="TOP-10 WB competitors by keyword (alias)",
+    description="Alias of ``POST /api/v1/analytics/competitors``.",
+)
+async def search_competitors_alias(
+    body: CompetitorsSearchBody,
+    current_user: User = Depends(get_current_user),
+    service: CompetitorsSearchService = Depends(get_competitors_search_service),
+) -> CompetitorsSearchResponse:
+    _ = current_user
+    return await _run_competitors_search(
+        query=body.query,
+        limit=body.limit,
+        service=service,
+    )
+
+
+@analytics_alias_router.get(
+    "/competitors",
+    response_model=CompetitorsSearchResponse,
+    status_code=status.HTTP_200_OK,
+    summary="TOP-10 WB competitors by keyword (GET alias)",
+    description="Alias of ``GET /api/v1/analytics/competitors``.",
+)
+async def search_competitors_get_alias(
+    query: str = Query(
+        ...,
+        min_length=MIN_QUERY_LENGTH,
+        max_length=MAX_QUERY_LENGTH,
+        description='Keyword query, e.g. "крем для рук увлажняющий".',
+    ),
+    limit: int = Query(
+        default=DEFAULT_COMPETITORS_LIMIT,
+        ge=MIN_COMPETITORS_LIMIT,
+        le=MAX_COMPETITORS_LIMIT,
+    ),
+    current_user: User = Depends(get_current_user),
+    service: CompetitorsSearchService = Depends(get_competitors_search_service),
+) -> CompetitorsSearchResponse:
+    _ = current_user
+    return await _run_competitors_search(
+        query=query,
+        limit=limit,
+        service=service,
     )

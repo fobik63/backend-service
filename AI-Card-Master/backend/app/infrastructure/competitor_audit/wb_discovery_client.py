@@ -37,13 +37,21 @@ class WildberriesCompetitorDiscovery:
         timeout_seconds: float = 20.0,
         proxy_pool: ProxyPool | None = None,
         transport: MobileJsonTransport | None = None,
+        request_delay_min_seconds: float | None = None,
+        request_delay_max_seconds: float | None = None,
     ) -> None:
         self._search_base_url = search_base_url.rstrip("/")
         self._dest = dest
+        transport_kwargs: dict[str, float] = {}
+        if request_delay_min_seconds is not None:
+            transport_kwargs["request_delay_min_seconds"] = request_delay_min_seconds
+        if request_delay_max_seconds is not None:
+            transport_kwargs["request_delay_max_seconds"] = request_delay_max_seconds
         self._transport = transport or MobileJsonTransport(
             marketplace=ParserMarketplace.WILDBERRIES,
             proxy_pool=proxy_pool,
             timeout_seconds=timeout_seconds,
+            **transport_kwargs,
         )
 
     async def discover_by_query(
@@ -128,10 +136,18 @@ class WildberriesCompetitorDiscovery:
         }
         try:
             return await self._transport.get_json(url, params=params)
-        except (ParserTransportError, ParserHttpError):
-            # Fallback older path used by some WB mobile clients.
-            fallback = f"{self._search_base_url}/exactmatch/ru/common/v5/search"
-            return await self._transport.get_json(fallback, params=params)
+        except (ParserTransportError, ParserHttpError) as primary_exc:
+            # Fallback older paths used by some WB clients.
+            last_exc: Exception = primary_exc
+            for version in ("v5", "v4"):
+                fallback = (
+                    f"{self._search_base_url}/exactmatch/ru/common/{version}/search"
+                )
+                try:
+                    return await self._transport.get_json(fallback, params=params)
+                except (ParserTransportError, ParserHttpError) as exc:
+                    last_exc = exc
+            raise last_exc from primary_exc
 
     async def aclose(self) -> None:
         await self._transport.aclose()

@@ -260,11 +260,21 @@ function EditorAiBody({ projectTitle }: EditorAiPanelProps) {
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-3 py-3">
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-3 py-3">
         {/* Keep PromptBar mounted so seed-prompt events apply from other tabs. */}
-        <div className={cn(tab !== "generate" && "hidden")}>
-          <PromptBar variant="panel" projectTitle={projectTitle} />
-          <div className="mt-4 border-t border-white/8 pt-3">
+        <div
+          className={cn(
+            tab === "generate"
+              ? "flex min-h-0 flex-1 flex-col gap-0"
+              : "hidden",
+          )}
+        >
+          <PromptBar
+            variant="panel"
+            projectTitle={projectTitle}
+            className="min-h-0 flex-1"
+          />
+          <div className="mt-4 shrink-0 border-t border-white/8 pt-3">
             <PackParamsSection />
           </div>
         </div>

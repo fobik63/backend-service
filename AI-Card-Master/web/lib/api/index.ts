@@ -48,11 +48,18 @@ export type {
   SeoTargetPlatform,
 } from "./marketplace";
 export {
+  analyzeCompetitorPains,
+  collectCompetitorReviews,
   enqueueEyeOfGodSpy,
   getEyeOfGodSpyJob,
   pollEyeOfGodSpyJob,
+  searchCompetitors,
 } from "./analytics";
 export type {
+  BuyerPain,
+  CompetitorPainsAnalysisResponse,
+  CompetitorsSearchResponse,
+  CompetitorReviewsCollectionResponse,
   EyeOfGodCompetitorSummary,
   EyeOfGodDashboard,
   EyeOfGodDiscoveryHit,
@@ -62,6 +69,8 @@ export type {
   EyeOfGodJobResponse,
   EyeOfGodJobStatus,
   EyeOfGodPlatform,
+  InfographicOffer,
+  NicheCompetitorCard,
 } from "./analytics";
 export {
   getApiErrorMessage,

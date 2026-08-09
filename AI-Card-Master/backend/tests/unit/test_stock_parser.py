@@ -76,6 +76,48 @@ def test_mobile_headers_emulate_apps() -> None:
     assert "ozon" in ozon["User-Agent"].casefold() or "x-o3-app-name" in ozon
 
 
+@pytest.mark.asyncio
+async def test_mobile_transport_throttles_between_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.infrastructure.stock_parser.http_transport import MobileJsonTransport
+
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr("app.infrastructure.stock_parser.http_transport.asyncio.sleep", fake_sleep)
+
+    class _FakeResponse:
+        status_code = 200
+        text = "{}"
+
+        def json(self) -> dict[str, object]:
+            return {"ok": True}
+
+    class _FakeClient:
+        async def get(self, *args: object, **kwargs: object) -> _FakeResponse:
+            return _FakeResponse()
+
+        async def aclose(self) -> None:
+            return None
+
+    transport = MobileJsonTransport(
+        marketplace=ParserMarketplace.WILDBERRIES,
+        request_delay_min_seconds=0.5,
+        request_delay_max_seconds=0.5,
+        client=_FakeClient(),  # type: ignore[arg-type]
+    )
+    await transport.get_json("https://example.test/a")
+    await transport.get_json("https://example.test/b")
+    await transport.aclose()
+
+    # Opening jitter (first) + fixed inter-request delay (second).
+    assert len(sleeps) >= 2
+    assert sleeps[-1] == pytest.approx(0.5)
+
+
 def test_wb_schema_guard_requires_stocks() -> None:
     payload = {
         "data": {

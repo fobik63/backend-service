@@ -1241,6 +1241,18 @@ class Settings(BaseSettings):
         default=20.0,
         alias="STOCK_PARSER_TIMEOUT_SECONDS",
     )
+    # Jittered sleep between sequential WB/Ozon HTTP calls (anti-ban).
+    # Set both to 0 to disable (unit tests / offline fixtures).
+    stock_parser_request_delay_min_seconds: float = Field(
+        default=0.4,
+        alias="STOCK_PARSER_REQUEST_DELAY_MIN_SECONDS",
+        description="Minimum sleep between marketplace scrape requests.",
+    )
+    stock_parser_request_delay_max_seconds: float = Field(
+        default=1.2,
+        alias="STOCK_PARSER_REQUEST_DELAY_MAX_SECONDS",
+        description="Maximum sleep between marketplace scrape requests.",
+    )
     stock_parser_circuit_breaker_threshold: int = Field(
         default=5,
         alias="STOCK_PARSER_CIRCUIT_BREAKER_THRESHOLD",
@@ -2050,12 +2062,25 @@ class Settings(BaseSettings):
         "midjourney_balance_low_threshold",
         "cost_latency_warn_ms",
         "cost_alert_cooldown_seconds",
+        "stock_parser_request_delay_min_seconds",
+        "stock_parser_request_delay_max_seconds",
     )
     @classmethod
     def validate_non_negative_security_status_floats(cls, value: float) -> float:
         if value < 0:
             raise ValueError("Security status numeric settings must be >= 0.")
         return value
+
+    @model_validator(mode="after")
+    def validate_stock_parser_request_delay_range(self) -> "Settings":
+        min_delay = float(self.stock_parser_request_delay_min_seconds)
+        max_delay = float(self.stock_parser_request_delay_max_seconds)
+        if min_delay > max_delay:
+            raise ValueError(
+                "STOCK_PARSER_REQUEST_DELAY_MIN_SECONDS must be <= "
+                "STOCK_PARSER_REQUEST_DELAY_MAX_SECONDS."
+            )
+        return self
 
     @field_validator("cost_generation_spike_ratio", "cost_latency_spike_ratio")
     @classmethod

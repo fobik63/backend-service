@@ -54,6 +54,8 @@ def build_competitor_audit_service(
     )
     timeout = settings.competitor_audit_timeout_seconds
     max_reviews = settings.competitor_audit_max_reviews
+    delay_min = settings.stock_parser_request_delay_min_seconds
+    delay_max = settings.stock_parser_request_delay_max_seconds
 
     if with_scraper:
         scraper: Any = CompetitorDeepScraper(
@@ -64,12 +66,16 @@ def build_competitor_audit_service(
                 timeout_seconds=timeout,
                 proxy_pool=proxy_pool,
                 max_reviews=max_reviews,
+                request_delay_min_seconds=delay_min,
+                request_delay_max_seconds=delay_max,
             ),
             ozon=OzonDeepClient(
                 base_url=settings.stock_parser_ozon_api_base_url,
                 timeout_seconds=timeout,
                 proxy_pool=proxy_pool,
                 max_reviews=max_reviews,
+                request_delay_min_seconds=delay_min,
+                request_delay_max_seconds=delay_max,
             ),
         )
     else:
@@ -104,6 +110,8 @@ def build_competitor_audit_service(
             dest=settings.stock_parser_wb_dest,
             timeout_seconds=timeout,
             proxy_pool=proxy_pool,
+            request_delay_min_seconds=delay_min,
+            request_delay_max_seconds=delay_max,
         )
 
     return CompetitorAuditService(

@@ -126,8 +126,45 @@ describe("editor history", () => {
       brand: "BrandX",
       description: "Source description",
     })
+    // Canvas headline prefers brand over full product title.
     expect(
       state.layers.find((layer) => layer.id === "p0_title")?.text
-    ).toBe("Test Cream")
+    ).toBe("BrandX")
+  })
+
+  it("updates canvas title from parse even without images", () => {
+    useEditorStore.getState().applyParsedProduct({
+      images: [],
+      title: "Long marketplace title",
+      category: "Уход",
+      brand: "Aura",
+      description: "Hydrating cream for dry skin",
+    })
+
+    const state = useEditorStore.getState()
+    expect(state.productMeta.title).toBe("Long marketplace title")
+    expect(state.productMeta.description).toBe(
+      "Hydrating cream for dry skin"
+    )
+    expect(
+      state.layers.find((layer) => layer.id === "p0_title")?.text
+    ).toBe("Aura")
+    expect(state.canUndo).toBe(true)
+  })
+
+  it("falls back to product title when brand is empty", () => {
+    useEditorStore.getState().applyParsedProduct({
+      images: [],
+      title: "Sage Mist Cream",
+      category: "Кремы",
+      brand: "",
+      description: "",
+    })
+
+    expect(
+      useEditorStore
+        .getState()
+        .layers.find((layer) => layer.id === "p0_title")?.text
+    ).toBe("Sage Mist Cream")
   })
 })

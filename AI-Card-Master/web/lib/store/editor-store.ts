@@ -128,6 +128,28 @@ function resizePages(
   return [...pages, ...extras]
 }
 
+/** Main card headline: prefer brand, fall back to product title. */
+export function canvasHeadlineFromMeta(meta: EditorProductMeta): string {
+  return meta.brand.trim() || meta.title.trim()
+}
+
+function isMainTitleLayer(layer: CanvasLayer): boolean {
+  return (
+    layer.type === "text" &&
+    (/title$/i.test(layer.id) || layer.name === "Название")
+  )
+}
+
+function withCanvasTitle(
+  pageLayers: CanvasLayer[],
+  headline: string
+): CanvasLayer[] {
+  if (!headline) return pageLayers
+  return pageLayers.map((layer) =>
+    isMainTitleLayer(layer) ? { ...layer, text: headline } : layer
+  )
+}
+
 type EditorState = {
   projectId: string | null
   /** Editable layer stacks for every pack page (index 0 = page 1). */
@@ -161,6 +183,8 @@ type EditorState = {
   busyKind: EditorBusyKind
   /** 0–100 while generating; null when idle / indeterminate. */
   busyProgress: number | null
+  /** True while Parser / Eye of God long-running requests are in flight. */
+  aiStudioBusy: boolean
   history: EditorHistory
   historyTransaction: EditorSnapshot | null
   canUndo: boolean
@@ -206,6 +230,7 @@ type EditorState = {
   setPackSize: (size: PackSize) => void
   setBusyKind: (kind: EditorBusyKind) => void
   setBusyProgress: (progress: number | null) => void
+  setAiStudioBusy: (busy: boolean) => void
   beginHistoryTransaction: () => void
   commitHistoryTransaction: () => void
   undo: () => void
@@ -217,7 +242,7 @@ type EditorState = {
 
 let flashClearTimer: ReturnType<typeof setTimeout> | null = null
 
-const DEFAULT_SOFTBOX: SoftboxSettings = {
+export const DEFAULT_SOFTBOX: SoftboxSettings = {
   enabled: true,
   lightAngle: 45,
   lightElevation: 55,
@@ -248,6 +273,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   packSize: INITIAL_PACK_SIZE,
   busyKind: "idle",
   busyProgress: null,
+  aiStudioBusy: false,
   history: { past: [], future: [] },
   historyTransaction: null,
   canUndo: false,
@@ -277,6 +303,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       packSize,
       busyKind: "idle",
       busyProgress: null,
+      aiStudioBusy: false,
       history: { past: [], future: [] },
       historyTransaction: null,
       canUndo: false,
@@ -524,9 +551,40 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         brand: brand.trim(),
         description: description.trim(),
       }
+      const headline = canvasHeadlineFromMeta(productMeta)
 
       if (cleaned.length === 0) {
-        return { productMeta }
+        const synced = syncActivePage(
+          state.pages,
+          state.activePageIndex,
+          state.layers
+        )
+        const page0 = withCanvasTitle(synced[0] ?? [], headline)
+        const pages = [page0, ...synced.slice(1)]
+        const layers =
+          state.activePageIndex === 0 ? page0 : state.layers
+        const titleChanged =
+          Boolean(headline) &&
+          (synced[0] ?? []).some(
+            (layer) => isMainTitleLayer(layer) && layer.text !== headline
+          )
+        if (!titleChanged) {
+          return { productMeta }
+        }
+        const history = pushPast(state.history, snapshotOf(state))
+        return {
+          productMeta,
+          pages,
+          layers,
+          selectedLayerId:
+            state.activePageIndex === 0
+              ? defaultSelectedLayerId(layers)
+              : state.selectedLayerId,
+          flashLayerId: null,
+          history,
+          canUndo: true,
+          canRedo: false,
+        }
       }
 
       const packSize = clampPackSize(cleaned.length)
@@ -537,15 +595,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       )
       const resized = resizePages(synced, packSize)
       const history = pushPast(state.history, snapshotOf(state))
-      const layers = (resized[0] ?? []).map((layer) => {
-        if (layer.type !== "text") return layer
-        if (!/title$/i.test(layer.id) && layer.name !== "Название") {
-          return layer
-        }
-        return productMeta.title
-          ? { ...layer, text: productMeta.title }
-          : layer
-      })
+      const layers = withCanvasTitle(resized[0] ?? [], headline)
       const pages = [layers, ...resized.slice(1)]
 
       return {
@@ -606,6 +656,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       busyProgress: kind === "idle" ? null : state.busyProgress,
     })),
   setBusyProgress: (progress) => set({ busyProgress: progress }),
+  setAiStudioBusy: (busy) => set({ aiStudioBusy: busy }),
   beginHistoryTransaction: () =>
     set((state) => {
       if (state.historyTransaction) return state
@@ -715,6 +766,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       packSize: INITIAL_PACK_SIZE,
       busyKind: "idle",
       busyProgress: null,
+      aiStudioBusy: false,
       projectId: null,
       history: { past: [], future: [] },
       historyTransaction: null,

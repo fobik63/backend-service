@@ -41,13 +41,21 @@ class WildberriesMobileClient:
         timeout_seconds: float = 20.0,
         proxy_pool: ProxyPool | None = None,
         transport: MobileJsonTransport | None = None,
+        request_delay_min_seconds: float | None = None,
+        request_delay_max_seconds: float | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._dest = dest
+        transport_kwargs: dict[str, float] = {}
+        if request_delay_min_seconds is not None:
+            transport_kwargs["request_delay_min_seconds"] = request_delay_min_seconds
+        if request_delay_max_seconds is not None:
+            transport_kwargs["request_delay_max_seconds"] = request_delay_max_seconds
         self._transport = transport or MobileJsonTransport(
             marketplace=self.marketplace,
             proxy_pool=proxy_pool,
             timeout_seconds=timeout_seconds,
+            **transport_kwargs,
         )
 
     async def fetch_sku(self, request: ParseSkuRequest) -> ParsedSkuSnapshot:

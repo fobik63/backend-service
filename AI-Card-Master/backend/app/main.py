@@ -36,6 +36,7 @@ from app.api import (
     admin_security_ws_router,
     ai_router,
     ai_strategy_router,
+    analytics_alias_router,
     analytics_router,
     auth_alias_router,
     auth_router,
@@ -443,6 +444,7 @@ app.include_router(admin_security_ws_router)
 app.include_router(auth_router)
 app.include_router(auth_alias_router)
 app.include_router(analytics_router)
+app.include_router(analytics_alias_router)
 app.include_router(images_router)
 app.include_router(fonts_router)
 app.include_router(templates_router)

@@ -21,6 +21,7 @@ from app.domain.competitor_audit import (
     CompetitorCardScrapeResult,
     CompetitorMarketplace,
 )
+from app.domain.estimated_sales import estimate_purchases, estimate_revenue_rub
 
 DEFAULT_TOP_COMPETITORS = 10
 MAX_TOP_COMPETITORS = MAX_CARDS_PER_JOB
@@ -116,6 +117,11 @@ class EyeOfGodCompetitorCardSummary(PersistedDomainModel):
     brand: str | None = None
     url: str | None = None
     price_rub: float | None = None
+    feedbacks: int | None = None
+    # Heuristic GMV until MPSTATS/MarketGuru: feedbacks × ~12.5 × price.
+    estimated_purchases: int | None = None
+    estimated_revenue_rub: float | None = None
+    is_niche_revenue_leader: bool = False
     conversion_triggers: list[str] = Field(default_factory=list, max_length=8)
     weaknesses: list[str] = Field(default_factory=list, max_length=8)
     advice_reliability_pct: float = Field(default=0.0, ge=0.0, le=100.0)
@@ -246,6 +252,7 @@ def build_eye_of_god_dashboard(
 
         triggers = list(analysis.conversion_triggers[:8]) if analysis else []
         weaknesses = list(analysis.competitor_weaknesses[:8]) if analysis else []
+        feedbacks = hit.feedbacks
         competitors.append(
             EyeOfGodCompetitorCardSummary(
                 rank=hit.rank,
@@ -257,6 +264,12 @@ def build_eye_of_god_dashboard(
                 brand=brand,
                 url=hit.url,
                 price_rub=price,
+                feedbacks=feedbacks,
+                estimated_purchases=estimate_purchases(feedbacks),
+                estimated_revenue_rub=estimate_revenue_rub(
+                    feedbacks=feedbacks,
+                    price_rub=price,
+                ),
                 conversion_triggers=triggers,
                 weaknesses=weaknesses,
                 advice_reliability_pct=(
@@ -314,6 +327,19 @@ def build_eye_of_god_dashboard(
         unique_hooks.append(hook)
         if len(unique_hooks) >= 20:
             break
+
+    # Mark niche revenue leader (max heuristic GMV) for UI highlight.
+    leader_revenue: float | None = None
+    for card in competitors:
+        if card.estimated_revenue_rub is None:
+            continue
+        if leader_revenue is None or card.estimated_revenue_rub > leader_revenue:
+            leader_revenue = card.estimated_revenue_rub
+    if leader_revenue is not None:
+        for card in competitors:
+            if card.estimated_revenue_rub == leader_revenue:
+                card.is_niche_revenue_leader = True
+                break
 
     total = max(len(competitors), 1)
     ai_recommendation = " ".join(recommendation_parts).strip()

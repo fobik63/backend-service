@@ -32,7 +32,7 @@ import {
   type SellerProductDTO,
   type SeoTargetPlatform,
 } from "@/lib/api"
-import { addBadgeToCanvas } from "@/lib/editor/canvas-actions"
+import { addBadgeToCanvas, seedAiPromptFromProduct } from "@/lib/editor/canvas-actions"
 import { useEditorStore } from "@/lib/store/editor-store"
 import { cn } from "@/lib/utils"
 
@@ -164,28 +164,38 @@ function ImportPublishDialog({
         return
       }
 
+      const name = (product.name || product.title || "").trim()
+      const category =
+        (product.category || "").trim() ||
+        categoryFromCharacteristics(product.characteristics)
+      const brand = product.brand ?? ""
+      const description = product.description ?? ""
+
       applyParsedProduct({
         images,
-        title: product.title,
-        category: categoryFromCharacteristics(product.characteristics),
-        brand: product.brand ?? "",
-        description: product.description ?? "",
+        title: name,
+        category,
+        brand,
+        description,
       })
-      setImportedTitle(product.title)
-      const category = categoryFromCharacteristics(product.characteristics)
+      seedAiPromptFromProduct({
+        title: name,
+        category,
+        brand,
+        description,
+      })
+      setImportedTitle(name)
       setImportedCategory(category)
       const features: Record<string, string> = {}
       for (const row of product.characteristics ?? []) {
         if (row.name && row.value) features[row.name] = row.value
       }
       setImportedFeatures(features)
-      if (!seoTitle) setSeoTitle(product.title)
+      if (!seoTitle) setSeoTitle(name)
       if (!seoDescription && product.description) {
         setSeoDescription(product.description)
       }
-      toast.success(
-        `Импортировано: ${product.title} (${images.length} фото)`,
-      )
+      toast.success(`Импортировано: ${name} (${images.length} фото)`)
     } catch (error) {
       toast.error(getApiErrorMessage(error, "Не удалось импортировать товар"))
     } finally {

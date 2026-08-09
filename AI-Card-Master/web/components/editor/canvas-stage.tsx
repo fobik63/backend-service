@@ -10,7 +10,7 @@ import {
 } from "@/components/editor/canvas-toolbar"
 import { EditorCanvas } from "@/components/editor/canvas"
 import { EditorPageStrip } from "@/components/editor/page-strip"
-import { ErrorBoundary } from "@/components/error-boundary"
+import { CanvasErrorBoundary } from "@/components/editor/canvas-error-boundary"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
@@ -188,14 +188,13 @@ function CanvasQuickBar() {
 function EditorCanvasStage() {
   const { t } = useI18n()
   const zoomMode = useEditorStore((s) => s.zoomMode)
-  const softbox = useEditorStore((s) => s.softbox)
+  const projectHydrated = useEditorStore((s) => s.softbox != null)
   const activePageIndex = useEditorStore((s) => s.activePageIndex)
   const productPreviewUrl = useEditorStore((s) => s.productPreviewUrl)
   const busyKind = useEditorStore((s) => s.busyKind)
 
   const viewportRef = useRef<HTMLDivElement>(null)
   const [fitScale, setFitScale] = useState(0.35)
-  const [canvasMountKey, setCanvasMountKey] = useState(0)
 
   useEffect(() => {
     const el = viewportRef.current
@@ -215,7 +214,7 @@ function EditorCanvasStage() {
     return () => ro.disconnect()
   }, [])
 
-  if (!softbox) {
+  if (!projectHydrated) {
     return (
       <div className="flex h-full min-h-0 min-w-0 flex-1 items-center justify-center self-stretch bg-transparent">
         <Skeleton className="h-[min(60vh,520px)] w-[min(45vw,360px)] rounded-xl" />
@@ -242,20 +241,9 @@ function EditorCanvasStage() {
           ref={viewportRef}
           className="flex h-full items-center justify-center overflow-auto p-3 sm:p-4"
         >
-          <ErrorBoundary
-            key={`canvas-boundary-${activePageIndex}-${canvasMountKey}`}
-            resetKey={`${activePageIndex}-${canvasMountKey}`}
-            title="Ошибка элемента холста"
-            description="Один из слоёв не отрисовался. Проект в памяти сохранён — холст можно перезапустить без потери данных."
-            className="min-h-[240px] w-full max-w-full"
-            onReset={() => setCanvasMountKey((k) => k + 1)}
-          >
-            <EditorCanvas
-              key={`page-${activePageIndex}-${canvasMountKey}`}
-              scale={scale}
-              softbox={softbox}
-            />
-          </ErrorBoundary>
+          <CanvasErrorBoundary resetKey={activePageIndex}>
+            <EditorCanvas key={`page-${activePageIndex}`} scale={scale} />
+          </CanvasErrorBoundary>
         </div>
         {showDropzone ? <CanvasPhotoDropzone /> : null}
       </div>

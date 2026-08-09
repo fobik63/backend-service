@@ -1,8 +1,14 @@
-"""Shared httpx transport with mobile headers + rotating proxy pool."""
+"""Shared httpx transport with mobile headers + rotating proxy pool.
+
+Applies a jittered inter-request delay so sequential WB/Ozon calls from a
+single egress IP are less likely to trip marketplace rate limits.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import random
 from typing import Any
 
 import httpx
@@ -17,6 +23,10 @@ from app.infrastructure.stock_parser.proxy_pool import ProxyPool
 
 logger = logging.getLogger(__name__)
 
+# Conservative defaults when callers omit delay settings (local / CI).
+DEFAULT_REQUEST_DELAY_MIN_SECONDS = 0.4
+DEFAULT_REQUEST_DELAY_MAX_SECONDS = 1.2
+
 
 class MobileJsonTransport:
     """Thin async HTTP client dedicated to marketplace mobile JSON endpoints."""
@@ -28,12 +38,19 @@ class MobileJsonTransport:
         proxy_pool: ProxyPool | None = None,
         timeout_seconds: float = 20.0,
         client: httpx.AsyncClient | None = None,
+        request_delay_min_seconds: float = DEFAULT_REQUEST_DELAY_MIN_SECONDS,
+        request_delay_max_seconds: float = DEFAULT_REQUEST_DELAY_MAX_SECONDS,
     ) -> None:
         self._marketplace = marketplace
         self._proxy_pool = proxy_pool or ProxyPool(())
         self._timeout = httpx.Timeout(timeout_seconds)
         self._external_client = client
         self._owned_client: httpx.AsyncClient | None = None
+        min_delay = max(0.0, float(request_delay_min_seconds))
+        max_delay = max(min_delay, float(request_delay_max_seconds))
+        self._delay_min = min_delay
+        self._delay_max = max_delay
+        self._had_prior_request = False
 
     async def _client(self) -> httpx.AsyncClient:
         if self._external_client is not None:
@@ -46,14 +63,34 @@ class MobileJsonTransport:
             )
         return self._owned_client
 
+    async def _throttle(self) -> None:
+        """Sleep a jittered gap between marketplace requests."""
+
+        if self._delay_max <= 0:
+            return
+        if not self._had_prior_request:
+            # Opening jitter so the first hit is not perfectly timed.
+            opening = random.uniform(0.0, min(0.25, self._delay_min or 0.25))
+            if opening > 0:
+                await asyncio.sleep(opening)
+            self._had_prior_request = True
+            return
+
+        delay = random.uniform(self._delay_min, self._delay_max)
+        if delay > 0:
+            await asyncio.sleep(delay)
+        self._had_prior_request = True
+
     async def get_json(
         self,
         url: str,
         *,
         params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """GET JSON with mobile UA; rotate proxy per request when configured."""
+        """GET JSON with rotating mobile UA + optional proxy + request delay."""
 
+        await self._throttle()
+        # Fresh headers (incl. User-Agent) on every call.
         headers = mobile_headers(marketplace=self._marketplace.value)
         proxy = self._proxy_pool.next()
         proxy_url = proxy.as_httpx_proxy() if proxy is not None else None

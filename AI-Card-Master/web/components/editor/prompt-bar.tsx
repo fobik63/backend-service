@@ -36,6 +36,7 @@ import {
   canvasStateToLayers,
   layersToCanvasState,
 } from "@/lib/editor/editor-document"
+import { enrichPromptWithProductContext } from "@/lib/editor/canvas-actions"
 import {
   delay,
   getMockGenerateLayers,
@@ -113,6 +114,7 @@ function PromptBar({
 
   const setBusyKind = useEditorStore((s) => s.setBusyKind)
   const setBusyProgress = useEditorStore((s) => s.setBusyProgress)
+  const aiStudioBusy = useEditorStore((s) => s.aiStudioBusy)
   const applyGenerationResult = useEditorStore((s) => s.applyGenerationResult)
   const commitActivePage = useEditorStore((s) => s.commitActivePage)
   const storeProjectId = useEditorStore((s) => s.projectId)
@@ -122,6 +124,7 @@ function PromptBar({
   const backgroundPreviewUrl = useEditorStore((s) => s.backgroundPreviewUrl)
   const packSize = useEditorStore((s) => s.packSize)
   const activePageIndex = useEditorStore((s) => s.activePageIndex)
+  const productMeta = useEditorStore((s) => s.productMeta)
   const mockRafRef = useRef(0)
 
   useEffect(() => {
@@ -205,7 +208,7 @@ function PromptBar({
       toast.error(t("editor.promptRequired"))
       return
     }
-    if (generating) return
+    if (generating || aiStudioBusy) return
 
     setGenerating(true)
     setBusyKind("generating")
@@ -214,8 +217,9 @@ function PromptBar({
         await runMockGenerate()
       } else {
         setBusyProgress(null)
+        const enriched = enrichPromptWithProductContext(trimmed, productMeta)
         const generated = await generateByPrompt(
-          trimmed,
+          enriched,
           layersToCanvasState(layers, storePreviewUrl, backgroundPreviewUrl),
         )
         applyGenerationResult({
@@ -335,7 +339,7 @@ function PromptBar({
 
   const activeExport =
     exportOptions.find((o) => o.id === exportFormat) ?? exportOptions[0]
-  const busy = generating || exporting || zipping
+  const busy = generating || exporting || zipping || aiStudioBusy
 
   if (variant === "footer") {
     return (
@@ -358,7 +362,7 @@ function PromptBar({
             <Textarea
               id="editor-ai-prompt-footer"
               value={prompt}
-              disabled={generating}
+              disabled={generating || aiStudioBusy}
               placeholder={t("editor.promptPlaceholder")}
               aria-label={t("editor.promptAria")}
               rows={2}
@@ -373,7 +377,7 @@ function PromptBar({
           <div className="flex shrink-0 flex-wrap items-center gap-2">
             <GlassButton
               type="submit"
-              disabled={generating || !prompt.trim()}
+              disabled={generating || aiStudioBusy || !prompt.trim()}
               aria-busy={generating}
             >
               {generating ? (
@@ -416,38 +420,37 @@ function PromptBar({
 
   return (
     <section
-      className={cn("space-y-3", className)}
+      className={cn("flex min-h-0 flex-col gap-3", className)}
       aria-label={t("editor.promptBarAria")}
     >
-      <div className="flex items-center gap-2">
+      <div className="flex shrink-0 items-center gap-2">
         <Sparkles className="size-4 text-muted-foreground" aria-hidden />
         <h3 className="font-heading text-sm font-semibold tracking-tight">
           {t("editor.promptSection")}
         </h3>
-        {IS_MOCK ? (
-          <span className="rounded border border-white/12 bg-white/[0.04] px-2 py-0.5 text-[10px] text-muted-foreground">
-            MOCK
-          </span>
-        ) : null}
       </div>
 
-      <form onSubmit={handleGenerate} className="space-y-2.5">
-        <Textarea
-          id="editor-ai-prompt"
-          value={prompt}
-          disabled={generating}
-          placeholder={t("editor.promptPlaceholder")}
-          aria-label={t("editor.promptAria")}
-          rows={3}
-          onChange={(e) => setPrompt(e.target.value)}
-          className={cn(
-            "min-h-[4.5rem] resize-none border-white/10 bg-white/[0.03] text-xs leading-relaxed",
-            "placeholder:text-muted-foreground/70",
-            "focus-visible:border-white/25 focus-visible:ring-white/15",
-          )}
-        />
+      <form
+        onSubmit={handleGenerate}
+        className="flex min-h-0 flex-1 flex-col gap-2.5"
+      >
+        <div className="flex min-h-[150px] flex-1 flex-col">
+          <Textarea
+            id="editor-ai-prompt"
+            value={prompt}
+            disabled={generating || aiStudioBusy}
+            placeholder={t("editor.promptPlaceholder")}
+            aria-label={t("editor.promptAria")}
+            onChange={(e) => setPrompt(e.target.value)}
+            className={cn(
+              "h-full min-h-[150px] flex-1 resize-none border-white/10 bg-white/[0.03] text-xs leading-relaxed",
+              "placeholder:text-muted-foreground/70",
+              "focus-visible:border-white/25 focus-visible:ring-white/15",
+            )}
+          />
+        </div>
 
-        <div className="grid grid-cols-1 gap-2">
+        <div className="grid shrink-0 grid-cols-1 gap-2">
           <GlassButton
             type="submit"
             size="sm"
@@ -559,12 +562,16 @@ function PromptBar({
           </div>
         </div>
 
-        <p className="text-[10px] text-muted-foreground">
+        <p className="shrink-0 text-[10px] text-muted-foreground">
           {activeExport.label} · {t("export.packPhotos", { count: String(packSize) })}
         </p>
       </form>
 
-      {IS_MOCK && mockSeo ? <MockSeoPreview result={mockSeo} /> : null}
+      {IS_MOCK && mockSeo ? (
+        <div className="shrink-0">
+          <MockSeoPreview result={mockSeo} />
+        </div>
+      ) : null}
     </section>
   )
 }
