@@ -1,6 +1,6 @@
 "use client"
 
-import { ArrowLeft, Languages, Loader2, Redo2, Save, Undo2 } from "lucide-react"
+import { ArrowLeft, Languages, Loader2, Redo2, Save, Undo2, Upload } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useEffect, useState } from "react"
@@ -8,6 +8,7 @@ import { toast } from "sonner"
 
 import { BrandLogo } from "@/components/dashboard/brand-logo"
 import { EditorCanvasStage } from "@/components/editor/canvas-stage"
+import { ImportPublishDialog } from "@/components/editor/import-publish-dialog"
 import { EditorSettingsPanel } from "@/components/editor/settings-panel"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { Button, buttonVariants } from "@/components/ui/button"
@@ -60,6 +61,7 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
   const productPreviewUrl = useEditorStore((s) => s.productPreviewUrl)
   const softbox = useEditorStore((s) => s.softbox)
   const [saving, setSaving] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
   const [remoteDesign, setRemoteDesign] = useState<{
     id: string
     title: string
@@ -281,6 +283,29 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
             </DropdownMenuContent>
           </DropdownMenu>
 
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="hidden gap-1.5 border-white/12 sm:inline-flex"
+            disabled={!canRenderEditorSurface}
+            onClick={() => setImportOpen(true)}
+          >
+            <Upload className="size-3.5" aria-hidden />
+            Импорт и Постинг
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className="sm:hidden"
+            disabled={!canRenderEditorSurface}
+            onClick={() => setImportOpen(true)}
+            aria-label="Импорт и Постинг"
+          >
+            <Upload className="size-4" aria-hidden />
+          </Button>
+
           <GlassButton
             type="button"
             size="sm"
@@ -297,6 +322,12 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
           </GlassButton>
         </div>
       </header>
+
+      <ImportPublishDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        projectTitle={title}
+      />
 
       {canRenderEditorSurface && !loadingProject ? (
         <div className="relative flex min-h-0 flex-1 overflow-hidden">

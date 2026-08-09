@@ -34,6 +34,7 @@ from app.api import (
     account_router,
     admin_router,
     admin_security_ws_router,
+    ai_router,
     ai_strategy_router,
     analytics_router,
     auth_alias_router,
@@ -54,16 +55,20 @@ from app.api import (
     images_router,
     legal_router,
     marketplace_bridge_router,
+    marketplace_publish_router,
     midjourney_webhook_router,
     oracle_router,
     pain_analysis_router,
+    parser_alias_router,
     parser_router,
     payments_router,
     referrals_router,
     relighting_router,
     smart_variants_router,
+    telegram_bot_router,
     templates_router,
     text_generation_router,
+    user_credentials_router,
     visual_audit_router,
     winback_router,
     workspaces_router,
@@ -262,6 +267,48 @@ def apply_alembic_migrations() -> None:
     logger.info("Alembic migrations applied successfully (head)")
 
 
+async def _start_telegram_bot_runtime():
+    """Configure webhook or start long polling for the product Telegram bot."""
+
+    from app.api.telegram_bot import process_telegram_update
+    from app.infrastructure.telegram.bot_client import TelegramBotApiClient
+    from app.infrastructure.telegram.polling import TelegramLongPollingRunner
+
+    settings = get_settings()
+    client = TelegramBotApiClient()
+    if not client.enabled:
+        logger.info("Telegram bot token is not configured; inbound bot disabled")
+        return None
+
+    webhook_url = (settings.telegram_bot_webhook_url or "").strip()
+    if webhook_url:
+        ok = await client.set_webhook(
+            url=webhook_url,
+            secret_token=(settings.telegram_bot_webhook_secret or "").strip() or None,
+            drop_pending_updates=False,
+        )
+        if ok:
+            logger.info("Telegram bot webhook configured: %s", webhook_url)
+        else:
+            logger.warning("Failed to configure Telegram bot webhook")
+        return None
+
+    if not settings.telegram_bot_polling_enabled:
+        logger.info(
+            "Telegram bot inbound disabled "
+            "(set TELEGRAM_BOT_WEBHOOK_URL or TELEGRAM_BOT_POLLING_ENABLED=true)"
+        )
+        return None
+
+    runner = TelegramLongPollingRunner(
+        client,
+        process_telegram_update,
+        poll_timeout_seconds=settings.telegram_bot_poll_timeout_seconds,
+    )
+    runner.start()
+    return runner
+
+
 @asynccontextmanager
 async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
     """Initialize and validate runtime resources.
@@ -298,9 +345,13 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
         except OSError:
             logger.exception("Failed to export OpenAPI schema on startup")
 
+    polling_runner = await _start_telegram_bot_runtime()
+
     try:
         yield
     finally:
+        if polling_runner is not None:
+            await polling_runner.stop()
         await close_ai_engine()
         await close_marketplace_text_service()
         await close_infographic_service()
@@ -396,6 +447,7 @@ app.include_router(templates_router)
 app.include_router(designs_router)
 app.include_router(canvas_router)
 app.include_router(parser_router)
+app.include_router(parser_alias_router)
 app.include_router(legal_router)
 app.include_router(account_router)
 app.include_router(captcha_router)
@@ -404,9 +456,12 @@ app.include_router(referrals_router)
 app.include_router(relighting_router)
 app.include_router(bg_removal_router)
 app.include_router(winback_router)
+app.include_router(telegram_bot_router)
 app.include_router(workspaces_router)
 app.include_router(exports_router)
 app.include_router(marketplace_bridge_router)
+app.include_router(marketplace_publish_router)
+app.include_router(user_credentials_router)
 app.include_router(bulk_generations_router)
 app.include_router(smart_variants_router)
 app.include_router(brand_loras_router)
@@ -415,6 +470,7 @@ app.include_router(claude_analyses_router)
 app.include_router(claude_reasoning_router)
 app.include_router(visual_audit_router)
 app.include_router(oracle_router)
+app.include_router(ai_router)
 app.include_router(ai_strategy_router)
 app.include_router(pain_analysis_router)
 app.include_router(ab_tests_router)

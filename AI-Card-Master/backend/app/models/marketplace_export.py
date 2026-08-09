@@ -92,3 +92,39 @@ class MarketplaceExport(Base):
         server_default=text("CURRENT_TIMESTAMP"),
         index=True,
     )
+
+
+class MarketplacePublication(Base):
+    """Direct publish of images/SEO into an existing WB or Ozon product card."""
+
+    __tablename__ = "marketplace_publications"
+
+    id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    platform: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    product_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    message: Mapped[str] = mapped_column(String(1000), nullable=False)
+    external_task_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    error_logs: Mapped[list[Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'[]'::jsonb"),
+    )
+    request_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+        index=True,
+    )

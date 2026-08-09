@@ -36,6 +36,20 @@ def _fake_request(path: str = "/api/v1/generations") -> Request:
     )
 
 
+def test_marketplace_publish_contracts_are_exposed() -> None:
+    paths = app.openapi()["paths"]
+    assert "/api/user/credentials" in paths
+    assert "get" in paths["/api/user/credentials"]
+    assert "put" in paths["/api/user/credentials"]
+    assert "delete" in paths["/api/user/credentials"]
+    assert "/api/user/credentials/validate" in paths
+    assert "post" in paths["/api/user/credentials/validate"]
+    assert "/api/marketplaces/publish/wb" in paths
+    assert "post" in paths["/api/marketplaces/publish/wb"]
+    assert "/api/marketplaces/publish/ozon" in paths
+    assert "post" in paths["/api/marketplaces/publish/ozon"]
+
+
 def test_generation_and_webhook_contracts_are_exposed() -> None:
     schema = app.openapi()
     paths = schema["paths"]

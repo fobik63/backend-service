@@ -181,6 +181,7 @@ class CompetitorCardScrapeResult(PersistedDomainModel):
     marketplace: CompetitorMarketplace
     article: str = Field(min_length=1, max_length=64)
     title: str | None = Field(default=None, max_length=500)
+    brand: str | None = Field(default=None, max_length=256)
     description: str = Field(default="", max_length=50_000)
     specs: list[CompetitorSpecRow] = Field(default_factory=list, max_length=200)
     photo_urls: list[str] = Field(default_factory=list, max_length=100)

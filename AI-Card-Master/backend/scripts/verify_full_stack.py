@@ -112,6 +112,8 @@ _REQUIRED_API_PATHS: tuple[tuple[str, str], ...] = (
     ("POST", "/api/v1/canvas/render"),
     ("POST", "/api/v1/relighting/custom"),
     ("POST", "/api/v1/parser/parse"),
+    ("POST", "/api/v1/parser/fetch"),
+    ("POST", "/api/parser/fetch"),
     ("POST", "/api/v1/templates/prompt-to-json"),
     ("POST", "/api/v1/tools/remove-bg"),
 )

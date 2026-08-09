@@ -1,4 +1,5 @@
 export { EditorWorkspace } from "./editor-workspace"
+export { ImportPublishDialog } from "./import-publish-dialog"
 export { addBadgeToCanvas } from "@/lib/editor/canvas-actions"
 export { EditorCanvas } from "./canvas"
 export { EditorCanvasStage } from "./canvas-stage"

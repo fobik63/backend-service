@@ -421,19 +421,60 @@ def redis_eye_of_god_key(job_id: UUID, stage: str) -> str:
 
 
 def wildberries_primary_image_urls(nm_id: int, *, count: int = 1) -> tuple[str, ...]:
-    """Build WB CDN URLs for the current main card photo(s).
+    """Build WB CDN URLs for the current main card photo(s) at max public size.
 
-    Basket host shards by nm volume; structure is stable vs HTML scrapers.
+    Uses ``images/big`` (largest public WB gallery tier) and volume-based
+    basket host shards that match the current ``wbbasket.ru`` CDN layout.
     """
 
     if nm_id <= 0:
         return ()
     vol = nm_id // 100_000
     part = nm_id // 1_000
-    # Host index heuristic used by WB CDN (0–12 range historically).
-    basket = vol % 13
-    host = f"https://basket-{basket:02d}.wbbasket.ru"
+    host = _wildberries_basket_host(vol)
     urls: list[str] = []
     for index in range(1, max(1, count) + 1):
         urls.append(f"{host}/vol{vol}/part{part}/{nm_id}/images/big/{index}.webp")
     return tuple(urls)
+
+
+def _wildberries_basket_host(vol: int) -> str:
+    """Map WB volume shard → ``basket-XX.wbbasket.ru`` host."""
+
+    # Inclusive upper bounds for each basket shard (public CDN convention).
+    ranges: tuple[tuple[int, int], ...] = (
+        (143, 1),
+        (287, 2),
+        (431, 3),
+        (719, 4),
+        (1007, 5),
+        (1061, 6),
+        (1115, 7),
+        (1169, 8),
+        (1313, 9),
+        (1601, 10),
+        (1655, 11),
+        (1919, 12),
+        (2045, 13),
+        (2189, 14),
+        (2405, 15),
+        (2621, 16),
+        (2837, 17),
+        (3053, 18),
+        (3269, 19),
+        (3485, 20),
+        (3701, 21),
+        (3917, 22),
+        (4133, 23),
+        (4349, 24),
+        (4565, 25),
+        (4781, 26),
+        (4997, 27),
+        (5213, 28),
+        (5429, 29),
+        (5645, 30),
+    )
+    for max_vol, basket in ranges:
+        if vol <= max_vol:
+            return f"https://basket-{basket:02d}.wbbasket.ru"
+    return "https://basket-31.wbbasket.ru"

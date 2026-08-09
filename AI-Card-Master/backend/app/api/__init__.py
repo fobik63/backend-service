@@ -4,6 +4,7 @@ from app.api.ab_tests import router as ab_tests_router
 from app.api.account import router as account_router
 from app.api.admin import router as admin_router
 from app.api.admin import security_status_ws_router as admin_security_ws_router
+from app.api.ai import router as ai_router
 from app.api.ai_strategy import router as ai_strategy_router
 from app.api.analytics import router as analytics_router
 from app.api.auth import auth_alias_router
@@ -23,8 +24,10 @@ from app.api.health import router as health_router
 from app.api.images import router as images_router
 from app.api.legal import router as legal_router
 from app.api.marketplace_bridge import router as marketplace_bridge_router
+from app.api.marketplace_publish import router as marketplace_publish_router
 from app.api.oracle import router as oracle_router
 from app.api.pain_analysis import router as pain_analysis_router
+from app.api.parser import parser_alias_router
 from app.api.parser import router as parser_router
 from app.api.payments import router as payments_router
 from app.api.referrals import router as referrals_router
@@ -35,16 +38,19 @@ from app.api.text_generation import router as text_generation_router
 from app.api.three_d import router as three_d_router
 from app.api.three_d_video import router as three_d_video_router
 from app.api.three_d_ws import router as three_d_ws_router
+from app.api.user_credentials import router as user_credentials_router
 from app.api.visual_audit import router as visual_audit_router
 from app.api.webhooks import midjourney_webhook_router
 from app.api.winback import router as winback_router
 from app.api.workspaces import router as workspaces_router
+from app.api.telegram_bot import router as telegram_bot_router
 
 __all__ = [
     "account_router",
     "admin_router",
     "admin_security_ws_router",
     "ab_tests_router",
+    "ai_router",
     "ai_strategy_router",
     "analytics_router",
     "auth_alias_router",
@@ -65,19 +71,23 @@ __all__ = [
     "images_router",
     "legal_router",
     "marketplace_bridge_router",
+    "marketplace_publish_router",
     "midjourney_webhook_router",
     "oracle_router",
     "pain_analysis_router",
+    "parser_alias_router",
     "parser_router",
     "payments_router",
     "referrals_router",
     "relighting_router",
     "smart_variants_router",
+    "telegram_bot_router",
     "templates_router",
     "text_generation_router",
     "three_d_router",
     "three_d_video_router",
     "three_d_ws_router",
+    "user_credentials_router",
     "visual_audit_router",
     "winback_router",
     "workspaces_router",

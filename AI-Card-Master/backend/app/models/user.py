@@ -147,6 +147,15 @@ class User(Base):
         unique=True,
         index=True,
     )
+    # Encrypted seller API secrets for direct cabinet publish (AES-256-GCM).
+    wb_api_token_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ozon_client_id_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ozon_api_key_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
+    marketplace_credentials_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        default=None,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

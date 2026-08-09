@@ -82,6 +82,7 @@ class WildberriesDeepClient:
         raw_fragments["card_detail"] = truncate_raw_fragment(card_payload)
 
         title = str(product.get("name") or "").strip() or None
+        brand = _extract_wb_brand(product)
         sale = int(product.get("salePriceU") or 0)
         price = int(product.get("priceU") or sale)
         pics_count = int(product.get("pics") or 0)
@@ -99,6 +100,8 @@ class WildberriesDeepClient:
             content_payload = await self._fetch_content(nm_id)
             raw_fragments["content"] = truncate_raw_fragment(content_payload)
             description, specs = _map_wb_content(content_payload)
+            if brand is None:
+                brand = _extract_wb_brand(content_payload)
         except (ParserTransportError, ParserHttpError, ParserSchemaError) as exc:
             warnings.append(f"content fetch degraded: {exc}")
             # Fallback: description sometimes present on card product.
@@ -121,6 +124,7 @@ class WildberriesDeepClient:
             marketplace=CompetitorMarketplace.WILDBERRIES,
             article=link.article,
             title=title[:500] if title else None,
+            brand=brand[:256] if brand else None,
             description=description[:50_000],
             specs=specs[:200],
             photo_urls=photo_urls[:100],
@@ -181,9 +185,21 @@ def _extract_wb_product(payload: dict[str, Any]) -> dict[str, Any]:
             first = products[0]
             if isinstance(first, dict):
                 return first
+        if isinstance(products, list) and not products:
+            raise ParserSchemaError(
+                "Wildberries card payload has empty products list",
+                marketplace=ParserMarketplace.WILDBERRIES,
+                missing_keys=("products",),
+            )
     products = payload.get("products")
     if isinstance(products, list) and products and isinstance(products[0], dict):
         return products[0]
+    if isinstance(products, list) and not products:
+        raise ParserSchemaError(
+            "Wildberries card payload has empty products list",
+            marketplace=ParserMarketplace.WILDBERRIES,
+            missing_keys=("products",),
+        )
     if "name" in payload or "salePriceU" in payload:
         return payload
     raise ParserSchemaError(
@@ -191,6 +207,23 @@ def _extract_wb_product(payload: dict[str, Any]) -> dict[str, Any]:
         marketplace=ParserMarketplace.WILDBERRIES,
         missing_keys=("products",),
     )
+
+
+def _extract_wb_brand(payload: dict[str, Any]) -> str | None:
+    for key in ("brand", "brandName", "sellingBrand", "trademark"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, dict):
+            nested = value.get("name") or value.get("title")
+            if isinstance(nested, str) and nested.strip():
+                return nested.strip()
+    selling = payload.get("selling")
+    if isinstance(selling, dict):
+        brand = selling.get("brandName") or selling.get("brand")
+        if isinstance(brand, str) and brand.strip():
+            return brand.strip()
+    return None
 
 
 def _map_wb_content(

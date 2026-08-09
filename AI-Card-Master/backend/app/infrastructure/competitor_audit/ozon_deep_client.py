@@ -76,7 +76,8 @@ class OzonDeepClient:
         title = _find_first_str(product_payload, ("title", "name", "cellTrackingInfo"))
         description = _extract_description(product_payload)
         specs = _extract_specs(product_payload)
-        photo_urls = _extract_photo_urls(product_payload)
+        brand = _extract_brand(product_payload, specs)
+        photo_urls = _prefer_max_resolution_urls(_extract_photo_urls(product_payload))
         price_after, price_before = _extract_prices(product_payload)
 
         if not photo_urls:
@@ -107,6 +108,7 @@ class OzonDeepClient:
             marketplace=CompetitorMarketplace.OZON,
             article=link.article,
             title=title[:500] if title else None,
+            brand=brand[:256] if brand else None,
             description=description[:50_000],
             specs=specs[:200],
             photo_urls=photo_urls[:100],
@@ -228,6 +230,53 @@ def _extract_specs(payload: dict[str, Any]) -> list[CompetitorSpecRow]:
                 seen.add(name.casefold())
                 specs.append(CompetitorSpecRow(name=name[:256], value=value[:2000]))
     return specs
+
+
+def _extract_brand(
+    payload: dict[str, Any],
+    specs: list[CompetitorSpecRow],
+) -> str | None:
+    for node in _walk(payload):
+        for key in ("brandName", "brand", "brandTitle", "trademark"):
+            value = node.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+            if isinstance(value, dict):
+                nested = value.get("name") or value.get("title") or value.get("text")
+                if isinstance(nested, str) and nested.strip():
+                    return nested.strip()
+    for row in specs:
+        if row.name.casefold() in {"бренд", "brand", "торговая марка", "марка"}:
+            return row.value.strip() or None
+    return None
+
+
+def _prefer_max_resolution_urls(urls: list[str]) -> list[str]:
+    """Deduplicate near-identical Ozon CDN variants; keep the largest size tip."""
+
+    if not urls:
+        return []
+    scored: list[tuple[int, int, str]] = []
+    for index, url in enumerate(urls):
+        score = 0
+        lowered = url.casefold()
+        for token, weight in (
+            ("wc2000", 2000),
+            ("wc1200", 1200),
+            ("wc1000", 1000),
+            ("wc800", 800),
+            ("wc750", 750),
+            ("original", 3000),
+            ("/video/", -5000),
+        ):
+            if token in lowered:
+                score = max(score, weight)
+        scored.append((score, -index, url))
+    scored.sort(reverse=True)
+    # Keep original discovery order among unique hosts/paths after size preference:
+    # take highest-scoring unique basename group first, preserve relative order.
+    ordered = [url for _, _, url in sorted(scored, key=lambda row: (-row[0], -row[1]))]
+    return ordered
 
 
 def _extract_photo_urls(payload: dict[str, Any]) -> list[str]:

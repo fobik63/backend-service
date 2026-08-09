@@ -125,6 +125,8 @@ type EditorState = {
   softbox: SoftboxSettings
   /** Local product preview (blob / CDN URL) shown on canvas. */
   productPreviewUrl: string | null
+  /** Imported marketplace photos for pack / publish gallery. */
+  importGalleryUrls: string[]
   /** How many photos to generate in the card pack (1–20). */
   packSize: PackSize
   busyKind: EditorBusyKind
@@ -144,6 +146,7 @@ type EditorState = {
   removeLayer: (id: string) => void
   setSoftbox: (patch: Partial<SoftboxSettings>) => void
   setProductPreviewUrl: (url: string | null) => void
+  applyImportedGallery: (urls: string[]) => void
   setPackSize: (size: PackSize) => void
   setBusyKind: (kind: EditorBusyKind) => void
   beginHistoryTransaction: () => void
@@ -180,6 +183,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   zoomMode: "fit",
   softbox: DEFAULT_SOFTBOX,
   productPreviewUrl: DEFAULT_PRODUCT_CUTOUT,
+  importGalleryUrls: [],
   packSize: INITIAL_PACK_SIZE,
   busyKind: "idle",
   history: { past: [], future: [] },
@@ -337,6 +341,34 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         canRedo: false,
       }
     }),
+  applyImportedGallery: (urls) =>
+    set((state) => {
+      const cleaned = urls
+        .map((url) => url.trim())
+        .filter((url) => url.length > 0)
+      if (cleaned.length === 0) return state
+      const packSize = clampPackSize(cleaned.length)
+      const synced = syncActivePage(
+        state.pages,
+        state.activePageIndex,
+        state.layers
+      )
+      const pages = resizePages(synced, packSize)
+      const history = pushPast(state.history, snapshotOf(state))
+      return {
+        importGalleryUrls: cleaned,
+        productPreviewUrl: cleaned[0] ?? state.productPreviewUrl,
+        packSize,
+        pages,
+        activePageIndex: 0,
+        layers: pages[0] ?? [],
+        selectedLayerId: defaultSelectedLayerId(pages[0] ?? []),
+        flashLayerId: null,
+        history,
+        canUndo: true,
+        canRedo: false,
+      }
+    }),
   setPackSize: (size) =>
     set((state) => {
       const packSize = clampPackSize(size)
@@ -468,6 +500,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       zoomMode: "fit",
       softbox: DEFAULT_SOFTBOX,
       productPreviewUrl: DEFAULT_PRODUCT_CUTOUT,
+      importGalleryUrls: [],
       packSize: INITIAL_PACK_SIZE,
       busyKind: "idle",
       projectId: null,

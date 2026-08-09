@@ -26,7 +26,11 @@ from app.models.generation_job import (
     GenerationWebhookEvent,
 )
 from app.models.idempotency_record import IdempotencyRecord
-from app.models.marketplace_export import MarketplaceCredential, MarketplaceExport
+from app.models.marketplace_export import (
+    MarketplaceCredential,
+    MarketplaceExport,
+    MarketplacePublication,
+)
 from app.models.oracle import OraclePredictionJob
 from app.models.pain_analysis import PainAnalysisJob
 from app.models.payment import Payment
@@ -79,6 +83,7 @@ __all__ = [
     "GenerationWebhookEvent",
     "MarketplaceCredential",
     "MarketplaceExport",
+    "MarketplacePublication",
     "Payment",
     "CoinHold",
     "IdempotencyRecord",

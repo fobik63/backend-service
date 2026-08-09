@@ -37,6 +37,21 @@ export {
 } from "./exports";
 export type { CredentialDTO, MarketplacePlatform } from "./exports";
 export {
+  fetchProductByArticle,
+  generateSeoDescription,
+  listSellerProducts,
+  publishToOzon,
+  publishToWildberries,
+} from "./marketplace";
+export type {
+  FetchProductResponse,
+  PublishStatusDTO,
+  SellerProductDTO,
+  SeoGenerateRequest,
+  SeoGenerateResponse,
+  SeoTargetPlatform,
+} from "./marketplace";
+export {
   getApiErrorMessage,
   isNetworkError,
   NETWORK_ERROR_MESSAGES,

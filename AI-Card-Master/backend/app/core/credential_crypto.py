@@ -77,6 +77,28 @@ def decrypt_credentials(ciphertext: str, *, secret: str) -> dict[str, str]:
     return cleaned
 
 
+_SECRET_WRAP_KEY = "value"
+
+
+def encrypt_secret_value(value: str, *, secret: str) -> str:
+    """Encrypt a single secret string (AES-256-GCM wrapper around a one-key dict)."""
+
+    cleaned = value.strip()
+    if not cleaned:
+        raise CredentialCryptoError("Secret value is empty.")
+    return encrypt_credentials({_SECRET_WRAP_KEY: cleaned}, secret=secret)
+
+
+def decrypt_secret_value(ciphertext: str, *, secret: str) -> str:
+    """Decrypt a single secret previously encrypted via ``encrypt_secret_value``."""
+
+    payload = decrypt_credentials(ciphertext, secret=secret)
+    value = payload.get(_SECRET_WRAP_KEY)
+    if not isinstance(value, str) or not value:
+        raise CredentialCryptoError("Decrypted secret payload is empty.")
+    return value
+
+
 def _decrypt_aes256_gcm(token: str, *, secret: str) -> bytes:
     encoded = token[len(_AES256_PREFIX) :]
     try:

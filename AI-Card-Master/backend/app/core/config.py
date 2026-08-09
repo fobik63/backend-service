@@ -1420,6 +1420,31 @@ class Settings(BaseSettings):
         default=86_400,
         alias="TELEGRAM_LOGIN_MAX_AGE_SECONDS",
     )
+    # Product Telegram bot: webhook and/or long polling for /start + /status.
+    telegram_bot_polling_enabled: bool = Field(
+        default=False,
+        alias="TELEGRAM_BOT_POLLING_ENABLED",
+    )
+    telegram_bot_webhook_url: str = Field(
+        default="",
+        alias="TELEGRAM_BOT_WEBHOOK_URL",
+    )
+    telegram_bot_webhook_secret: str = Field(
+        default="",
+        alias="TELEGRAM_BOT_WEBHOOK_SECRET",
+    )
+    telegram_bot_deep_link_ttl_seconds: int = Field(
+        default=3_600,
+        ge=60,
+        le=86_400,
+        alias="TELEGRAM_BOT_DEEP_LINK_TTL_SECONDS",
+    )
+    telegram_bot_poll_timeout_seconds: int = Field(
+        default=25,
+        ge=1,
+        le=50,
+        alias="TELEGRAM_BOT_POLL_TIMEOUT_SECONDS",
+    )
 
     # --- Outbound email (OTP login) ---
     # Prefer Resend when RESEND_API_KEY is set; otherwise SMTP.
