@@ -233,6 +233,47 @@
         }
       }
     },
+    "/api/v1/auth/send-otp": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Send a 6-digit one-time code to email",
+        "operationId": "send_otp_api_v1_auth_send_otp_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OtpRequestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OtpRequestResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/auth/otp/verify": {
       "post": {
         "tags": [
@@ -240,6 +281,47 @@
         ],
         "summary": "Verify email OTP and obtain JWT session",
         "operationId": "otp_verify_api_v1_auth_otp_verify_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OtpVerifyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSessionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/verify-otp": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Verify email OTP and obtain JWT session",
+        "operationId": "verify_otp_api_v1_auth_verify_otp_post",
         "requestBody": {
           "content": {
             "application/json": {
@@ -380,6 +462,134 @@
             "HTTPBearer": []
           }
         ]
+      }
+    },
+    "/api/v1/auth/change-password": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Change the authenticated user's password",
+        "operationId": "change_password_api_v1_auth_change_password_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangePasswordResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/auth/send-otp": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Send a 6-digit one-time code to email",
+        "operationId": "send_otp_alias_api_auth_send_otp_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OtpRequestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OtpRequestResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/verify-otp": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Verify email OTP and obtain JWT session",
+        "operationId": "verify_otp_alias_api_auth_verify_otp_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OtpVerifyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthSessionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/analytics/analyze-links": {
@@ -940,6 +1150,93 @@
             "HTTPBearer": []
           }
         ]
+      }
+    },
+    "/api/v1/designs/{design_id}": {
+      "get": {
+        "tags": [
+          "designs"
+        ],
+        "summary": "Load one current-user design",
+        "operationId": "get_design_api_v1_designs__design_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "design_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Design Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedDesignDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "designs"
+        ],
+        "summary": "Delete one current-user design",
+        "operationId": "delete_design_api_v1_designs__design_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "design_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Design Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/designs/{design_id}/render": {
@@ -6591,7 +6888,8 @@
         "properties": {
           "id": {
             "type": "string",
-            "format": "uuid",
+            "maxLength": 256,
+            "minLength": 1,
             "title": "Id"
           },
           "name": {
@@ -7841,6 +8139,47 @@
         "title": "CardCohortLabel",
         "description": "Cohort assigned before any Claude Vision spend."
       },
+      "ChangePasswordRequest": {
+        "properties": {
+          "current_password": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Current Password"
+          },
+          "new_password": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 8,
+            "title": "New Password"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "current_password",
+          "new_password"
+        ],
+        "title": "ChangePasswordRequest",
+        "description": "Replace the caller's password after verifying the current one."
+      },
+      "ChangePasswordResponse": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok",
+            "default": true
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "default": "Password updated."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ChangePasswordResponse"
+      },
       "ClaimOfferResponse": {
         "properties": {
           "offer": {
@@ -8719,6 +9058,719 @@
         ],
         "title": "DesignRenderResponse",
         "description": "Presigned S3 download for a high-resolution rendered card."
+      },
+      "EditorBackgroundLayerDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "visible": {
+            "type": "boolean",
+            "title": "Visible",
+            "default": true
+          },
+          "locked": {
+            "type": "boolean",
+            "title": "Locked",
+            "default": false
+          },
+          "opacity": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Opacity",
+            "default": 1.0
+          },
+          "z_index": {
+            "type": "integer",
+            "maximum": 10000.0,
+            "minimum": -10000.0,
+            "title": "Z Index",
+            "default": 0
+          },
+          "x": {
+            "type": "number",
+            "maximum": 300.0,
+            "minimum": -200.0,
+            "title": "X",
+            "default": 0.0
+          },
+          "y": {
+            "type": "number",
+            "maximum": 300.0,
+            "minimum": -200.0,
+            "title": "Y",
+            "default": 0.0
+          },
+          "width": {
+            "type": "number",
+            "maximum": 500.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Width",
+            "default": 10.0
+          },
+          "height": {
+            "type": "number",
+            "maximum": 500.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Height",
+            "default": 10.0
+          },
+          "scale": {
+            "type": "number",
+            "maximum": 100.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Scale",
+            "default": 1.0
+          },
+          "rotation": {
+            "type": "number",
+            "maximum": 3600.0,
+            "minimum": -3600.0,
+            "title": "Rotation",
+            "default": 0.0
+          },
+          "type": {
+            "type": "string",
+            "const": "background",
+            "title": "Type",
+            "default": "background"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "EditorBackgroundLayerDTO"
+      },
+      "EditorChipDTO": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Label"
+          },
+          "subtitle": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subtitle"
+          },
+          "bg_color": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Bg Color"
+          },
+          "border_radius": {
+            "type": "number",
+            "maximum": 256.0,
+            "minimum": 0.0,
+            "title": "Border Radius",
+            "default": 14.0
+          },
+          "icon_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Icon Id"
+          },
+          "variant": {
+            "type": "string",
+            "enum": [
+              "solid",
+              "glass"
+            ],
+            "title": "Variant",
+            "default": "solid"
+          },
+          "text_color": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text Color"
+          },
+          "blur": {
+            "type": "number",
+            "maximum": 128.0,
+            "minimum": 0.0,
+            "title": "Blur",
+            "default": 0.0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "label",
+          "bg_color",
+          "icon_id"
+        ],
+        "title": "EditorChipDTO"
+      },
+      "EditorDocumentDTO": {
+        "properties": {
+          "version": {
+            "type": "integer",
+            "const": 1,
+            "title": "Version",
+            "default": 1
+          },
+          "pages": {
+            "items": {
+              "$ref": "#/components/schemas/EditorPageDTO"
+            },
+            "type": "array",
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Pages"
+          },
+          "active_page_index": {
+            "type": "integer",
+            "maximum": 19.0,
+            "minimum": 0.0,
+            "title": "Active Page Index",
+            "default": 0
+          },
+          "pack_size": {
+            "type": "integer",
+            "maximum": 20.0,
+            "minimum": 1.0,
+            "title": "Pack Size"
+          },
+          "product_preview_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Product Preview Url"
+          },
+          "softbox": {
+            "$ref": "#/components/schemas/EditorSoftboxDTO"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "pages",
+          "pack_size"
+        ],
+        "title": "EditorDocumentDTO",
+        "description": "Versioned, complete editor state for all pages in a project."
+      },
+      "EditorImageLayerDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "visible": {
+            "type": "boolean",
+            "title": "Visible",
+            "default": true
+          },
+          "locked": {
+            "type": "boolean",
+            "title": "Locked",
+            "default": false
+          },
+          "opacity": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Opacity",
+            "default": 1.0
+          },
+          "z_index": {
+            "type": "integer",
+            "maximum": 10000.0,
+            "minimum": -10000.0,
+            "title": "Z Index",
+            "default": 0
+          },
+          "x": {
+            "type": "number",
+            "maximum": 300.0,
+            "minimum": -200.0,
+            "title": "X",
+            "default": 0.0
+          },
+          "y": {
+            "type": "number",
+            "maximum": 300.0,
+            "minimum": -200.0,
+            "title": "Y",
+            "default": 0.0
+          },
+          "width": {
+            "type": "number",
+            "maximum": 500.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Width",
+            "default": 10.0
+          },
+          "height": {
+            "type": "number",
+            "maximum": 500.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Height",
+            "default": 10.0
+          },
+          "scale": {
+            "type": "number",
+            "maximum": 100.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Scale",
+            "default": 1.0
+          },
+          "rotation": {
+            "type": "number",
+            "maximum": 3600.0,
+            "minimum": -3600.0,
+            "title": "Rotation",
+            "default": 0.0
+          },
+          "type": {
+            "type": "string",
+            "const": "image",
+            "title": "Type",
+            "default": "image"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "EditorImageLayerDTO"
+      },
+      "EditorPageDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Id"
+          },
+          "layers": {
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/EditorBackgroundLayerDTO"
+                },
+                {
+                  "$ref": "#/components/schemas/EditorImageLayerDTO"
+                },
+                {
+                  "$ref": "#/components/schemas/EditorTextLayerDTO"
+                },
+                {
+                  "$ref": "#/components/schemas/EditorShapeLayerDTO"
+                }
+              ],
+              "discriminator": {
+                "propertyName": "type",
+                "mapping": {
+                  "background": "#/components/schemas/EditorBackgroundLayerDTO",
+                  "image": "#/components/schemas/EditorImageLayerDTO",
+                  "shape": "#/components/schemas/EditorShapeLayerDTO",
+                  "text": "#/components/schemas/EditorTextLayerDTO"
+                }
+              }
+            },
+            "type": "array",
+            "maxItems": 256,
+            "minItems": 1,
+            "title": "Layers"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "layers"
+        ],
+        "title": "EditorPageDTO",
+        "description": "One ordered page inside a card pack."
+      },
+      "EditorShapeLayerDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "visible": {
+            "type": "boolean",
+            "title": "Visible",
+            "default": true
+          },
+          "locked": {
+            "type": "boolean",
+            "title": "Locked",
+            "default": false
+          },
+          "opacity": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Opacity",
+            "default": 1.0
+          },
+          "z_index": {
+            "type": "integer",
+            "maximum": 10000.0,
+            "minimum": -10000.0,
+            "title": "Z Index",
+            "default": 0
+          },
+          "x": {
+            "type": "number",
+            "maximum": 300.0,
+            "minimum": -200.0,
+            "title": "X",
+            "default": 0.0
+          },
+          "y": {
+            "type": "number",
+            "maximum": 300.0,
+            "minimum": -200.0,
+            "title": "Y",
+            "default": 0.0
+          },
+          "width": {
+            "type": "number",
+            "maximum": 500.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Width",
+            "default": 10.0
+          },
+          "height": {
+            "type": "number",
+            "maximum": 500.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Height",
+            "default": 10.0
+          },
+          "scale": {
+            "type": "number",
+            "maximum": 100.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Scale",
+            "default": 1.0
+          },
+          "rotation": {
+            "type": "number",
+            "maximum": 3600.0,
+            "minimum": -3600.0,
+            "title": "Rotation",
+            "default": 0.0
+          },
+          "type": {
+            "type": "string",
+            "const": "shape",
+            "title": "Type",
+            "default": "shape"
+          },
+          "chip": {
+            "$ref": "#/components/schemas/EditorChipDTO"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "chip"
+        ],
+        "title": "EditorShapeLayerDTO"
+      },
+      "EditorSoftboxDTO": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": true
+          },
+          "light_angle": {
+            "type": "number",
+            "maximum": 360.0,
+            "minimum": 0.0,
+            "title": "Light Angle",
+            "default": 45.0
+          },
+          "light_elevation": {
+            "type": "number",
+            "maximum": 90.0,
+            "minimum": 10.0,
+            "title": "Light Elevation",
+            "default": 55.0
+          },
+          "color_temp_k": {
+            "type": "integer",
+            "maximum": 6500.0,
+            "minimum": 2700.0,
+            "title": "Color Temp K",
+            "default": 5500
+          },
+          "intensity": {
+            "type": "number",
+            "maximum": 200.0,
+            "minimum": 0.0,
+            "title": "Intensity",
+            "default": 100.0
+          },
+          "softbox_diffusion": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Softbox Diffusion",
+            "default": 65.0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "EditorSoftboxDTO",
+        "description": "Editor lighting state persisted with a multi-page project."
+      },
+      "EditorTextLayerDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "visible": {
+            "type": "boolean",
+            "title": "Visible",
+            "default": true
+          },
+          "locked": {
+            "type": "boolean",
+            "title": "Locked",
+            "default": false
+          },
+          "opacity": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Opacity",
+            "default": 1.0
+          },
+          "z_index": {
+            "type": "integer",
+            "maximum": 10000.0,
+            "minimum": -10000.0,
+            "title": "Z Index",
+            "default": 0
+          },
+          "x": {
+            "type": "number",
+            "maximum": 300.0,
+            "minimum": -200.0,
+            "title": "X",
+            "default": 0.0
+          },
+          "y": {
+            "type": "number",
+            "maximum": 300.0,
+            "minimum": -200.0,
+            "title": "Y",
+            "default": 0.0
+          },
+          "width": {
+            "type": "number",
+            "maximum": 500.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Width",
+            "default": 10.0
+          },
+          "height": {
+            "type": "number",
+            "maximum": 500.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Height",
+            "default": 10.0
+          },
+          "scale": {
+            "type": "number",
+            "maximum": 100.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Scale",
+            "default": 1.0
+          },
+          "rotation": {
+            "type": "number",
+            "maximum": 3600.0,
+            "minimum": -3600.0,
+            "title": "Rotation",
+            "default": 0.0
+          },
+          "type": {
+            "type": "string",
+            "const": "text",
+            "title": "Type",
+            "default": "text"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 8000,
+            "title": "Text",
+            "default": ""
+          },
+          "text_style": {
+            "$ref": "#/components/schemas/EditorTextStyleDTO"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "text_style"
+        ],
+        "title": "EditorTextLayerDTO"
+      },
+      "EditorTextStyleDTO": {
+        "properties": {
+          "font_family": {
+            "type": "string",
+            "enum": [
+              "Inter",
+              "Montserrat",
+              "Roboto",
+              "Space Grotesk"
+            ],
+            "title": "Font Family"
+          },
+          "font_size": {
+            "type": "integer",
+            "maximum": 512.0,
+            "minimum": 1.0,
+            "title": "Font Size"
+          },
+          "font_weight": {
+            "type": "integer",
+            "maximum": 900.0,
+            "minimum": 100.0,
+            "title": "Font Weight"
+          },
+          "color": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Color"
+          },
+          "stroke_width": {
+            "type": "number",
+            "maximum": 32.0,
+            "minimum": 0.0,
+            "title": "Stroke Width",
+            "default": 0.0
+          },
+          "stroke_color": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Stroke Color",
+            "default": "#000000"
+          },
+          "shadow_enabled": {
+            "type": "boolean",
+            "title": "Shadow Enabled",
+            "default": false
+          },
+          "shadow_color": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Shadow Color",
+            "default": "#00000066"
+          },
+          "shadow_blur": {
+            "type": "number",
+            "maximum": 128.0,
+            "minimum": 0.0,
+            "title": "Shadow Blur",
+            "default": 0.0
+          },
+          "shadow_offset_x": {
+            "type": "number",
+            "maximum": 256.0,
+            "minimum": -256.0,
+            "title": "Shadow Offset X",
+            "default": 0.0
+          },
+          "shadow_offset_y": {
+            "type": "number",
+            "maximum": 256.0,
+            "minimum": -256.0,
+            "title": "Shadow Offset Y",
+            "default": 0.0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "font_family",
+          "font_size",
+          "font_weight",
+          "color"
+        ],
+        "title": "EditorTextStyleDTO"
       },
       "ExportDraftRequest": {
         "properties": {
@@ -9705,7 +10757,8 @@
         "properties": {
           "id": {
             "type": "string",
-            "format": "uuid",
+            "maxLength": 256,
+            "minLength": 1,
             "title": "Id"
           },
           "name": {
@@ -11043,17 +12096,6 @@
             "type": "string",
             "title": "Message",
             "default": "Код отправлен на email"
-          },
-          "dev_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Dev Code"
           }
         },
         "additionalProperties": false,
@@ -12380,6 +13422,16 @@
           },
           "canvas": {
             "$ref": "#/components/schemas/CanvasStateDTO"
+          },
+          "editor_document": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EditorDocumentDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -12418,6 +13470,16 @@
           },
           "canvas": {
             "$ref": "#/components/schemas/CanvasStateDTO"
+          },
+          "editor_document": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EditorDocumentDTO"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "preview_url": {
             "anyOf": [
@@ -12534,7 +13596,8 @@
         "properties": {
           "id": {
             "type": "string",
-            "format": "uuid",
+            "maxLength": 256,
+            "minLength": 1,
             "title": "Id"
           },
           "name": {
@@ -13975,7 +15038,8 @@
         "properties": {
           "id": {
             "type": "string",
-            "format": "uuid",
+            "maxLength": 256,
+            "minLength": 1,
             "title": "Id"
           },
           "name": {

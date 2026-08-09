@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
+from slowapi.errors import RateLimitExceeded
 from starlette.requests import Request
 
 from app.core.rate_limit import (
@@ -18,7 +19,6 @@ from app.core.rate_limit import (
     rate_limit_exceeded_handler,
 )
 from app.core.security import InvalidTokenError
-from slowapi.errors import RateLimitExceeded
 
 
 def _request(

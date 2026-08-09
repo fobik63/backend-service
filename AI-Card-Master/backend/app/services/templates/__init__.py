@@ -1,6 +1,5 @@
 """Server-side template canvas rendering (Pillow)."""
 
-from app.services.templates.fonts import FontRegistry, get_font_registry
 from app.services.templates.font_manager import (
     DEFAULT_FALLBACK_FAMILY,
     DEFAULT_SYSTEM_FAMILIES,
@@ -9,6 +8,7 @@ from app.services.templates.font_manager import (
     FontValidationError,
     get_font_manager_service,
 )
+from app.services.templates.fonts import FontRegistry, get_font_registry
 from app.services.templates.image_cache import (
     ImageAssetCache,
     ImageAssetCacheError,

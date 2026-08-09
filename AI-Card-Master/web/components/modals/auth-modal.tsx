@@ -18,13 +18,14 @@ import type { AuthMode } from "@/lib/validators/auth"
 type AuthModalProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
+  /** Defaults to OTP 2-step flow (email → code). */
   initialMode?: AuthMode
 }
 
 function AuthModal({
   open,
   onOpenChange,
-  initialMode = "login",
+  initialMode = "otp",
 }: AuthModalProps) {
   const [mode, setMode] = useState<AuthMode>(initialMode)
 
@@ -32,7 +33,7 @@ function AuthModal({
     mode === "register"
       ? "Регистрация"
       : mode === "otp"
-        ? "Вход по коду"
+        ? "Вход по email"
         : "Вход"
 
   return (
@@ -50,7 +51,7 @@ function AuthModal({
         <DialogHeader className="sr-only">
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
-            Авторизация в {APP_NAME}: email, Telegram или One-Time Code
+            Авторизация в {APP_NAME}: email и одноразовый код
           </DialogDescription>
         </DialogHeader>
 
@@ -69,6 +70,7 @@ function AuthModal({
           key={open ? `open-${initialMode}` : "closed"}
           compact
           hideHomeLink
+          otpFirst
           initialMode={initialMode}
           onModeChange={setMode}
           onSuccess={() => onOpenChange(false)}

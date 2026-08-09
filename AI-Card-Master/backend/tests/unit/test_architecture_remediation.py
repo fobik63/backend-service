@@ -165,8 +165,10 @@ async def test_record_api_usage_cost_increments_prometheus_on_failure() -> None:
             total_cost_usd=Decimal("0.01"),
             status=CostCallStatus.ERROR,
         )
-        # Counter is imported inside except; patch the module used after import.
-        assert True  # fail-open path completed without raising
+        inc.assert_called_once_with(
+            provider="anthropic",
+            operation="test_op",
+        )
 
     # Directly ensure helper is safe.
     with patch(

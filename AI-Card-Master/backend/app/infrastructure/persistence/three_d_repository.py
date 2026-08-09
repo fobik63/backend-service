@@ -9,6 +9,8 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.pricing import BillingService as OperationBillingService
+from app.core.pricing import CoinHoldStatus, PricingNotFoundError
 from app.domain.three_d import (
     TERMINAL_THREE_D_STATUSES,
     GpuRentalSessionStatus,
@@ -20,8 +22,6 @@ from app.domain.three_d import (
     ThreeDTaskView,
 )
 from app.models.three_d import GpuRentalSession, ThreeDAsset, ThreeDTask
-from app.core.pricing import BillingService as OperationBillingService
-from app.core.pricing import CoinHoldStatus, PricingNotFoundError
 from app.services.billing_service import (
     BillingNotFoundError,
     BillingService,

@@ -33,8 +33,6 @@ from app.domain.three_d import (
 from app.services.billing_service import BillingValidationError
 from app.services.three_d import (
     MockThreeDEngineAdapter,
-    ThreeDGenerationStage,
-    ThreeDTaskLifecycleStatus,
 )
 
 

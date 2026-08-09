@@ -24,22 +24,21 @@ from app.services.ai_engine import (
     AIEngineError,
     generate_product_image_for_tariff,
 )
-from app.services.infographic_service import (
-    InfographicService,
-    InfographicServiceError,
-    get_overlay_service,
-)
 from app.services.image_optimizer import (
     ImageOptimizationError,
     detect_image_format,
     optimize_image_lossless,
+)
+from app.services.infographic_service import (
+    InfographicService,
+    InfographicServiceError,
+    get_overlay_service,
 )
 from app.services.s3_storage import (
     S3StorageError,
     SelectelS3Storage,
     get_s3_storage,
 )
-
 
 PER_SLIDE_TIMEOUT_SECONDS: Final[float] = 120.0
 # Cap concurrent Midjourney/SD calls to avoid RAM + credit spikes (audit M2).
@@ -532,7 +531,7 @@ async def save_series_images_locally(
             f"Expected exactly 5 slides to save, got {len(slides)}."
         )
 
-    destination_dir.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(destination_dir.mkdir, parents=True, exist_ok=True)
     saved: list[Path] = []
 
     for index, slide in enumerate(slides, start=1):

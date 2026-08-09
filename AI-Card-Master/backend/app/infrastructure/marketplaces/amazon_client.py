@@ -75,7 +75,7 @@ class AmazonSellerClient:
                 {"media_location": image_urls[0], "marketplace_id": marketplace_id}
             ]
             other_images = []
-            for index, url in enumerate(image_urls[1:9], start=1):
+            for url in image_urls[1:9]:
                 other_images.append(
                     {
                         "media_location": url,

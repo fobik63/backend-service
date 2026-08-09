@@ -9,7 +9,9 @@ type GlobalErrorProps = {
 
 export default function GlobalError({ error, reset }: GlobalErrorProps) {
   useEffect(() => {
-    console.error("[global-error]", error)
+    if (process.env.NODE_ENV !== "production") {
+      console.error("[global-error]", error)
+    }
   }, [error])
 
   return (

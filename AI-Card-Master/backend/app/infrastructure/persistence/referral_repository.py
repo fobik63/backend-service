@@ -38,11 +38,11 @@ class ReferralRepository:
             user.referral_code = code
             try:
                 await self._session.commit()
-            except IntegrityError:
+            except IntegrityError as exc:
                 await self._session.rollback()
                 user = await self._session.get(User, user_id, with_for_update=True)
                 if user is None:
-                    raise ValueError(f"User {user_id} not found.")
+                    raise ValueError(f"User {user_id} not found.") from exc
                 if user.referral_code:
                     return user.referral_code
                 continue

@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.captcha import enforce_generation_behavioral_limit
-from app.api.payments import get_current_user
+from app.api.dependencies.auth import get_current_user
 from app.application.smart_variant_service import (
     SmartVariantNotFoundError,
     SmartVariantService,
@@ -34,8 +34,8 @@ from app.domain.smart_variant import (
     VariantSyncStatus,
     parse_notify_channels,
 )
-from app.infrastructure.smart_variant_factory import build_smart_variant_service
 from app.infrastructure.celery_app import celery_app
+from app.infrastructure.smart_variant_factory import build_smart_variant_service
 from app.models.database import get_db_session
 from app.models.user import User
 from app.services.billing_service import BillingValidationError

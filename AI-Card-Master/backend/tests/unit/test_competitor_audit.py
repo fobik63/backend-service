@@ -36,8 +36,8 @@ from app.domain.competitor_audit import (
     redis_competitor_audit_key,
     split_reviews_by_rating,
 )
-from app.infrastructure.stock_parser.exceptions import ParserTransportError
 from app.domain.stock_parser import ParserMarketplace
+from app.infrastructure.stock_parser.exceptions import ParserTransportError
 
 
 def test_parse_wildberries_catalog_link() -> None:

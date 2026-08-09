@@ -6,7 +6,10 @@ Import is lazy so optional ``anthropic`` is not required at package load time.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from app.infrastructure.claude.client import Claude47VisionClient
 
 __all__ = ["Claude47VisionClient"]
 

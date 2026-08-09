@@ -134,6 +134,104 @@ export type RenderCanvasResult = {
   url: string
 }
 
+export type EditorSoftboxDTO = {
+  enabled: boolean
+  light_angle: number
+  light_elevation: number
+  color_temp_k: number
+  intensity: number
+  softbox_diffusion: number
+}
+
+export type EditorTextStyleDTO = {
+  font_family: "Inter" | "Montserrat" | "Roboto" | "Space Grotesk"
+  font_size: number
+  font_weight: number
+  color: string
+  stroke_width: number
+  stroke_color: string
+  shadow_enabled: boolean
+  shadow_color: string
+  shadow_blur: number
+  shadow_offset_x: number
+  shadow_offset_y: number
+}
+
+export type EditorChipDTO = {
+  label: string
+  subtitle?: string | null
+  bg_color: string
+  border_radius: number
+  icon_id: string
+  variant: "solid" | "glass"
+  text_color?: string | null
+  blur: number
+}
+
+export type EditorLayerBaseDTO = {
+  id: string
+  name: string
+  visible: boolean
+  locked: boolean
+  opacity: number
+  z_index: number
+  x: number
+  y: number
+  width: number
+  height: number
+  scale: number
+  rotation: number
+}
+
+export type EditorLayerDTO =
+  | (EditorLayerBaseDTO & { type: "background" })
+  | (EditorLayerBaseDTO & { type: "image" })
+  | (EditorLayerBaseDTO & {
+      type: "text"
+      text: string
+      text_style: EditorTextStyleDTO
+    })
+  | (EditorLayerBaseDTO & {
+      type: "shape"
+      chip: EditorChipDTO
+    })
+
+export type EditorDocumentDTO = {
+  version: 1
+  pages: Array<{
+    id: string
+    layers: EditorLayerDTO[]
+  }>
+  active_page_index: number
+  pack_size: number
+  product_preview_url?: string | null
+  softbox: EditorSoftboxDTO
+}
+
+export type SavedDesignDTO = {
+  id: string
+  title: string
+  template_id?: string | null
+  preview_url?: string | null
+  canvas: CanvasStateDTO
+  editor_document?: EditorDocumentDTO | null
+  updated_at: string
+}
+
+export type SavedDesignListResponse = {
+  items: SavedDesignDTO[]
+  total: number
+}
+
+export type SaveDesignRequest = {
+  id?: string | null
+  title: string
+  template_id?: string | null
+  preview_url?: string | null
+  canvas: CanvasStateDTO
+  editor_document?: EditorDocumentDTO | null
+}
+
 /** POST /tools/remove-bg success payload. */
 export type RemoveBgResponse = {
   success: boolean

@@ -173,8 +173,8 @@ async def test_middleware_blocks_public_when_active(
     assert blocked.status_code == 503
     assert blocked.json()["code"] == "DEAD_MANS_SWITCH_ACTIVE"
 
-    live = client.get("/health/live")
-    assert live.status_code == 200
+    live_response = client.get("/health/live")
+    assert live_response.status_code == 200
 
 
 def test_watchdog_detects_patterns() -> None:

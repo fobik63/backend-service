@@ -26,9 +26,9 @@ from app.domain.winback import (
     pick_offer_type,
     resolve_favorite_style_display,
 )
+from app.models.enums import TariffCode
 from app.services.billing_service import expected_tariff_amount
 from app.services.tariffs import get_tariff_plan
-from app.models.enums import TariffCode
 
 
 class _FakeTelegram:
@@ -198,7 +198,7 @@ def test_pick_offer_type_alternates() -> None:
 def test_compute_discounted_amount_and_tariff_helper() -> None:
     plan = get_tariff_plan(TariffCode.PRO)
     discounted = compute_discounted_amount(plan.price_rub, 30)
-    assert discounted == Decimal("1043.00")
+    assert discounted == Decimal("693.00")
     assert expected_tariff_amount(plan, discount_percent=30) == discounted
     assert expected_tariff_amount(plan) == plan.price_rub
 
@@ -273,7 +273,7 @@ async def test_claim_free_generations_and_activate_discount() -> None:
     )
     assert percent == 30
     assert offer_id == discount_offer.id
-    assert amount == Decimal("1043.00")
+    assert amount == Decimal("693.00")
 
 
 @pytest.mark.asyncio

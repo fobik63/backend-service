@@ -15,8 +15,15 @@ from app.models.user import User
 class AuthRepository:
     """Persist and look up users for authentication use cases."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, *, auto_commit: bool = True) -> None:
         self._session = session
+        self._auto_commit = auto_commit
+
+    async def _finish_write(self, user: User) -> None:
+        await self._session.flush()
+        if self._auto_commit:
+            await self._session.commit()
+        await self._session.refresh(user)
 
     async def get_by_email(self, email: str) -> User | None:
         result = await self._session.scalar(select(User).where(User.email == email))
@@ -52,8 +59,7 @@ class AuthRepository:
             telegram_id=int(telegram_id) if telegram_id is not None else None,
         )
         self._session.add(user)
-        await self._session.commit()
-        await self._session.refresh(user)
+        await self._finish_write(user)
         return user
 
     async def link_telegram_id(
@@ -66,8 +72,7 @@ class AuthRepository:
         if user is None:
             return None
         user.telegram_id = int(telegram_id)
-        await self._session.commit()
-        await self._session.refresh(user)
+        await self._finish_write(user)
         return user
 
     async def update_fingerprint_hash(
@@ -84,8 +89,7 @@ class AuthRepository:
             return None
         if user.fingerprint_hash != normalized:
             user.fingerprint_hash = normalized
-            await self._session.commit()
-            await self._session.refresh(user)
+            await self._finish_write(user)
         return user
 
     async def exists_fingerprint_hash(
@@ -109,6 +113,18 @@ class AuthRepository:
             return None
         user.is_flagged = True
         user.flag_reason = (reason or "")[:64] or None
-        await self._session.commit()
-        await self._session.refresh(user)
+        await self._finish_write(user)
+        return user
+
+    async def update_password(
+        self,
+        user_id: UUID,
+        *,
+        hashed_password: str,
+    ) -> User | None:
+        user = await self._session.get(User, user_id)
+        if user is None:
+            return None
+        user.hashed_password = hashed_password
+        await self._finish_write(user)
         return user

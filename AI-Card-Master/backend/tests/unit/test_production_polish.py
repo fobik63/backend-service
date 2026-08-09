@@ -7,6 +7,7 @@ import logging
 from unittest.mock import AsyncMock
 
 import pytest
+from starlette.exceptions import HTTPException
 
 from app.core.http_errors import shape_error_envelope, shape_http_exception_body
 from app.core.logging_config import JsonLogFormatter, RequestIdLogFilter
@@ -16,7 +17,6 @@ from app.core.request_context import (
     set_request_audit_context,
 )
 from app.infrastructure.redis_lock import RedisDistributedLock, RedisLockError, redis_lock
-from starlette.exceptions import HTTPException
 
 
 @pytest.mark.asyncio

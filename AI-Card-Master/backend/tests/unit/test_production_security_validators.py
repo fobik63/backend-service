@@ -15,6 +15,9 @@ def _base(**overrides: Any) -> dict[str, Any]:
         "DATABASE_URL": "postgresql+asyncpg://u:p@localhost:5432/test",
         "JWT_SECRET_KEY": "j" * 64,
         "APP_ENV": "development",
+        # Do not inherit the test-suite's dev bypass when a case switches to
+        # production: each assertion must reach the invariant it targets.
+        "CAPTCHA_BYPASS_WHEN_UNCONFIGURED": False,
     }
     data.update(overrides)
     return data

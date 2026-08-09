@@ -12,21 +12,23 @@ Image upload lives in app.api.images (same path: POST /api/v1/images/upload).
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, Request, Response, status
+from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIASGIMiddleware
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
 from starlette.exceptions import HTTPException as StarletteHTTPException
+
 from app.api import (
     ab_tests_router,
     account_router,
@@ -34,7 +36,9 @@ from app.api import (
     admin_security_ws_router,
     ai_strategy_router,
     analytics_router,
+    auth_alias_router,
     auth_router,
+    bg_removal_router,
     brand_dna_router,
     brand_loras_router,
     bulk_generations_router,
@@ -43,12 +47,11 @@ from app.api import (
     claude_analyses_router,
     claude_reasoning_router,
     designs_router,
-    visual_audit_router,
     exports_router,
+    fonts_router,
     generations_router,
     health_router,
     images_router,
-    fonts_router,
     legal_router,
     marketplace_bridge_router,
     midjourney_webhook_router,
@@ -57,11 +60,11 @@ from app.api import (
     parser_router,
     payments_router,
     referrals_router,
-    bg_removal_router,
     relighting_router,
     smart_variants_router,
     templates_router,
     text_generation_router,
+    visual_audit_router,
     winback_router,
     workspaces_router,
 )
@@ -79,7 +82,15 @@ from app.core.rate_limit import limiter, rate_limit_exceeded_handler
 from app.core.request_context_middleware import RequestContextMiddleware
 from app.core.security_headers_middleware import SecurityHeadersMiddleware
 from app.core.suspicious_activity_middleware import SuspiciousActivityMiddleware
-from app.infrastructure.redis import close_redis_client, close_security_redis_client, redis_healthcheck
+from app.infrastructure.observability.sentry import (
+    capture_unhandled_exception,
+    init_sentry,
+)
+from app.infrastructure.redis import (
+    close_redis_client,
+    close_security_redis_client,
+    redis_healthcheck,
+)
 from app.models.database import SessionLocal, engine
 from app.services.ai_engine import close_ai_engine
 from app.services.infographic_service import close_infographic_service
@@ -89,13 +100,7 @@ from app.services.s3_storage import (
     close_s3_storage,
     get_s3_storage,
 )
-from app.infrastructure.observability.sentry import (
-    capture_unhandled_exception,
-    init_sentry,
-)
 from app.services.telegram_alerts import notify_critical_500, resolve_request_user_id
-from slowapi.errors import RateLimitExceeded
-from slowapi.middleware import SlowAPIASGIMiddleware
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -261,7 +266,8 @@ def apply_alembic_migrations() -> None:
 async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
     """Initialize and validate runtime resources.
 
-    Ensures the upload directory exists and auto-applies Alembic migrations.
+    Database migrations are owned by ``docker/entrypoint.sh`` (or an explicit
+    operator ``alembic upgrade head`` for local runs), never by each API worker.
     """
 
     try:
@@ -270,9 +276,6 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
     except OSError as startup_error:
         logger.exception("Startup failed: upload directory is not available")
         raise RuntimeError("Upload storage initialization failed") from startup_error
-
-    # Run in a worker thread: alembic/env.py uses asyncio.run() for async engines.
-    await asyncio.to_thread(apply_alembic_migrations)
 
     # Register default Cyrillic fonts from assets/fonts into FontRegistry (+ DB).
     try:
@@ -385,6 +388,7 @@ app.include_router(health_router)
 app.include_router(admin_router)
 app.include_router(admin_security_ws_router)
 app.include_router(auth_router)
+app.include_router(auth_alias_router)
 app.include_router(analytics_router)
 app.include_router(images_router)
 app.include_router(fonts_router)

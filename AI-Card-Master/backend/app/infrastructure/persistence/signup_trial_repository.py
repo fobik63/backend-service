@@ -14,8 +14,9 @@ from app.models.signup_trial import SignupTrialClaim
 class SignupTrialClaimRepository:
     """Persist and look up durable signup trial fingerprint claims."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, *, auto_commit: bool = True) -> None:
         self._session = session
+        self._auto_commit = auto_commit
 
     async def has_granted_trial(self, *, fingerprint_hash: str) -> bool:
         result = await self._session.scalar(
@@ -73,4 +74,6 @@ class SignupTrialClaimRepository:
             accept_language=(accept_language or None)[:128] if accept_language else None,
         )
         self._session.add(claim)
-        await self._session.commit()
+        await self._session.flush()
+        if self._auto_commit:
+            await self._session.commit()

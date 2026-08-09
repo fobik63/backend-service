@@ -41,12 +41,10 @@ function I18nProvider({
   children,
   defaultLocale = "ru",
 }: I18nProviderProps) {
-  const [locale, setLocaleState] = useState<Locale>(defaultLocale)
-
-  useEffect(() => {
-    const stored = readStoredLocale()
-    if (stored) setLocaleState(stored)
-  }, [])
+  const [locale, setLocaleState] = useState<Locale>(() => {
+    if (typeof window === "undefined") return defaultLocale
+    return readStoredLocale() ?? defaultLocale
+  })
 
   useEffect(() => {
     if (typeof document === "undefined") return

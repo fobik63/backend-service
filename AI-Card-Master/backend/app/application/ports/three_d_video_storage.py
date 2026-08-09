@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Protocol
 from uuid import UUID
 
-from app.domain.three_d_video import VIDEO_ASSET_CACHE_CONTROL
 from app.domain.three_d_video import (
+    VIDEO_ASSET_CACHE_CONTROL,
     VideoAssetFormat,
     VideoPresignedUrls,
     VideoUploadResult,

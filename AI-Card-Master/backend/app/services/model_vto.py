@@ -7,7 +7,6 @@ from typing import Literal
 
 from app.services.series_generator import SeriesTask
 
-
 MODEL_VTO_SLIDE_KEY = "model"
 MODEL_VTO_PRODUCT_CATEGORY = "clothing_model_vto"
 

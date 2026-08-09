@@ -7,10 +7,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
+import numpy as np
 import pytest
 from PIL import Image, ImageDraw
-
-import numpy as np
 
 from app.services.bg_removal import (
     BG_REMOVAL_COST_COINS,

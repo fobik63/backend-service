@@ -57,7 +57,6 @@ from app.infrastructure.redis import (
 )
 from app.models.enums import SubscriptionStatus
 
-
 logger = logging.getLogger(__name__)
 
 

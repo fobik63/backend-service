@@ -67,6 +67,7 @@ def test_assert_rejects_non_font_payload(tmp_path: Path) -> None:
         assets_dir=tmp_path / "assets",
         custom_dir=tmp_path / "custom",
     )
+    assert manager is not None
     with pytest.raises(FontValidationError, match="signature"):
         # Exercise validation path without DB via parse helpers.
         from app.services.templates.font_manager import _assert_font_signature

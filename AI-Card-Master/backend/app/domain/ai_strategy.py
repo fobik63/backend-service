@@ -408,15 +408,15 @@ def _normalize_text(value: str | None) -> str | None:
 
 
 def _values_differ(user_value: str | None, leader_value: str | None) -> bool:
-    u = (_normalize_text(user_value) or "").casefold()
-    l = (_normalize_text(leader_value) or "").casefold()
-    if not l and not u:
+    user_normalized = (_normalize_text(user_value) or "").casefold()
+    leader_normalized = (_normalize_text(leader_value) or "").casefold()
+    if not leader_normalized and not user_normalized:
         return False
-    if l and not u:
+    if leader_normalized and not user_normalized:
         return True
-    if u and not l:
+    if user_normalized and not leader_normalized:
         return False
-    return u != l
+    return user_normalized != leader_normalized
 
 
 def _field_value(card: StrategyCardSnapshot, field: str) -> str | None:

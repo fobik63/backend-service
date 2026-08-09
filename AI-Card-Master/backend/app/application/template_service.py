@@ -14,7 +14,7 @@ from app.domain.templates import (
     TemplateDetailView,
     TemplatePageView,
 )
-from app.schemas.templates import CanvasStateDTO
+from app.schemas.templates import CanvasStateDTO, EditorDocumentDTO
 from app.services.s3_storage import S3StorageError, S3UploadResult
 from app.services.templates.renderer import (
     CanvasRenderError,
@@ -108,12 +108,29 @@ class TemplateService:
 
         return await self._repository.list_user_designs(user_id=user_id)
 
+    async def get_design(
+        self,
+        *,
+        user_id: UUID,
+        design_id: UUID,
+    ) -> SavedDesignView:
+        design = await self._repository.get_user_design(
+            design_id=design_id,
+            user_id=user_id,
+        )
+        if design is None:
+            raise TemplateNotFoundError(
+                f"Design {design_id} was not found for the current user."
+            )
+        return design
+
     async def save_design(
         self,
         *,
         user_id: UUID,
         title: str,
         canvas: CanvasStateDTO,
+        editor_document: EditorDocumentDTO | None = None,
         design_id: UUID | None = None,
         template_id: UUID | None = None,
         preview_url: str | None = None,
@@ -134,6 +151,11 @@ class TemplateService:
                 )
 
         canvas_data = canvas.model_dump(mode="json")
+        editor_document_data = (
+            editor_document.model_dump(mode="json")
+            if editor_document is not None
+            else None
+        )
 
         if design_id is not None:
             updated = await self._repository.update_design(
@@ -141,6 +163,7 @@ class TemplateService:
                 user_id=user_id,
                 title=cleaned_title,
                 canvas_data=canvas_data,
+                editor_document_data=editor_document_data,
                 template_id=template_id,
                 preview_url=preview_url,
             )
@@ -154,9 +177,20 @@ class TemplateService:
             user_id=user_id,
             title=cleaned_title,
             canvas_data=canvas_data,
+            editor_document_data=editor_document_data,
             template_id=template_id,
             preview_url=preview_url,
         )
+
+    async def delete_design(self, *, user_id: UUID, design_id: UUID) -> None:
+        deleted = await self._repository.delete_design(
+            design_id=design_id,
+            user_id=user_id,
+        )
+        if not deleted:
+            raise TemplateNotFoundError(
+                f"Design {design_id} was not found for the current user."
+            )
 
     async def render_design(
         self,

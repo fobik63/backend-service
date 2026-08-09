@@ -11,11 +11,33 @@ import {
   type MarketplaceFilter,
 } from "@/components/dashboard/projects/projects-toolbar"
 import {
-  MOCK_PROJECTS,
   type Project,
 } from "@/lib/constants/mock-projects"
-import { getApiErrorMessage } from "@/lib/api"
+import {
+  deleteDesign,
+  getApiErrorMessage,
+  listDesigns,
+} from "@/lib/api"
 import { useI18n } from "@/lib/i18n"
+import type { SavedDesignDTO } from "@/types/api"
+
+function designToProject(design: SavedDesignDTO): Project {
+  return {
+    id: design.id,
+    title: design.title,
+    marketplace: "ozon",
+    status: "ready",
+    createdAt: design.updated_at,
+    previewImage:
+      design.preview_url ?? "/projects/cream-sage-mist.png",
+    productImage:
+      design.editor_document?.product_preview_url ??
+      design.preview_url ??
+      undefined,
+    accentLabel: "AI",
+    editorDocument: design.editor_document,
+  }
+}
 
 function ProjectsView() {
   const { t } = useI18n()
@@ -24,6 +46,8 @@ function ProjectsView() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [query, setQuery] = useState("")
   const [marketplace, setMarketplace] = useState<MarketplaceFilter>("all")
+  const [reloadKey, setReloadKey] = useState(0)
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(() => new Set())
   const deferredQuery = useDeferredValue(query)
 
   useEffect(() => {
@@ -33,10 +57,9 @@ function ProjectsView() {
       setLoading(true)
       setLoadError(null)
       try {
-        // Simulate network fetch until projects API is wired.
-        await new Promise((r) => setTimeout(r, 650))
+        const result = await listDesigns()
         if (cancelled) return
-        setProjects(MOCK_PROJECTS)
+        setProjects(result.items.map(designToProject))
       } catch (error) {
         if (cancelled) return
         const message = getApiErrorMessage(error, t("projects.loadError"))
@@ -51,7 +74,7 @@ function ProjectsView() {
     return () => {
       cancelled = true
     }
-  }, [t])
+  }, [reloadKey, t])
 
   const filtered = useMemo(() => {
     const q = deferredQuery.trim().toLowerCase()
@@ -69,14 +92,35 @@ function ProjectsView() {
     setMarketplace("all")
   }
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string): Promise<void> => {
     const project = projects.find((item) => item.id === id)
-    setProjects((prev) => prev.filter((item) => item.id !== id))
-    toast.message(
-      project
-        ? `${t("projects.deleted")}: ${project.title}`
-        : t("projects.deleted")
-    )
+    if (
+      !window.confirm(
+        project
+          ? `Удалить проект «${project.title}» без возможности восстановления?`
+          : "Удалить проект без возможности восстановления?"
+      )
+    ) {
+      return
+    }
+    setDeletingIds((current) => new Set(current).add(id))
+    try {
+      await deleteDesign(id)
+      setProjects((prev) => prev.filter((item) => item.id !== id))
+      toast.message(
+        project
+          ? `${t("projects.deleted")}: ${project.title}`
+          : t("projects.deleted")
+      )
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, t("projects.loadError")))
+    } finally {
+      setDeletingIds((current) => {
+        const next = new Set(current)
+        next.delete(id)
+        return next
+      })
+    }
   }
 
   return (
@@ -107,8 +151,7 @@ function ProjectsView() {
             type="button"
             className="mt-3 text-sm text-emerald underline-offset-4 hover:underline"
             onClick={() => {
-              setProjects(MOCK_PROJECTS)
-              setLoadError(null)
+              setReloadKey((value) => value + 1)
             }}
           >
             {t("projects.showLocal")}
@@ -129,6 +172,7 @@ function ProjectsView() {
               project={project}
               index={index}
               onDelete={handleDelete}
+              deleting={deletingIds.has(project.id)}
             />
           ))}
         </div>

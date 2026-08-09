@@ -11,10 +11,11 @@ from app.infrastructure.persistence.coin_wallet import SqlAlchemyCoinWallet
 from app.infrastructure.persistence.signup_trial_repository import (
     SignupTrialClaimRepository,
 )
+from app.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 from app.infrastructure.security.otp_store import RedisOtpStore
 from app.infrastructure.security.proxy_detector import AsyncProxyDetector
-from app.infrastructure.security.silent_ban_store import RedisSilentBanStore
 from app.infrastructure.security.signup_trial_store import RedisSignupTrialStore
+from app.infrastructure.security.silent_ban_store import RedisSilentBanStore
 from app.infrastructure.security.token_family_store import RedisTokenFamilyStore
 from app.services.auth import RefreshTokenRotationService
 
@@ -22,10 +23,10 @@ from app.services.auth import RefreshTokenRotationService
 def build_auth_service(session: AsyncSession) -> AuthService:
     settings = get_settings()
     return AuthService(
-        AuthRepository(session),
-        coin_wallet=SqlAlchemyCoinWallet(session),
+        AuthRepository(session, auto_commit=False),
+        coin_wallet=SqlAlchemyCoinWallet(session, auto_commit=False),
         trial_store=RedisSignupTrialStore(),
-        trial_claims=SignupTrialClaimRepository(session),
+        trial_claims=SignupTrialClaimRepository(session, auto_commit=False),
         proxy_detector=AsyncProxyDetector(
             enabled=settings.signup_trial_proxy_check_enabled,
             use_ip_api=settings.signup_trial_ip_api_enabled,
@@ -33,6 +34,7 @@ def build_auth_service(session: AsyncSession) -> AuthService:
         ),
         silent_ban_store=RedisSilentBanStore(),
         token_rotation=RefreshTokenRotationService(store=RedisTokenFamilyStore()),
+        unit_of_work=SqlAlchemyUnitOfWork(session),
         otp_store=RedisOtpStore(
             ttl_seconds=settings.otp_ttl_seconds,
             code_length=settings.otp_code_length,

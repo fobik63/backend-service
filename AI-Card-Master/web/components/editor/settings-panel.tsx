@@ -1,11 +1,12 @@
 "use client"
 
-import { ChevronDown, Images, Lamp, Type } from "lucide-react"
-import { useEffect, useState } from "react"
+import { ChevronDown, Images, Lamp, SlidersHorizontal, Type } from "lucide-react"
+import { useState } from "react"
 
 import { BadgeParamsSection } from "@/components/editor/badge-tool"
 import { PromptBar } from "@/components/editor/prompt-bar"
 import { SliderControl } from "@/components/editor/slider-control"
+import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
   DropdownMenu,
@@ -14,6 +15,13 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet"
 import { useI18n } from "@/lib/i18n"
 import {
   MAX_PACK_SIZE,
@@ -46,6 +54,7 @@ type EditorSettingsPanelProps = {
 }
 
 function TextParamsSection() {
+  const { t } = useI18n()
   const layers = useEditorStore((s) => s.layers)
   const selectedLayerId = useEditorStore((s) => s.selectedLayerId)
   const updateLayer = useEditorStore((s) => s.updateLayer)
@@ -70,20 +79,20 @@ function TextParamsSection() {
       <div className="flex items-center gap-2">
         <Type className="size-4 text-copper" aria-hidden />
         <h3 className="font-heading text-sm font-semibold tracking-tight">
-          Текст
+          {t("editor.text")}
         </h3>
       </div>
 
       {!isText ? (
         <p className="text-[11px] text-muted-foreground">
-          Выберите текст на холсте
+          {t("editor.textSelectHint")}
         </p>
       ) : null}
 
       <div className={cn("space-y-2.5", !isText && "opacity-45")}>
         <div className="space-y-1.5">
           <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-            Шрифт
+            {t("editor.font")}
           </span>
           <DropdownMenu>
             <DropdownMenuTrigger
@@ -124,7 +133,7 @@ function TextParamsSection() {
         </div>
 
         <SliderControl
-          label="Размер"
+          label={t("editor.fontSize")}
           value={style.fontSize}
           min={12}
           max={128}
@@ -140,9 +149,16 @@ function TextParamsSection() {
 }
 
 function SoftboxParamsSection() {
+  const { t } = useI18n()
   const softbox = useEditorStore((s) => s.softbox)
   const setSoftbox = useEditorStore((s) => s.setSoftbox)
   const disabled = !softbox.enabled
+
+  const tempLabel = (v: number) => {
+    if (v <= 4000) return t("editor.colorTempWarm")
+    if (v >= 5600) return t("editor.colorTempCold")
+    return t("editor.colorTempNeutral")
+  }
 
   return (
     <section className="space-y-2.5">
@@ -150,7 +166,7 @@ function SoftboxParamsSection() {
         <div className="flex items-center gap-2">
           <Lamp className="size-4 text-amber" aria-hidden />
           <h3 className="font-heading text-sm font-semibold tracking-tight">
-            Софтбокс
+            {t("editor.softboxFull")}
           </h3>
         </div>
         <button
@@ -169,13 +185,13 @@ function SoftboxParamsSection() {
               softbox.enabled && "translate-x-4"
             )}
           />
-          <span className="sr-only">Софтбокс</span>
+          <span className="sr-only">{t("editor.softbox")}</span>
         </button>
       </div>
 
       <div className={cn("space-y-2.5", disabled && "opacity-45")}>
         <SliderControl
-          label="Интенсивность"
+          label={t("editor.intensity")}
           value={softbox.intensity}
           min={0}
           max={200}
@@ -186,28 +202,26 @@ function SoftboxParamsSection() {
           }
         />
         <SliderControl
-          label="Температура"
+          label={t("editor.colorTemp")}
           value={softbox.colorTempK}
           min={2700}
           max={6500}
           step={50}
           unit="K"
           disabled={disabled}
-          formatValue={(v) =>
-            `${v}K ${v <= 4000 ? "Warm" : v >= 5600 ? "Cold" : "Neutral"}`
-          }
+          formatValue={(v) => `${v}K ${tempLabel(v)}`}
           onChange={(colorTempK) =>
             setSoftbox({ colorTempK: clamp(colorTempK, 2700, 6500) })
           }
           hint={
             <div className="flex justify-between">
-              <span>2700 Warm</span>
-              <span>6500 Cold</span>
+              <span>2700 {t("editor.colorTempWarm")}</span>
+              <span>6500 {t("editor.colorTempCold")}</span>
             </div>
           }
         />
         <SliderControl
-          label="Угол"
+          label={t("editor.angle")}
           value={softbox.lightAngle}
           min={0}
           max={360}
@@ -218,9 +232,20 @@ function SoftboxParamsSection() {
           }
           hint={
             <div className="flex justify-between">
-              <span>0° справа</span>
-              <span>180° слева</span>
+              <span>{t("editor.angleRight")}</span>
+              <span>{t("editor.angleLeft")}</span>
             </div>
+          }
+        />
+        <SliderControl
+          label={t("editor.diffusion")}
+          value={softbox.softboxDiffusion}
+          min={0}
+          max={100}
+          unit="%"
+          disabled={disabled}
+          onChange={(softboxDiffusion) =>
+            setSoftbox({ softboxDiffusion: clamp(softboxDiffusion, 0, 100) })
           }
         />
       </div>
@@ -235,17 +260,25 @@ function PackParamsSection() {
   const isPreset = PRESET_PACK_SIZES.includes(packSize)
   const [customMode, setCustomMode] = useState(!isPreset)
   const [customDraft, setCustomDraft] = useState(String(packSize))
+  const customSelected = customMode || !isPreset
 
-  useEffect(() => {
-    if (!PRESET_PACK_SIZES.includes(packSize)) {
-      setCustomMode(true)
-      setCustomDraft(String(packSize))
+  const applySize = (size: number): boolean => {
+    const next = clampPackSize(size)
+    if (
+      next < packSize &&
+      !window.confirm(
+        `Уменьшить набор с ${packSize} до ${next}? Страницы после ${next}-й будут удалены.`
+      )
+    ) {
+      return false
     }
-  }, [packSize])
+    setPackSize(next)
+    return true
+  }
 
   const selectPreset = (size: number) => {
+    if (!applySize(size)) return
     setCustomMode(false)
-    setPackSize(size)
     setCustomDraft(String(size))
   }
 
@@ -253,7 +286,10 @@ function PackParamsSection() {
     setCustomDraft(raw)
     const parsed = Number.parseInt(raw, 10)
     if (!Number.isFinite(parsed)) return
-    setPackSize(clampPackSize(parsed))
+    const next = clampPackSize(parsed)
+    if (next >= packSize) {
+      setPackSize(next)
+    }
   }
 
   return (
@@ -261,7 +297,7 @@ function PackParamsSection() {
       <div className="flex items-center gap-2">
         <Images className="size-4 text-emerald" aria-hidden />
         <h3 className="font-heading text-sm font-semibold tracking-tight">
-          Генерация сета
+          {t("editor.packGeneration")}
         </h3>
       </div>
 
@@ -281,11 +317,11 @@ function PackParamsSection() {
               onClick={() => selectPreset(size)}
               className={cn(
                 "inline-flex h-8 min-w-8 flex-1 items-center justify-center rounded-md border text-xs font-medium transition-colors",
-                !customMode && packSize === size
+                !customSelected && packSize === size
                   ? "border-emerald/40 bg-emerald/20 text-emerald"
                   : "border-white/10 bg-white/[0.04] text-muted-foreground hover:text-foreground"
               )}
-              aria-pressed={!customMode && packSize === size}
+              aria-pressed={!customSelected && packSize === size}
             >
               {size}
             </button>
@@ -301,17 +337,17 @@ function PackParamsSection() {
             }}
             className={cn(
               "inline-flex h-8 min-w-10 flex-[1.2] items-center justify-center rounded-md border px-2 text-[11px] font-medium transition-colors",
-              customMode
+              customSelected
                 ? "border-emerald/40 bg-emerald/20 text-emerald"
                 : "border-white/10 bg-white/[0.04] text-muted-foreground hover:text-foreground"
             )}
-            aria-pressed={customMode}
+            aria-pressed={customSelected}
           >
             {t("export.packCustom")}
           </button>
         </div>
 
-        {customMode ? (
+        {customSelected ? (
           <div className="flex items-center gap-2 pt-0.5">
             <Input
               type="number"
@@ -323,8 +359,11 @@ function PackParamsSection() {
               onChange={(e) => applyCustom(e.target.value)}
               onBlur={() => {
                 const next = clampPackSize(Number.parseInt(customDraft, 10) || 1)
-                setCustomDraft(String(next))
-                setPackSize(next)
+                if (applySize(next)) {
+                  setCustomDraft(String(next))
+                } else {
+                  setCustomDraft(String(packSize))
+                }
               }}
               className="h-8 border-white/10 bg-white/[0.04] text-xs"
             />
@@ -342,14 +381,11 @@ function PackParamsSection() {
   )
 }
 
-function EditorSettingsPanel({ projectTitle }: EditorSettingsPanelProps) {
+function EditorSettingsBody({ projectTitle }: EditorSettingsPanelProps) {
   const { t } = useI18n()
 
   return (
-    <aside
-      className="flex h-full w-[340px] shrink-0 flex-col self-stretch overflow-hidden border-l border-white/8 bg-[#14171d]"
-      aria-label={t("editor.tools")}
-    >
+    <>
       <div className="shrink-0 border-b border-white/8 px-3 py-2.5">
         <h2 className="font-heading text-sm font-semibold tracking-tight">
           {t("editor.tools")}
@@ -375,7 +411,49 @@ function EditorSettingsPanel({ projectTitle }: EditorSettingsPanelProps) {
       <div className="shrink-0 border-t border-white/8 bg-[#12151a] px-3 py-3">
         <PromptBar variant="panel" projectTitle={projectTitle} />
       </div>
-    </aside>
+    </>
+  )
+}
+
+function EditorSettingsPanel({ projectTitle }: EditorSettingsPanelProps) {
+  const { t } = useI18n()
+  const [mobileOpen, setMobileOpen] = useState(false)
+
+  return (
+    <>
+      <aside
+        className="hidden h-full w-[min(100%,340px)] shrink-0 flex-col self-stretch overflow-hidden border-l border-white/8 bg-[#14171d] lg:flex"
+        aria-label={t("editor.tools")}
+      >
+        <EditorSettingsBody projectTitle={projectTitle} />
+      </aside>
+
+      <div className="pointer-events-none absolute inset-x-0 bottom-3 z-20 flex justify-center px-3 lg:hidden">
+        <Button
+          type="button"
+          size="sm"
+          className="pointer-events-auto gap-2 rounded-full border border-white/15 bg-loft-surface/95 shadow-lg backdrop-blur"
+          onClick={() => setMobileOpen(true)}
+        >
+          <SlidersHorizontal className="size-4" aria-hidden />
+          {t("editor.tools")}
+        </Button>
+        <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
+          <SheetContent
+            side="right"
+            className="w-full max-w-[min(100%,24rem)] border-l border-white/10 bg-[#14171d] p-0"
+          >
+            <SheetHeader className="sr-only">
+              <SheetTitle>{t("editor.tools")}</SheetTitle>
+              <SheetDescription>{t("editor.toolsHint")}</SheetDescription>
+            </SheetHeader>
+            <div className="flex h-full min-h-0 flex-col">
+              <EditorSettingsBody projectTitle={projectTitle} />
+            </div>
+          </SheetContent>
+        </Sheet>
+      </div>
+    </>
   )
 }
 

@@ -2,10 +2,10 @@
 
 import { Menu, X } from "lucide-react"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
 import { useEffect, useState } from "react"
 import { AnimatePresence, motion } from "framer-motion"
 
+import { AuthModal } from "@/components/modals/auth-modal"
 import { GlassButton } from "@/components/ui/glass-button"
 import { cn } from "@/lib/utils"
 
@@ -69,9 +69,9 @@ function CardLogoIcon({ className }: { className?: string }) {
 }
 
 function Navbar() {
-  const router = useRouter()
   const [scrolled, setScrolled] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [authOpen, setAuthOpen] = useState(false)
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 12)
@@ -88,6 +88,11 @@ function Navbar() {
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
   }, [mobileOpen])
+
+  const openAuth = () => {
+    setMobileOpen(false)
+    setAuthOpen(true)
+  }
 
   return (
     <header className="pointer-events-none fixed inset-x-0 top-0 z-50 px-3 pt-3 sm:px-5">
@@ -133,11 +138,11 @@ function Navbar() {
           <GlassButton
             size="default"
             className="border border-white/12 !bg-none bg-white/[0.04] text-foreground shadow-none [background-image:none]"
-            onClick={() => router.push("/login")}
+            onClick={openAuth}
           >
             Войти
           </GlassButton>
-          <GlassButton size="default" onClick={() => router.push("/register")}>
+          <GlassButton size="default" onClick={openAuth}>
             Попробовать бесплатно
           </GlassButton>
         </div>
@@ -183,26 +188,19 @@ function Navbar() {
             <div className="flex flex-col gap-2 border-t border-white/8 p-3 sm:hidden">
               <GlassButton
                 className="w-full border border-white/12 !bg-none bg-white/[0.04] text-foreground shadow-none [background-image:none]"
-                onClick={() => {
-                  setMobileOpen(false)
-                  router.push("/login")
-                }}
+                onClick={openAuth}
               >
                 Войти
               </GlassButton>
-              <GlassButton
-                className="w-full"
-                onClick={() => {
-                  setMobileOpen(false)
-                  router.push("/register")
-                }}
-              >
+              <GlassButton className="w-full" onClick={openAuth}>
                 Попробовать бесплатно
               </GlassButton>
             </div>
           </motion.div>
         ) : null}
       </AnimatePresence>
+
+      <AuthModal open={authOpen} onOpenChange={setAuthOpen} initialMode="otp" />
     </header>
   )
 }

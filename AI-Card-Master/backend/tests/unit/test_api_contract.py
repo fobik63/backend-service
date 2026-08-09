@@ -4,9 +4,9 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
-import pytest
 
 import app.api.generations as generations_api
 from app.domain.generation import GenerationEngineMode, GenerationPostProcessingMode

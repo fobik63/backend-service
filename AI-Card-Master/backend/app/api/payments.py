@@ -4,20 +4,16 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import UTC, datetime
 from typing import Any
-from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Security, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.dependencies.auth import get_current_user
 from app.application.payment_service import PaymentApplicationService
 from app.application.winback_service import WinbackService
 from app.core.config import get_settings
-from app.core.security import InvalidTokenError, decode_and_validate_token
 from app.infrastructure.generation_history_cache import (
     get_cached_tariffs,
     set_cached_tariffs,
@@ -44,11 +40,9 @@ from app.services.yookassa_service import (
     get_yookassa_service,
 )
 
-
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/payments", tags=["payments"])
-bearer_scheme = HTTPBearer(auto_error=False)
 
 
 class TariffResponse(BaseModel):
@@ -140,85 +134,6 @@ async def get_payment_application_service(
     except YooKassaConfigurationError:
         yookassa = None
     return build_payment_application_service(db_session, yookassa=yookassa)
-
-
-async def get_current_user(
-    request: Request,
-    credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
-    db_session: AsyncSession = Depends(get_db_session),
-) -> User:
-    """Resolve the authenticated user from a Bearer JWT access token."""
-
-    if credentials is None or credentials.scheme.lower() != "bearer":
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing bearer access token.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    try:
-        payload = decode_and_validate_token(credentials.credentials, expected_type="access")
-    except InvalidTokenError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired access token.",
-            headers={"WWW-Authenticate": "Bearer"},
-        ) from exc
-
-    family_id = str(payload.get("family_id") or "").strip()
-    if family_id:
-        from app.services.auth import (
-            FAMILY_REUSE_DETAIL,
-            get_refresh_token_rotation_service,
-        )
-
-        if await get_refresh_token_rotation_service().is_family_revoked(family_id):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=FAMILY_REUSE_DETAIL,
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-
-    subject = str(payload.get("sub") or "").strip()
-    if not subject:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token subject is missing.",
-        )
-
-    try:
-        user_id = UUID(subject)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token subject is not a valid user id.",
-        ) from exc
-
-    user = await db_session.scalar(select(User).where(User.id == user_id))
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found for this token.",
-        )
-    if user.is_banned:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User is banned for abuse.",
-        )
-
-    # Activity signal for Churn Prevention inactivity scanner (throttled in DB).
-    now = datetime.now(UTC)
-    last_seen = user.last_seen_at
-    if last_seen is not None and last_seen.tzinfo is None:
-        last_seen = last_seen.replace(tzinfo=UTC)
-    if last_seen is None or (now - last_seen.astimezone(UTC)).total_seconds() >= 3600:
-        user.last_seen_at = now
-        await db_session.commit()
-        await db_session.refresh(user)
-
-    # Correlate 500 alerts / Sentry events with the authenticated subject.
-    request.state.user_id = str(user.id)
-    return user
 
 
 async def get_winback_service_for_payments(

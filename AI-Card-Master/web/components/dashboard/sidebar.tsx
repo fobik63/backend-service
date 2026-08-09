@@ -33,13 +33,13 @@ type SidebarProps = {
 }
 
 const DEFAULT_USER: SidebarUser = {
-  name: "Алексей Иванов",
+  name: "Гость",
   avatarUrl: null,
-  statusLabel: "PRO",
+  statusLabel: "FREE",
 }
 
 const DEFAULT_BALANCE: SidebarBalance = {
-  current: 48,
+  current: 0,
   limit: 50,
 }
 

@@ -3,13 +3,18 @@
 import {
   BadgePercent,
   Gem,
+  Grip,
   Lamp,
+  Leaf,
   Link2,
   MessageSquareWarning,
   Rotate3d,
   Scissors,
+  Star,
+  Wind,
   type LucideIcon,
 } from "lucide-react"
+import dynamic from "next/dynamic"
 import Image from "next/image"
 import {
   useCallback,
@@ -21,10 +26,25 @@ import {
 } from "react"
 import { motion, useInView } from "framer-motion"
 
-import { Sneaker3DViewer } from "@/components/landing/sneaker-3d-viewer"
+import { ErrorBoundary } from "@/components/error-boundary"
 import { GlassCard } from "@/components/ui/glass-card"
 import { SectionHeader } from "@/components/ui/section-header"
 import { cn } from "@/lib/utils"
+
+const Sneaker3DViewer = dynamic(
+  () =>
+    import("@/components/landing/sneaker-3d-viewer").then(
+      (mod) => mod.Sneaker3DViewer
+    ),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="absolute inset-0 flex items-center justify-center bg-[#1a1612]">
+        <div className="size-10 animate-pulse rounded-full border border-copper/40 bg-copper/10" />
+      </div>
+    ),
+  }
+)
 
 type Feature = {
   id: string
@@ -86,7 +106,7 @@ function SoftboxDemo() {
       aria-label="Демо виртуального софтбокса: перетащите курсор, чтобы менять угол и температуру света"
     >
       {/* Studio floor + backdrop */}
-      <div className="absolute inset-0 bg-[linear-gradient(180deg,#151821_0%,#0f1115_55%,#0a0b0e_100%)]" />
+      <div className="absolute inset-0 bg-[linear-gradient(180deg,#14171d_0%,#0d0f12_55%,#0a0b0e_100%)]" />
       <div className="absolute inset-x-0 bottom-0 h-[42%] bg-[linear-gradient(180deg,transparent,rgba(27,62,43,0.25))]" />
 
       {/* Softbox key light bloom */}
@@ -161,82 +181,108 @@ function CutoutDemo() {
 
   return (
     <div
-      className="relative aspect-[16/10] w-full overflow-hidden rounded-lg bg-[linear-gradient(135deg,#1a1d24_25%,#12141a_25%,#12141a_50%,#1a1d24_50%,#1a1d24_75%,#12141a_75%)] bg-[length:14px_14px] select-none"
+      className="relative aspect-[16/10] w-full overflow-hidden rounded-lg bg-[linear-gradient(135deg,#161a20_25%,#0e1116_25%,#0e1116_50%,#161a20_50%,#161a20_75%,#0e1116_75%)] bg-[length:16px_16px] select-none"
       role="img"
-      aria-label="Демо AI-вырезки: вся баночка товара и аккуратный край вырезки без белых пикселей"
+      aria-label="Демо AI-вырезки: товар по центру, аккуратный край без белых пикселей и лесенки"
     >
-      {/* Full product framed against checkerboard — edge detail without extreme macro zoom */}
+      {/* Phase 0 — raw with white halo fringe */}
       <div
         className={cn(
           "absolute inset-0 transition-opacity duration-500",
           phase === 0 ? "opacity-100" : "opacity-0"
         )}
       >
-        <div className="absolute inset-[10%] overflow-hidden">
-          <Image
-            src="/landing/cosmetics-raw.png"
-            alt=""
-            fill
-            sizes="320px"
-            className="object-contain object-center blur-[0.6px] brightness-110 contrast-75"
-            aria-hidden
-          />
-          <div className="absolute inset-0 ring-[6px] ring-white/70" />
+        <div className="absolute inset-[8%] flex items-center justify-center">
+          <div className="relative h-full w-[42%] max-w-[7.5rem]">
+            <Image
+              src="/landing/perfume-raw.png"
+              alt=""
+              fill
+              sizes="140px"
+              className="object-contain object-center"
+              aria-hidden
+            />
+            {/* Simulated cutout halo / fringe */}
+            <div
+              className="pointer-events-none absolute inset-[-3%] rounded-[28%] ring-[5px] ring-white/75 blur-[0.4px]"
+              aria-hidden
+            />
+          </div>
         </div>
         <span className="absolute top-2 left-2 z-10 rounded bg-loft/80 px-1.5 py-0.5 font-heading text-[10px] text-amber">
           До: ореол
         </span>
       </div>
 
+      {/* Phase 1 — edge scan grid */}
       <div
         className={cn(
           "absolute inset-0 transition-opacity duration-500",
           phase === 1 ? "opacity-100" : "opacity-0"
         )}
       >
-        <motion.div
-          className="absolute inset-[10%]"
-          animate={{ scale: [0.98, 1.02, 1] }}
-          transition={{ duration: 1.2, ease: "easeOut" }}
-        >
-          <Image
-            src="/landing/cosmetics-transparent.png"
-            alt=""
-            fill
-            sizes="320px"
-            className="object-contain object-center opacity-95"
-            aria-hidden
+        <div className="absolute inset-[8%] flex items-center justify-center">
+          <motion.div
+            className="relative h-full w-[42%] max-w-[7.5rem]"
+            animate={{ scale: [0.98, 1.02, 1] }}
+            transition={{ duration: 1.2, ease: "easeOut" }}
+          >
+            <Image
+              src="/landing/perfume-transparent.png"
+              alt=""
+              fill
+              sizes="140px"
+              className="object-contain object-center"
+              aria-hidden
+            />
+          </motion.div>
+        </div>
+
+        {/* Centered scanner frame + grid */}
+        <div className="pointer-events-none absolute inset-[10%] rounded-md border border-emerald/50">
+          <div
+            className="absolute inset-0 opacity-80"
+            style={{
+              backgroundImage:
+                "linear-gradient(to right, rgba(16,185,129,0.18) 1px, transparent 1px), linear-gradient(to bottom, rgba(16,185,129,0.18) 1px, transparent 1px)",
+              backgroundSize: "14px 14px",
+              backgroundPosition: "center",
+            }}
           />
-        </motion.div>
-        <div className="pointer-events-none absolute inset-0 border border-dashed border-emerald/55" />
-        <div
-          className="pointer-events-none absolute inset-[12%] border border-emerald/35"
-          style={{
-            backgroundImage:
-              "linear-gradient(to right, rgba(16,185,129,0.15) 1px, transparent 1px), linear-gradient(to bottom, rgba(16,185,129,0.15) 1px, transparent 1px)",
-            backgroundSize: "12px 12px",
-          }}
-        />
+          {/* Corner brackets */}
+          <span className="absolute top-0 left-0 size-3 border-t-2 border-l-2 border-emerald" />
+          <span className="absolute top-0 right-0 size-3 border-t-2 border-r-2 border-emerald" />
+          <span className="absolute bottom-0 left-0 size-3 border-b-2 border-l-2 border-emerald" />
+          <span className="absolute bottom-0 right-0 size-3 border-b-2 border-r-2 border-emerald" />
+          <motion.div
+            className="absolute inset-x-2 h-0.5 bg-gradient-to-r from-transparent via-emerald to-transparent"
+            animate={{ top: ["8%", "88%", "8%"] }}
+            transition={{ duration: 1.6, ease: "easeInOut", repeat: Infinity }}
+          />
+        </div>
         <span className="absolute top-2 left-2 z-10 rounded bg-loft/80 px-1.5 py-0.5 font-heading text-[10px] text-emerald">
           Скан краёв
         </span>
       </div>
 
+      {/* Phase 2 — clean cutout */}
       <div
         className={cn(
           "absolute inset-0 transition-opacity duration-500",
           phase === 2 ? "opacity-100" : "opacity-0"
         )}
       >
-        <div className="absolute inset-[10%] drop-shadow-[0_12px_28px_rgba(0,0,0,0.4)]">
-          <Image
-            src="/landing/cosmetics-transparent.png"
-            alt=""
-            fill
-            sizes="320px"
-            className="object-contain object-center"
-            aria-hidden
-          />
+        <div className="absolute inset-[8%] flex items-center justify-center">
+          <div className="relative h-full w-[42%] max-w-[7.5rem] drop-shadow-[0_14px_28px_rgba(0,0,0,0.45)]">
+            <Image
+              src="/landing/perfume-transparent.png"
+              alt=""
+              fill
+              sizes="140px"
+              className="object-contain object-center"
+              aria-hidden
+            />
+          </div>
         </div>
         <span className="absolute top-2 left-2 z-10 rounded bg-loft/80 px-1.5 py-0.5 font-heading text-[10px] text-emerald">
           После: чисто
@@ -252,7 +298,18 @@ function CutoutDemo() {
 function Rotate360Demo() {
   return (
     <div className="relative aspect-[16/10] w-full overflow-hidden rounded-lg">
-      <Sneaker3DViewer variant="card" className="absolute inset-0" autoRotate enableZoom />
+      <ErrorBoundary
+        title="3D-превью недоступно"
+        description="WebGL-вьюер не смог отрисовать модель. Остальной лендинг продолжает работать."
+        className="absolute inset-0 rounded-none border-0"
+      >
+        <Sneaker3DViewer
+          variant="card"
+          className="absolute inset-0"
+          autoRotate
+          enableZoom
+        />
+      </ErrorBoundary>
     </div>
   )
 }
@@ -260,29 +317,115 @@ function Rotate360Demo() {
 function InfographicDemo() {
   return (
     <div
-      className="relative aspect-[16/10] w-full overflow-hidden rounded-lg bg-[#0c0e12] select-none"
+      className="relative aspect-[16/10] w-full overflow-hidden rounded-lg select-none"
       role="img"
-      aria-label="Демо готовой инфографики: плашки и скидки"
+      aria-label="Демо готовой инфографики: полная карточка товара с ценой, скидкой и материалами"
     >
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_70%_35%,rgba(27,62,43,0.55),transparent_60%)]" />
+      {/* Accent studio backdrop */}
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_55%_40%,#2a3d32_0%,#12151a_55%,#0c0e12_100%)]" />
+      <div
+        className="pointer-events-none absolute -right-6 top-0 h-full w-1/2 opacity-40"
+        style={{
+          background:
+            "linear-gradient(115deg, transparent 20%, rgba(125,143,120,0.35) 45%, transparent 70%)",
+        }}
+        aria-hidden
+      />
 
-      <div className="absolute inset-3 overflow-hidden rounded-xl border border-white/10 copper-border shadow-[0_16px_40px_rgba(0,0,0,0.4)]">
-        <Image
-          src="/landing/after-card.png"
-          alt=""
-          fill
-          sizes="(max-width: 768px) 90vw, 320px"
-          className="object-cover object-top"
-          aria-hidden
-        />
+      <div className="absolute inset-2.5 overflow-hidden rounded-xl border border-white/10 bg-[#10131a]/90 copper-border shadow-[0_16px_40px_rgba(0,0,0,0.45)]">
+        {/* Full product — not cropped */}
+        <div className="absolute inset-x-[18%] top-[6%] bottom-[34%]">
+          <Image
+            src="/landing/sneaker-transparent.png"
+            alt=""
+            fill
+            sizes="(max-width: 768px) 70vw, 240px"
+            className="object-contain object-center drop-shadow-[0_18px_28px_rgba(0,0,0,0.55)]"
+            aria-hidden
+          />
+        </div>
+
+        {/* Discount + hit badges */}
         <motion.div
-          className="absolute top-2 left-2 rounded-md bg-[#1b3e2b] px-2 py-1 font-heading text-[10px] font-semibold text-emerald"
-          initial={{ opacity: 0, x: -10 }}
+          className="absolute top-2 left-2 flex flex-col gap-1"
+          initial={{ opacity: 0, x: -8 }}
           animate={{ opacity: 1, x: 0 }}
-          transition={{ delay: 0.15, duration: 0.4 }}
+          transition={{ delay: 0.12, duration: 0.35 }}
         >
-          −35%
+          <span className="inline-flex w-fit items-center gap-1 rounded-md bg-gradient-to-r from-copper to-[#8a5230] px-1.5 py-0.5 font-heading text-[9px] font-semibold text-loft">
+            <Star className="size-2.5 fill-current" aria-hidden />
+            Хит продаж
+          </span>
+          <span className="w-fit rounded-md bg-[#1b3e2b] px-1.5 py-0.5 font-heading text-[9px] font-semibold text-emerald">
+            −35%
+          </span>
         </motion.div>
+
+        {/* Brand */}
+        <div className="absolute top-2 right-2 text-right">
+          <p className="font-heading text-[11px] font-semibold tracking-[0.14em] text-white">
+            NEXORA
+          </p>
+          <p className="font-heading text-[8px] tracking-[0.18em] text-white/50 uppercase">
+            Premium
+          </p>
+        </div>
+
+        {/* Material callouts */}
+        <div className="absolute top-[28%] right-2 flex flex-col gap-1.5">
+          {[
+            { label: "Mesh", Icon: Wind },
+            { label: "Grip", Icon: Grip },
+            { label: "Light", Icon: Leaf },
+          ].map(({ label, Icon }, i) => (
+            <motion.div
+              key={label}
+              className="flex items-center gap-1 rounded-md border border-white/12 bg-loft/70 px-1.5 py-1 backdrop-blur-sm"
+              initial={{ opacity: 0, x: 8 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: 0.2 + i * 0.1, duration: 0.3 }}
+            >
+              <span className="flex size-4 items-center justify-center rounded-full bg-emerald/20 text-emerald">
+                <Icon className="size-2.5" aria-hidden />
+              </span>
+              <span className="font-heading text-[8px] text-foreground/90">
+                {label}
+              </span>
+            </motion.div>
+          ))}
+        </div>
+
+        {/* Price + CTA bar */}
+        <div className="absolute inset-x-0 bottom-0 border-t border-white/8 bg-loft/70 px-2.5 py-2 backdrop-blur-md">
+          <div className="flex items-end justify-between gap-2">
+            <div>
+              <p className="font-heading text-base font-semibold leading-none text-foreground">
+                4 990 ₽{" "}
+                <span className="text-[10px] font-normal text-text-muted line-through">
+                  7 690 ₽
+                </span>
+              </p>
+              <p className="mt-1 font-heading text-[8px] text-copper">
+                Премиальное качество
+              </p>
+            </div>
+            <div className="flex gap-0.5">
+              {[40, 41, 42, 43].map((size) => (
+                <span
+                  key={size}
+                  className={cn(
+                    "flex size-5 items-center justify-center rounded-sm font-heading text-[8px]",
+                    size === 42
+                      ? "bg-copper text-loft"
+                      : "border border-white/15 bg-white/5 text-foreground/75"
+                  )}
+                >
+                  {size}
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   )
@@ -606,7 +749,7 @@ function FeaturesSection() {
     <section
       id="features"
       ref={sectionRef}
-      className="relative isolate scroll-mt-24 pt-8 pb-20 sm:pt-10 sm:pb-28"
+      className="relative isolate scroll-mt-24 pt-2 pb-20 sm:pt-3 sm:pb-28"
     >
       <div className="mx-auto max-w-6xl px-5">
         <div className="section-glass rounded-3xl px-5 py-10 sm:px-8 sm:py-12 lg:px-10">

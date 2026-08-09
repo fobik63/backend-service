@@ -21,7 +21,6 @@ from typing import Final, Literal
 import httpx
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -720,7 +719,6 @@ class InfographicService:
         )
 
         text_bbox = draw.multiline_textbbox((0, 0), text, font=font, spacing=spacing, align="left")
-        text_width = text_bbox[2] - text_bbox[0]
         text_height = text_bbox[3] - text_bbox[1]
 
         text_x = panel_left + padding

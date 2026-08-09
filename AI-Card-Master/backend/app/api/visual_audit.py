@@ -10,18 +10,18 @@ from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.payments import get_current_user
+from app.api.dependencies.auth import get_current_user
 from app.application.visual_audit_service import (
     VisualAuditNotFoundError,
     VisualAuditService,
     VisualAuditValidationError,
 )
 from app.domain.visual_audit import (
+    NicheCardSignal,
     NicheFilterReport,
     VisualAuditEnqueueRequest,
     VisualAuditFilterConfig,
     VisualAuditJobStatus,
-    NicheCardSignal,
 )
 from app.infrastructure.celery_app import celery_app
 from app.infrastructure.visual_audit_factory import build_visual_audit_service

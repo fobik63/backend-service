@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.api.payments import get_current_user
+from app.api.dependencies.auth import get_current_user
 from app.application.behavioral_rate_limit_service import BehavioralRateLimitService
 from app.core.client_ip import resolve_client_ip
 from app.core.config import get_settings

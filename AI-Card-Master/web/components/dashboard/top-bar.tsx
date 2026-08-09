@@ -10,6 +10,7 @@ import {
   UserRound,
 } from "lucide-react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 
 import { Breadcrumbs } from "@/components/dashboard/breadcrumbs"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -38,12 +39,13 @@ type TopBarProps = {
   user?: TopBarUser
   onMenuClick?: () => void
   onOpenProfile?: () => void
+  onLogout?: () => void
   className?: string
 }
 
 const DEFAULT_USER: TopBarUser = {
-  name: "Алексей Иванов",
-  email: "alexey@example.com",
+  name: "Гость",
+  email: undefined,
   avatarUrl: null,
 }
 
@@ -51,8 +53,10 @@ function TopBar({
   user = DEFAULT_USER,
   onMenuClick,
   onOpenProfile,
+  onLogout,
   className,
 }: TopBarProps) {
+  const router = useRouter()
   const { locale, setLocale, t } = useI18n()
   const initials = user.name
     .split(" ")
@@ -196,7 +200,13 @@ function TopBar({
               <DropdownMenuItem
                 variant="destructive"
                 className="cursor-pointer gap-2"
-                render={<Link href="/login" />}
+                onClick={() => {
+                  if (onLogout) {
+                    onLogout()
+                    return
+                  }
+                  router.push("/login")
+                }}
               >
                 <LogOut className="size-4" aria-hidden />
                 {t("common.logout")}

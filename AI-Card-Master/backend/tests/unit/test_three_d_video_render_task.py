@@ -25,7 +25,6 @@ from app.domain.three_d_video import (
     ThreeDVideoProgressSnapshot,
     ThreeDVideoTaskStatus,
     ThreeDVideoTaskView,
-    VideoAssetFormat,
     VideoBackgroundType,
     VideoRotationDirection,
     VideoUploadResult,

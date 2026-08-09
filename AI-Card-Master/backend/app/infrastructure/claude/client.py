@@ -22,14 +22,6 @@ from pydantic import BaseModel, ValidationError
 from app.application.ports.circuit_breaker import CircuitBreakerPort
 from app.core.config import Settings, get_settings
 from app.core.prompt_safety import harden_system_prompt
-from app.domain.circuit_breaker import (
-    CIRCUIT_ANTHROPIC,
-    CircuitCallDecision,
-    CircuitState,
-    is_trip_worthy_status,
-    resolve_base_url_for_circuit,
-    resolve_model_for_circuit,
-)
 from app.domain.ab_test import (
     AB_HYPOTHESES_JSON_SCHEMA,
     AbProductBrief,
@@ -47,6 +39,14 @@ from app.domain.ai_strategy import (
     build_strategy_plan_prompt,
     strategy_system_prompt,
 )
+from app.domain.circuit_breaker import (
+    CIRCUIT_ANTHROPIC,
+    CircuitCallDecision,
+    CircuitState,
+    is_trip_worthy_status,
+    resolve_base_url_for_circuit,
+    resolve_model_for_circuit,
+)
 from app.domain.claude_reasoning import (
     REASONING_JSON_SCHEMA,
     VISION_JSON_SCHEMA,
@@ -58,6 +58,28 @@ from app.domain.claude_reasoning import (
     extract_json_object,
     reasoning_system_prompt,
     vision_system_prompt,
+)
+from app.domain.competitor_audit import (
+    COMPETITOR_DEEP_ANALYSIS_JSON_SCHEMA,
+    CompetitorCardDeepAnalysis,
+    CompetitorCardScrapeResult,
+    build_competitor_deep_analysis_prompt,
+    competitor_deep_analysis_system_prompt,
+    normalize_deep_analysis_card,
+)
+from app.domain.export import MarketplacePlatform, ValidationIssue
+from app.domain.export_fail_safe import (
+    EXPORT_FIX_JSON_SCHEMA,
+    ExportFixSuggestion,
+    build_export_fix_prompt,
+    export_fix_system_prompt,
+    normalize_export_fix_payload,
+)
+from app.domain.eye_of_god import (
+    MONEY_CONFIRMED_VISION_JSON_SCHEMA,
+    MoneyConfirmedVisionResult,
+    build_eye_of_god_vision_prompt,
+    eye_of_god_vision_system_prompt,
 )
 from app.domain.oracle import (
     ORACLE_ENRICHMENT_JSON_SCHEMA,
@@ -75,33 +97,12 @@ from app.domain.pain_analysis import (
     normalize_claude_pain_result,
     pain_analysis_system_prompt,
 )
-from app.domain.eye_of_god import (
-    MONEY_CONFIRMED_VISION_JSON_SCHEMA,
-    MoneyConfirmedVisionResult,
-    build_eye_of_god_vision_prompt,
-    eye_of_god_vision_system_prompt,
-)
-from app.domain.competitor_audit import (
-    COMPETITOR_DEEP_ANALYSIS_JSON_SCHEMA,
-    CompetitorCardDeepAnalysis,
-    CompetitorCardScrapeResult,
-    build_competitor_deep_analysis_prompt,
-    competitor_deep_analysis_system_prompt,
-    normalize_deep_analysis_card,
-)
-from app.domain.zero_hallucination import (
-    ZERO_HALLUCINATION_JSON_SCHEMA,
-    ClaudeCrossCheckPayload,
-    build_cross_check_user_prompt,
-    cross_check_system_prompt,
-)
-from app.domain.export import MarketplacePlatform, ValidationIssue
-from app.domain.export_fail_safe import (
-    EXPORT_FIX_JSON_SCHEMA,
-    ExportFixSuggestion,
-    build_export_fix_prompt,
-    export_fix_system_prompt,
-    normalize_export_fix_payload,
+from app.domain.smart_reasoning import (
+    ReasoningTaskKind,
+    fingerprint_messages_request,
+    model_for_task,
+    model_supports_adaptive_thinking,
+    redis_analytics_key,
 )
 from app.domain.visual_audit import (
     RISING_STAR_VISION_JSON_SCHEMA,
@@ -109,12 +110,11 @@ from app.domain.visual_audit import (
     build_rising_star_vision_prompt,
     rising_star_vision_system_prompt,
 )
-from app.domain.smart_reasoning import (
-    fingerprint_messages_request,
-    model_for_task,
-    model_supports_adaptive_thinking,
-    ReasoningTaskKind,
-    redis_analytics_key,
+from app.domain.zero_hallucination import (
+    ZERO_HALLUCINATION_JSON_SCHEMA,
+    ClaudeCrossCheckPayload,
+    build_cross_check_user_prompt,
+    cross_check_system_prompt,
 )
 from app.infrastructure.claude.image_normalize import normalize_image_for_claude
 from app.services.api_usage_costs import record_api_usage_cost

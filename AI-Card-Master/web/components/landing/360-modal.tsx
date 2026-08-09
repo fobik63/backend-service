@@ -13,9 +13,27 @@ import {
 import { useEffect, useState } from "react"
 import { motion } from "framer-motion"
 
-import { Sneaker3DViewer } from "@/components/landing/sneaker-3d-viewer"
+import dynamic from "next/dynamic"
+import { useRouter } from "next/navigation"
+
+import { ErrorBoundary } from "@/components/error-boundary"
 import { GlassButton } from "@/components/ui/glass-button"
 import { cn } from "@/lib/utils"
+
+const Sneaker3DViewer = dynamic(
+  () =>
+    import("@/components/landing/sneaker-3d-viewer").then(
+      (mod) => mod.Sneaker3DViewer
+    ),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="absolute inset-0 flex items-center justify-center bg-[#1a1612]">
+        <div className="size-10 animate-pulse rounded-full border border-copper/40 bg-copper/10" />
+      </div>
+    ),
+  }
+)
 
 const DEMO_360_CALLOUTS = [
   {
@@ -49,16 +67,24 @@ type Modal360Props = {
 }
 
 function Modal360({ onClose }: Modal360Props) {
+  const router = useRouter()
   const [overlaysVisible, setOverlaysVisible] = useState(true)
   const [interacting, setInteracting] = useState(false)
 
   useEffect(() => {
-    if (!interacting) {
-      const id = window.setTimeout(() => setOverlaysVisible(true), 420)
-      return () => window.clearTimeout(id)
-    }
-    setOverlaysVisible(false)
+    if (interacting) return
+    const id = window.setTimeout(() => setOverlaysVisible(true), 420)
+    return () => window.clearTimeout(id)
   }, [interacting])
+
+  const beginInteract = () => {
+    setInteracting(true)
+    setOverlaysVisible(false)
+  }
+
+  const endInteract = () => {
+    setInteracting(false)
+  }
 
   return (
     <div
@@ -101,21 +127,27 @@ function Modal360({ onClose }: Modal360Props) {
 
         <div
           className="relative aspect-[4/5] select-none overflow-hidden sm:aspect-[4/3.4]"
-          onPointerDown={() => setInteracting(true)}
-          onPointerUp={() => setInteracting(false)}
-          onPointerLeave={() => setInteracting(false)}
+          onPointerDown={beginInteract}
+          onPointerUp={endInteract}
+          onPointerLeave={endInteract}
           onWheel={() => {
-            setInteracting(true)
-            window.setTimeout(() => setInteracting(false), 600)
+            beginInteract()
+            window.setTimeout(() => endInteract(), 600)
           }}
         >
-          <Sneaker3DViewer
-            variant="modal"
-            className="absolute inset-0"
-            autoRotate={!interacting}
-            enableZoom
-            showHint={false}
-          />
+          <ErrorBoundary
+            title="3D-демо недоступно"
+            description="Не удалось инициализировать WebGL. Закройте окно и попробуйте снова."
+            className="absolute inset-0 rounded-none border-0"
+          >
+            <Sneaker3DViewer
+              variant="modal"
+              className="absolute inset-0"
+              autoRotate={!interacting}
+              enableZoom
+              showHint={false}
+            />
+          </ErrorBoundary>
 
           <div
             className={cn(
@@ -211,7 +243,7 @@ function Modal360({ onClose }: Modal360Props) {
             size="sm"
             onClick={() => {
               onClose()
-              window.location.href = "/editor"
+              router.push("/editor")
             }}
           >
             Открыть в редакторе

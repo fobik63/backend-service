@@ -76,7 +76,7 @@ export const DEFAULT_TEXT_STYLE: TextLayerStyle = {
   fontWeight: 700,
   color: "#FFFFFF",
   strokeWidth: 0,
-  strokeColor: "#0F1115",
+  strokeColor: "#0d0f12",
   shadowEnabled: true,
   shadowColor: "#00000066",
   shadowBlur: 6,

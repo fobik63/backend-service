@@ -10,12 +10,11 @@ from pathlib import Path
 from typing import Any
 
 import boto3
+from boto3.s3.transfer import TransferConfig
 from botocore.client import BaseClient
 from botocore.config import Config
-from boto3.s3.transfer import TransferConfig
 
 from app.core.config import Settings, get_settings
-
 
 logger = logging.getLogger(__name__)
 
@@ -141,9 +140,18 @@ class SelectelS3Storage:
         if not object_key.strip():
             raise S3StorageError("object_key must not be empty.")
         path = Path(file_path)
-        if not path.is_file():
+
+        def _inspect_path() -> tuple[bool, int]:
+            if not path.is_file():
+                return False, 0
+            return True, path.stat().st_size
+
+        try:
+            is_file, size = await asyncio.to_thread(_inspect_path)
+        except OSError as exc:
+            raise S3StorageError(f"Cannot inspect upload path: {path}") from exc
+        if not is_file:
             raise S3StorageError(f"Upload path is not a file: {path}")
-        size = path.stat().st_size
         if size <= 0:
             raise S3StorageError("Cannot upload empty file.")
 

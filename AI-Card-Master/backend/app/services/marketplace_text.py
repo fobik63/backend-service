@@ -13,16 +13,16 @@ from typing import Any
 import httpx
 from pydantic import ValidationError
 
-from app.domain.generation import MarketplaceTextContent, SlideWorkItem
 from app.core.config import get_settings
 from app.core.prompt_safety import fence_untrusted_text, harden_system_prompt
 from app.domain.brand_dna import mix_claude_system_prompt, mix_claude_user_prompt
-from app.services.api_usage_costs import record_api_usage_cost
+from app.domain.generation import MarketplaceTextContent, SlideWorkItem
 from app.services.ai_engine import _detect_image_mime_type
+from app.services.api_usage_costs import record_api_usage_cost
 from app.services.infographic_service import (
+    TRANSIENT_HTTP_CODES,
     LLMConfig,
     LLMIntegrationError,
-    TRANSIENT_HTTP_CODES,
 )
 
 logger = logging.getLogger(__name__)

@@ -20,10 +20,16 @@ from app.models import Base
 # Ensure all ORM models are registered on Base.metadata before autogenerate.
 from app.models import api_cost_daily_rollup as _api_cost_daily_rollup  # noqa: F401
 from app.models import api_usage_cost as _api_usage_cost  # noqa: F401
+from app.models import ab_test as _ab_test  # noqa: F401
+from app.models import ai_strategy as _ai_strategy  # noqa: F401
 from app.models import audit_log as _audit_log  # noqa: F401
+from app.models import brand_dna as _brand_dna  # noqa: F401
 from app.models import bulk_generation as _bulk_generation  # noqa: F401
 from app.models import brand_lora as _brand_lora  # noqa: F401
 from app.models import claude_reasoning as _claude_reasoning  # noqa: F401
+from app.models import coin_hold as _coin_hold  # noqa: F401
+from app.models import competitor_audit as _competitor_audit  # noqa: F401
+from app.models import eye_of_god as _eye_of_god  # noqa: F401
 from app.models import generation as _generation  # noqa: F401
 from app.models import smart_variant as _smart_variant  # noqa: F401
 from app.models import generation_error_log as _generation_error_log  # noqa: F401
@@ -32,11 +38,14 @@ from app.models import idempotency_record as _idempotency_record  # noqa: F401
 from app.models import marketplace_export as _marketplace_export  # noqa: F401
 from app.models import payment as _payment  # noqa: F401
 from app.models import pain_analysis as _pain_analysis  # noqa: F401
+from app.models import oracle as _oracle  # noqa: F401
+from app.models import signup_trial as _signup_trial  # noqa: F401
 from app.models import stock_parser as _stock_parser  # noqa: F401
 from app.models import style_preset_selection as _style_preset_selection  # noqa: F401
 from app.models import template as _template  # noqa: F401
 from app.models import three_d as _three_d  # noqa: F401
 from app.models import user as _user  # noqa: F401
+from app.models import visual_audit as _visual_audit  # noqa: F401
 from app.models import winback as _winback  # noqa: F401
 from app.models import workspace as _workspace  # noqa: F401
 

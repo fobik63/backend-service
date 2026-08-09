@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react"
 
 import { CanvasToolbar } from "@/components/editor/canvas-toolbar"
 import { EditorCanvas } from "@/components/editor/canvas"
+import { EditorPageStrip } from "@/components/editor/page-strip"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
@@ -37,6 +38,7 @@ function EditorCanvasStage() {
   const zoomMode = useEditorStore((s) => s.zoomMode)
   const setZoomMode = useEditorStore((s) => s.setZoomMode)
   const softbox = useEditorStore((s) => s.softbox)
+  const activePageIndex = useEditorStore((s) => s.activePageIndex)
 
   const viewportRef = useRef<HTMLDivElement>(null)
   const [fitScale, setFitScale] = useState(0.35)
@@ -72,13 +74,16 @@ function EditorCanvasStage() {
   return (
     <section
       className="relative flex h-full min-w-0 flex-1 flex-col self-stretch bg-transparent"
-      aria-label="Область предпросмотра"
+      aria-label={t("editor.canvasArea")}
     >
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-white/8 px-3">
         <p className="text-xs text-muted-foreground">
           {t("editor.canvas")}{" "}
           <span className="font-mono text-foreground/80">
             {CANVAS_WIDTH}×{CANVAS_HEIGHT}
+          </span>
+          <span className="ml-2 text-muted-foreground/80">
+            · {t("editor.pageNShort", { n: String(activePageIndex + 1) })}
           </span>
         </p>
         <div
@@ -110,9 +115,15 @@ function EditorCanvasStage() {
           ref={viewportRef}
           className="flex h-full items-center justify-center overflow-auto p-4"
         >
-          <EditorCanvas scale={scale} softbox={softbox} />
+          <EditorCanvas
+            key={`page-${activePageIndex}`}
+            scale={scale}
+            softbox={softbox}
+          />
         </div>
       </div>
+
+      <EditorPageStrip />
     </section>
   )
 }

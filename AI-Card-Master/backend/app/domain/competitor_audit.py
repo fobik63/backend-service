@@ -33,7 +33,6 @@ from app.domain.zero_hallucination import (
     reliability_pct_from_confidence,
 )
 
-
 MAX_LINKS_PER_REQUEST = 3
 MAX_REVIEWS_PER_CARD = 50
 REDIS_RAW_LOG_TTL_SECONDS = 3600

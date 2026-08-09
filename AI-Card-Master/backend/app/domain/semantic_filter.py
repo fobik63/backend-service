@@ -19,7 +19,6 @@ from app.domain.competitor_audit import (
     CompetitorReview,
 )
 
-
 # Aggressive caps for Claude prompts after Semantic Filtering (vs full dump).
 DELTA_MAX_NEW_REVIEWS = 12
 DELTA_MAX_CHANGED_SPECS = 20

@@ -391,7 +391,7 @@ class OzonAdsClient:
                 currency="RUB",
                 sampled_at=datetime.now(UTC),
             )
-        except MarketplaceAdsError as exc:
+        except MarketplaceAdsError:
             if creative_id in self._local_metrics:
                 return self._local_metrics[creative_id]
             if self._allow_local_fallback:

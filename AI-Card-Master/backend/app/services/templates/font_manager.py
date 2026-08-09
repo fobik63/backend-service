@@ -392,7 +392,7 @@ class FontManagerService:
             if not row.file_path_ttf:
                 continue
             path = Path(row.file_path_ttf)
-            if not path.is_file():
+            if not await asyncio.to_thread(path.is_file):
                 logger.warning(
                     "custom_fonts row %s path missing on disk: %s",
                     row.id,
@@ -456,7 +456,10 @@ class FontManagerService:
         except IntegrityError as exc:
             await session.rollback()
             try:
-                Path(stored.local_path).unlink(missing_ok=True)
+                await asyncio.to_thread(
+                    Path(stored.local_path).unlink,
+                    missing_ok=True,
+                )
             except OSError:
                 pass
             raise FontValidationError(
@@ -465,7 +468,10 @@ class FontManagerService:
         except Exception:
             await session.rollback()
             try:
-                Path(stored.local_path).unlink(missing_ok=True)
+                await asyncio.to_thread(
+                    Path(stored.local_path).unlink,
+                    missing_ok=True,
+                )
             except OSError:
                 pass
             raise

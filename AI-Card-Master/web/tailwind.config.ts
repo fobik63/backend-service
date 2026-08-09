@@ -15,8 +15,8 @@ const config: Config = {
     extend: {
       colors: {
         loft: {
-          DEFAULT: "#0f1115",
-          surface: "#16181e",
+          DEFAULT: "#0d0f12",
+          surface: "#14171d",
         },
         emerald: {
           DEFAULT: "#10b981",

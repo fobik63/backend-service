@@ -58,3 +58,13 @@ class AuthRepositoryPort(Protocol):
         """Silently flag an abuser account (no hard ban / no client-visible block)."""
 
         ...
+
+    async def update_password(
+        self,
+        user_id: UUID,
+        *,
+        hashed_password: str,
+    ) -> User | None:
+        """Replace the stored password hash for an existing user."""
+
+        ...

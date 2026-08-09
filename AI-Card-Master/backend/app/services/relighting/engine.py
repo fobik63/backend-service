@@ -18,8 +18,8 @@ from app.services.relighting.depth_normal import (
 from app.services.relighting.dto import (
     DepthNormalMapsDTO,
     LightingPresetDTO,
-    RelightProcessResultDTO,
     RelightingPresetName,
+    RelightProcessResultDTO,
     ShadowParamsDTO,
     StudioLightDTO,
 )

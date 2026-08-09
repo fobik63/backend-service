@@ -1,6 +1,5 @@
 """Service layer: AI and image processing business logic."""
 
-from app.services.ai_engine import generate_product_image, generate_product_image_for_tariff
 from app.services.admin_service import (
     AdminErrorLogView,
     AdminNotFoundError,
@@ -10,6 +9,7 @@ from app.services.admin_service import (
     AdminUserView,
     AdminValidationError,
 )
+from app.services.ai_engine import generate_product_image, generate_product_image_for_tariff
 from app.services.billing_service import (
     BillingError,
     BillingNotFoundError,

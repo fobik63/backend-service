@@ -10,6 +10,8 @@ Public presets
 User designs (auth required)
   POST /api/v1/designs
   GET  /api/v1/designs
+  GET  /api/v1/designs/{design_id}
+  DELETE /api/v1/designs/{design_id}
   POST /api/v1/designs/{design_id}/render
 """
 
@@ -23,7 +25,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.payments import get_current_user
+from app.api.dependencies.auth import get_current_user
 from app.application.template_service import (
     TemplateNotFoundError,
     TemplateRenderError,
@@ -32,6 +34,7 @@ from app.application.template_service import (
     TemplateValidationError,
 )
 from app.core.config import get_settings
+from app.domain.templates import SavedDesignView
 from app.infrastructure.persistence.template_repository import TemplateRepository
 from app.models.database import get_db_session
 from app.models.user import User
@@ -39,9 +42,10 @@ from app.schemas.templates import (
     CanvasStateDTO,
     DesignRenderRequest,
     DesignRenderResponse,
-    SaveDesignRequest,
+    EditorDocumentDTO,
     SavedDesignDTO,
     SavedDesignListResponse,
+    SaveDesignRequest,
     TemplateDetailDTO,
     TemplateListResponse,
     TemplateSummaryDTO,
@@ -87,7 +91,7 @@ def _map_service_error(exc: Exception) -> HTTPException:
     )
 
 
-def _parse_canvas(raw: dict) -> CanvasStateDTO:
+def _parse_canvas(raw: dict[str, object]) -> CanvasStateDTO:
     try:
         return CanvasStateDTO.model_validate(raw)
     except ValidationError as exc:
@@ -95,6 +99,32 @@ def _parse_canvas(raw: dict) -> CanvasStateDTO:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Stored canvas JSON is invalid: {exc.errors()}",
         ) from exc
+
+
+def _parse_editor_document(
+    raw: dict[str, object] | None,
+) -> EditorDocumentDTO | None:
+    if raw is None:
+        return None
+    try:
+        return EditorDocumentDTO.model_validate(raw)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Stored editor document JSON is invalid: {exc.errors()}",
+        ) from exc
+
+
+def _to_saved_design_dto(design: SavedDesignView) -> SavedDesignDTO:
+    return SavedDesignDTO(
+        id=design.id,
+        title=design.title,
+        template_id=design.template_id,
+        canvas=_parse_canvas(design.canvas_data),
+        editor_document=_parse_editor_document(design.editor_document_data),
+        preview_url=design.preview_url,
+        updated_at=design.updated_at.isoformat(),
+    )
 
 
 async def get_template_service(
@@ -285,6 +315,7 @@ async def save_design(
             user_id=current_user.id,
             title=body.title,
             canvas=body.canvas,
+            editor_document=body.editor_document,
             design_id=body.id,
             template_id=body.template_id,
             preview_url=body.preview_url,
@@ -295,14 +326,7 @@ async def save_design(
     ) as exc:
         raise _map_service_error(exc) from exc
 
-    return SavedDesignDTO(
-        id=design.id,
-        title=design.title,
-        template_id=design.template_id,
-        canvas=_parse_canvas(design.canvas_data),
-        preview_url=design.preview_url,
-        updated_at=design.updated_at.isoformat(),
-    )
+    return _to_saved_design_dto(design)
 
 
 @designs_router.get(
@@ -315,18 +339,47 @@ async def list_designs(
     service: Annotated[TemplateService, Depends(get_template_service)],
 ) -> SavedDesignListResponse:
     designs = await service.list_designs(user_id=current_user.id)
-    items = [
-        SavedDesignDTO(
-            id=design.id,
-            title=design.title,
-            template_id=design.template_id,
-            canvas=_parse_canvas(design.canvas_data),
-            preview_url=design.preview_url,
-            updated_at=design.updated_at.isoformat(),
-        )
-        for design in designs
-    ]
+    items = [_to_saved_design_dto(design) for design in designs]
     return SavedDesignListResponse(items=items, total=len(items))
+
+
+@designs_router.get(
+    "/{design_id}",
+    response_model=SavedDesignDTO,
+    summary="Load one current-user design",
+)
+async def get_design(
+    design_id: UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    service: Annotated[TemplateService, Depends(get_template_service)],
+) -> SavedDesignDTO:
+    try:
+        design = await service.get_design(
+            user_id=current_user.id,
+            design_id=design_id,
+        )
+    except TemplateNotFoundError as exc:
+        raise _map_service_error(exc) from exc
+    return _to_saved_design_dto(design)
+
+
+@designs_router.delete(
+    "/{design_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete one current-user design",
+)
+async def delete_design(
+    design_id: UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    service: Annotated[TemplateService, Depends(get_template_service)],
+) -> None:
+    try:
+        await service.delete_design(
+            user_id=current_user.id,
+            design_id=design_id,
+        )
+    except TemplateNotFoundError as exc:
+        raise _map_service_error(exc) from exc
 
 
 @designs_router.post(

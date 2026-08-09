@@ -10,9 +10,3 @@ export {
   type OnboardingCategory,
   type OnboardingMarketplace,
 } from "./onboarding-store";
-export {
-  CANVAS_PRESETS,
-  useCanvasStore,
-  type CanvasPresetId,
-  type LightSettings,
-} from "./useCanvasStore";

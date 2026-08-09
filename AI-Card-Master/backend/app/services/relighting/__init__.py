@@ -3,10 +3,10 @@
 from app.services.relighting.dto import (
     DepthNormalMapsDTO,
     LightingPresetDTO,
-    RelightLightDTO,
-    RelightProcessResultDTO,
     RelightingJobResultDTO,
     RelightingPresetName,
+    RelightLightDTO,
+    RelightProcessResultDTO,
     ShadowParamsDTO,
     StudioLightDTO,
 )

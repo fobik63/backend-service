@@ -12,13 +12,13 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.api.payments import get_current_user
+from app.api.dependencies.auth import get_current_user
 from app.core.config import get_settings
 from app.domain.competitor_audit import (
     CompetitorMarketplace,
     parse_competitor_product_link,
 )
-from app.domain.stock_parser import ParseSkuRequest, ParserMarketplace
+from app.domain.stock_parser import ParserMarketplace, ParseSkuRequest
 from app.infrastructure.competitor_audit.ozon_deep_client import OzonDeepClient
 from app.infrastructure.competitor_audit.wb_deep_client import WildberriesDeepClient
 from app.infrastructure.stock_parser.exceptions import (

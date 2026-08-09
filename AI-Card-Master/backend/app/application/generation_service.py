@@ -51,11 +51,11 @@ from app.services.infographic_service import (
     InfographicServiceError,
     get_overlay_service,
 )
+from app.services.model_vto import MODEL_VTO_SLIDE_KEY
 from app.services.product_compositor import (
     ProductCompositorError,
     composite_product_on_background,
 )
-from app.services.model_vto import MODEL_VTO_SLIDE_KEY
 from app.services.series_generator import (
     DEFAULT_SLIDE_OVERLAY_TEXTS,
     SLIDE_OVERLAY_STYLES,

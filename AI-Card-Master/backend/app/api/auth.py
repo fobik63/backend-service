@@ -5,11 +5,12 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
-from app.api.payments import get_current_user
+from app.api.dependencies.auth import get_current_user
 from app.application.auth_service import (
     AuthConflictError,
     AuthCredentialsError,
@@ -29,7 +30,7 @@ from app.core.rate_limit import auth_bruteforce_limit
 from app.domain.auth import LoginCommand, OtpRequestCommand, OtpVerifyCommand, RegisterCommand
 from app.domain.signup_trial import SignupAbuseContext
 from app.infrastructure.auth_factory import build_auth_service
-from app.infrastructure.email.mailer import send_otp_email
+from app.infrastructure.email.mailer import EmailDeliveryError, send_otp_email
 from app.infrastructure.security.telegram_login import (
     TelegramAuthError,
     verify_telegram_login,
@@ -38,6 +39,8 @@ from app.models.database import get_db_session
 from app.models.user import User
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
+# Public aliases: /api/auth/send-otp and /api/auth/verify-otp
+auth_alias_router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
 class StrictAPIModel(BaseModel):
@@ -79,6 +82,18 @@ class TelegramLoginRequest(StrictAPIModel):
     hash: str = Field(..., min_length=32, max_length=128)
 
 
+class ChangePasswordRequest(StrictAPIModel):
+    """Replace the caller's password after verifying the current one."""
+
+    current_password: str = Field(..., min_length=1, max_length=128)
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+
+class ChangePasswordResponse(StrictAPIModel):
+    ok: bool = True
+    message: str = "Password updated."
+
+
 class TokenResponse(StrictAPIModel):
     access_token: str
     refresh_token: str
@@ -103,8 +118,6 @@ class OtpRequestResponse(StrictAPIModel):
     ok: bool = True
     expires_in: int
     message: str = "Код отправлен на email"
-    # Only populated in non-production when mail is not configured (local QA).
-    dev_code: str | None = None
 
 
 def get_auth_service(
@@ -230,19 +243,10 @@ async def login(
     return _session_response(view, tokens)
 
 
-@router.post(
-    "/otp/request",
-    response_model=OtpRequestResponse,
-    summary="Send a 6-digit one-time code to email",
-)
-@auth_bruteforce_limit
-async def otp_request(
+async def _send_otp_handler(
     payload: OtpRequestBody,
-    request: Request,
-    background_tasks: BackgroundTasks,
-    auth: AuthService = Depends(get_auth_service),
+    auth: AuthService,
 ) -> OtpRequestResponse:
-    settings = get_settings()
     try:
         command = OtpRequestCommand(email=payload.email)
         code, ttl = await auth.request_otp(command)
@@ -262,35 +266,28 @@ async def otp_request(
             detail=str(exc),
         ) from exc
 
-    background_tasks.add_task(send_otp_email, command.email, code)
+    try:
+        await run_in_threadpool(send_otp_email, command.email, code)
+    except EmailDeliveryError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Не удалось отправить письмо с кодом. "
+                "Проверьте настройки Resend / SMTP на сервере."
+            ),
+        ) from exc
 
-    mail_configured = bool(
-        (settings.resend_api_key and settings.resend_api_key.get_secret_value().strip())
-        or (settings.smtp_host or "").strip()
-    )
-    dev_code = (
-        code
-        if settings.app_env == "development" and not mail_configured
-        else None
-    )
     return OtpRequestResponse(
         ok=True,
         expires_in=ttl,
         message="Код отправлен на email",
-        dev_code=dev_code,
     )
 
 
-@router.post(
-    "/otp/verify",
-    response_model=AuthSessionResponse,
-    summary="Verify email OTP and obtain JWT session",
-)
-@auth_bruteforce_limit
-async def otp_verify(
+async def _verify_otp_handler(
     payload: OtpVerifyBody,
     request: Request,
-    auth: AuthService = Depends(get_auth_service),
+    auth: AuthService,
 ) -> AuthSessionResponse:
     try:
         command = OtpVerifyCommand(email=payload.email, code=payload.code)
@@ -330,6 +327,90 @@ async def otp_verify(
             detail=str(exc),
         ) from exc
     return _session_response(view, tokens)
+
+
+@router.post(
+    "/otp/request",
+    response_model=OtpRequestResponse,
+    summary="Send a 6-digit one-time code to email",
+)
+@auth_bruteforce_limit
+async def otp_request(
+    payload: OtpRequestBody,
+    request: Request,
+    auth: AuthService = Depends(get_auth_service),
+) -> OtpRequestResponse:
+    return await _send_otp_handler(payload, auth)
+
+
+@router.post(
+    "/send-otp",
+    response_model=OtpRequestResponse,
+    summary="Send a 6-digit one-time code to email",
+)
+@auth_bruteforce_limit
+async def send_otp(
+    payload: OtpRequestBody,
+    request: Request,
+    auth: AuthService = Depends(get_auth_service),
+) -> OtpRequestResponse:
+    return await _send_otp_handler(payload, auth)
+
+
+@router.post(
+    "/otp/verify",
+    response_model=AuthSessionResponse,
+    summary="Verify email OTP and obtain JWT session",
+)
+@auth_bruteforce_limit
+async def otp_verify(
+    payload: OtpVerifyBody,
+    request: Request,
+    auth: AuthService = Depends(get_auth_service),
+) -> AuthSessionResponse:
+    return await _verify_otp_handler(payload, request, auth)
+
+
+@router.post(
+    "/verify-otp",
+    response_model=AuthSessionResponse,
+    summary="Verify email OTP and obtain JWT session",
+)
+@auth_bruteforce_limit
+async def verify_otp(
+    payload: OtpVerifyBody,
+    request: Request,
+    auth: AuthService = Depends(get_auth_service),
+) -> AuthSessionResponse:
+    return await _verify_otp_handler(payload, request, auth)
+
+
+@auth_alias_router.post(
+    "/send-otp",
+    response_model=OtpRequestResponse,
+    summary="Send a 6-digit one-time code to email",
+)
+@auth_bruteforce_limit
+async def send_otp_alias(
+    payload: OtpRequestBody,
+    request: Request,
+    auth: AuthService = Depends(get_auth_service),
+) -> OtpRequestResponse:
+    return await _send_otp_handler(payload, auth)
+
+
+@auth_alias_router.post(
+    "/verify-otp",
+    response_model=AuthSessionResponse,
+    summary="Verify email OTP and obtain JWT session",
+)
+@auth_bruteforce_limit
+async def verify_otp_alias(
+    payload: OtpVerifyBody,
+    request: Request,
+    auth: AuthService = Depends(get_auth_service),
+) -> AuthSessionResponse:
+    return await _verify_otp_handler(payload, request, auth)
 
 
 @router.post(
@@ -441,3 +522,33 @@ async def me(
             detail=str(exc),
         ) from exc
     return _user_response(view)
+
+
+@router.post(
+    "/change-password",
+    response_model=ChangePasswordResponse,
+    summary="Change the authenticated user's password",
+)
+async def change_password(
+    payload: ChangePasswordRequest,
+    current_user: User = Depends(get_current_user),
+    auth: AuthService = Depends(get_auth_service),
+) -> ChangePasswordResponse:
+    try:
+        await auth.change_password(
+            current_user.id,
+            current_password=payload.current_password,
+            new_password=payload.new_password,
+        )
+    except AuthNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+    except AuthCredentialsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    return ChangePasswordResponse()

@@ -60,12 +60,15 @@ type DragSession = {
   centerY: number
   startPointerAngle: number
   startPointerDist: number
+  /** Element size as % of canvas — used to clamp drag inside the stage. */
+  boundW: number
+  boundH: number
 }
 
 function chipTextColor(bg: string): string {
   const hex = bg.toLowerCase()
   if (hex === "#ffffff" || hex === "#fff" || hex === "#f59e0b") {
-    return "#0F1115"
+    return "#0d0f12"
   }
   return "#FFFFFF"
 }
@@ -78,6 +81,52 @@ function clamp01(n: number) {
   return clamp(n, 0, 1)
 }
 
+/**
+ * Keep layer top-left inside the canvas:
+ * x ∈ [0, 100 − elementWidth%], y ∈ [0, 100 − elementHeight%].
+ */
+function clampLayerPosition(
+  x: number,
+  y: number,
+  elW: number,
+  elH: number
+): { x: number; y: number } {
+  const maxX = Math.max(0, 100 - Math.max(0, elW))
+  const maxY = Math.max(0, 100 - Math.max(0, elH))
+  return {
+    x: clamp(x, 0, maxX),
+    y: clamp(y, 0, maxY),
+  }
+}
+
+/** Effective layer size in % of canvas (includes uniform scale). */
+function layerBoundsPct(
+  node: HTMLElement,
+  canvas: HTMLElement,
+  defs: { width?: number; height?: number; scale: number }
+): { w: number; h: number } {
+  const scale = Math.max(0.01, defs.scale)
+  if (defs.width != null && defs.height != null) {
+    return { w: defs.width * scale, h: defs.height * scale }
+  }
+
+  const canvasRect = canvas.getBoundingClientRect()
+  const nodeRect = node.getBoundingClientRect()
+  if (canvasRect.width <= 0 || canvasRect.height <= 0) {
+    return {
+      w: (defs.width ?? 10) * scale,
+      h: (defs.height ?? 10) * scale,
+    }
+  }
+
+  const measuredW = (nodeRect.width / canvasRect.width) * 100
+  const measuredH = (nodeRect.height / canvasRect.height) * 100
+  return {
+    w: defs.width != null ? defs.width * scale : measuredW,
+    h: defs.height != null ? defs.height * scale : measuredH,
+  }
+}
+
 function warmthFromKelvin(k: number): number {
   return clamp01((6500 - k) / (6500 - 2700))
 }
@@ -85,7 +134,7 @@ function warmthFromKelvin(k: number): number {
 /** Studio backdrop without a hard point light — wash comes from SoftboxLightOverlay. */
 function softboxBackground(softbox: SoftboxSettings): string {
   if (!softbox.enabled) {
-    return "linear-gradient(160deg, #1a1d24 0%, #0f1115 100%)"
+    return "linear-gradient(160deg, #14171d 0%, #0d0f12 100%)"
   }
 
   const warmth = warmthFromKelvin(softbox.colorTempK)
@@ -94,9 +143,9 @@ function softboxBackground(softbox: SoftboxSettings): string {
   return `
     linear-gradient(
       155deg,
-      color-mix(in srgb, #1e2430 ${100 - coolLift}%, #9ec5ff ${coolLift}%) 0%,
+      color-mix(in srgb, #1a2030 ${100 - coolLift}%, #9ec5ff ${coolLift}%) 0%,
       #12151b 48%,
-      color-mix(in srgb, #0f1115 ${100 - warmLift}%, #f59e0b ${warmLift}%) 100%
+      color-mix(in srgb, #0d0f12 ${100 - warmLift}%, #f59e0b ${warmLift}%) 100%
     )
   `
 }
@@ -352,16 +401,25 @@ function InteractiveLayer({
 }) {
   const selectLayer = useEditorStore((s) => s.selectLayer)
   const updateLayer = useEditorStore((s) => s.updateLayer)
+  const beginHistoryTransaction = useEditorStore(
+    (s) => s.beginHistoryTransaction
+  )
+  const commitHistoryTransaction = useEditorStore(
+    (s) => s.commitHistoryTransaction
+  )
 
   const [editing, setEditing] = useState(false)
   const sessionRef = useRef<DragSession | null>(null)
   const nodeRef = useRef<HTMLDivElement>(null)
   const textRef = useRef<HTMLDivElement>(null)
-  const defsRef = useRef(layerDefaults(layer))
-  defsRef.current = layerDefaults(layer)
+  const defs = layerDefaults(layer)
+  const defsRef = useRef(defs)
 
   const locked = layer.locked
-  const defs = defsRef.current
+
+  useEffect(() => {
+    defsRef.current = defs
+  }, [defs])
 
   const beginSession = useCallback(
     (e: ReactPointerEvent, mode: InteractMode) => {
@@ -373,11 +431,13 @@ function InteractiveLayer({
       e.preventDefault()
       e.stopPropagation()
       selectLayer(layer.id)
+      beginHistoryTransaction()
 
       const rect = node.getBoundingClientRect()
       const centerX = rect.left + rect.width / 2
       const centerY = rect.top + rect.height / 2
       const d = defsRef.current
+      const bounds = layerBoundsPct(node, canvas, d)
 
       sessionRef.current = {
         mode,
@@ -392,9 +452,18 @@ function InteractiveLayer({
         centerY,
         startPointerAngle: angleDeg(centerX, centerY, e.clientX, e.clientY),
         startPointerDist: Math.max(8, dist(centerX, centerY, e.clientX, e.clientY)),
+        boundW: bounds.w,
+        boundH: bounds.h,
       }
     },
-    [canvasRef, editing, layer.id, locked, selectLayer]
+    [
+      beginHistoryTransaction,
+      canvasRef,
+      editing,
+      layer.id,
+      locked,
+      selectLayer,
+    ]
   )
 
   useEffect(() => {
@@ -409,10 +478,13 @@ function InteractiveLayer({
         if (cw <= 0 || ch <= 0) return
         const dxPct = ((e.clientX - session.startClientX) / cw) * 100
         const dyPct = ((e.clientY - session.startClientY) / ch) * 100
-        updateLayer(layer.id, {
-          x: clamp(session.originX + dxPct, -30, 110),
-          y: clamp(session.originY + dyPct, -30, 110),
-        })
+        const next = clampLayerPosition(
+          session.originX + dxPct,
+          session.originY + dyPct,
+          session.boundW,
+          session.boundH
+        )
+        updateLayer(layer.id, { x: next.x, y: next.y })
         return
       }
 
@@ -434,13 +506,28 @@ function InteractiveLayer({
       if (session.mode === "scale") {
         const d = dist(session.centerX, session.centerY, e.clientX, e.clientY)
         const ratio = d / session.startPointerDist
+        const nextScale = clamp(session.originScale * ratio, 0.2, 4)
+        const defs = defsRef.current
+        const baseW = defs.width ?? session.boundW / Math.max(0.01, session.originScale)
+        const baseH = defs.height ?? session.boundH / Math.max(0.01, session.originScale)
+        const pos = clampLayerPosition(
+          defs.x,
+          defs.y,
+          baseW * nextScale,
+          baseH * nextScale
+        )
         updateLayer(layer.id, {
-          scale: clamp(session.originScale * ratio, 0.2, 4),
+          scale: nextScale,
+          x: pos.x,
+          y: pos.y,
         })
       }
     }
 
     const onUp = () => {
+      if (sessionRef.current) {
+        commitHistoryTransaction()
+      }
       sessionRef.current = null
     }
 
@@ -452,7 +539,7 @@ function InteractiveLayer({
       window.removeEventListener("pointerup", onUp)
       window.removeEventListener("pointercancel", onUp)
     }
-  }, [canvasRef, layer.id, updateLayer])
+  }, [canvasRef, commitHistoryTransaction, layer.id, updateLayer])
 
   useEffect(() => {
     if (!editing || !textRef.current) return
@@ -638,14 +725,18 @@ function ProductLayer({
 
       const cx = d.x + (d.width ?? fitted.width) / 2
       const cy = d.y + (d.height ?? fitted.height) / 2
-      const nextX = clamp(cx - fitted.width / 2, -30, 110)
-      const nextY = clamp(cy - fitted.height / 2, -30, 110)
+      const next = clampLayerPosition(
+        cx - fitted.width / 2,
+        cy - fitted.height / 2,
+        fitted.width * d.scale,
+        fitted.height * d.scale
+      )
 
       updateLayer(layerId, {
         width: fitted.width,
         height: fitted.height,
-        x: nextX,
-        y: nextY,
+        x: next.x,
+        y: next.y,
       })
     },
     [layerId, productPreviewUrl, updateLayer]

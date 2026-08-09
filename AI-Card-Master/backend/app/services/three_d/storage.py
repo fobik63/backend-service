@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Protocol
@@ -154,9 +155,15 @@ class ThreeDObjectStorage:
         """Multipart-upload a large local 3D file without loading it into RAM."""
 
         path = Path(file_path)
-        if not path.is_file():
+
+        def _inspect_path() -> tuple[bool, int]:
+            if not path.is_file():
+                return False, 0
+            return True, path.stat().st_size
+
+        is_file, size = await asyncio.to_thread(_inspect_path)
+        if not is_file:
             raise ValueError(f"Upload path is not a file: {path}")
-        size = path.stat().st_size
         if size <= 0:
             raise ValueError("Cannot upload empty 3D file.")
         content_type = self.content_type_for(asset_format)

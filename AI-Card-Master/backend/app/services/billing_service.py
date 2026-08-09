@@ -37,7 +37,6 @@ from app.models.payment import Payment
 from app.models.user import User
 from app.services.tariffs import TariffPlan, get_tariff_plan
 
-
 logger = logging.getLogger(__name__)
 
 _BILLING_IDEMPOTENCY_SCOPE_PREFIX = "billing:"

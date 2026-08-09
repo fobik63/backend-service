@@ -43,10 +43,10 @@ from app.services.three_d.storage import (
 from app.services.three_d.styles import (
     ALLOWED_FRAME_ASPECTS,
     LIGHTING_PRESETS,
-    LightRole,
-    LightSourceDTO,
     LightingPresetDTO,
     LightingPresetName,
+    LightRole,
+    LightSourceDTO,
     RenderSettingsDTO,
     ShadowCatcherFloorMesh,
     ShadowCatcherFloorSettings,

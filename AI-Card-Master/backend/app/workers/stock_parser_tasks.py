@@ -17,8 +17,8 @@ from app.core.config import get_settings
 from app.domain.stock_parser import (
     STOCK_PARSER_DEFAULT_CHUNK_SIZE,
     STOCK_PARSER_DEFAULT_KEYSET_BATCH_SIZE,
-    ParseSkuRequest,
     ParserMarketplace,
+    ParseSkuRequest,
     SkuItemView,
     chunk_sequence,
     nightly_capture_at,

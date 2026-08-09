@@ -1,3 +1,5 @@
+import type { EditorDocumentDTO } from "@/types/api"
+
 export type ProjectMarketplace = "ozon" | "wb"
 
 export type ProjectStatus = "ready" | "processing"
@@ -16,6 +18,7 @@ export type Project = {
    */
   productImage?: string
   accentLabel: string
+  editorDocument?: EditorDocumentDTO | null
 }
 
 export const MOCK_PROJECTS: Project[] = [

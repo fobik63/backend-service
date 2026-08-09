@@ -493,28 +493,32 @@ def subdivide_mesh_geometry(
         scale = radius / length
         return (cx + dx * scale, cy + dy * scale, cz + dz * scale)
 
+    def _midpoint(
+        i: int,
+        j: int,
+        cache: dict[tuple[int, int], int],
+    ) -> int:
+        key = (i, j) if i < j else (j, i)
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
+        a, b = verts[i], verts[j]
+        mid = _maybe_project(
+            ((a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5, (a[2] + b[2]) * 0.5)
+        )
+        idx = len(verts)
+        verts.append(mid)
+        cache[key] = idx
+        return idx
+
     for _ in range(levels):
         midpoint_cache: dict[tuple[int, int], int] = {}
 
-        def _midpoint(i: int, j: int) -> int:
-            key = (i, j) if i < j else (j, i)
-            cached = midpoint_cache.get(key)
-            if cached is not None:
-                return cached
-            a, b = verts[i], verts[j]
-            mid = _maybe_project(
-                ((a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5, (a[2] + b[2]) * 0.5)
-            )
-            idx = len(verts)
-            verts.append(mid)
-            midpoint_cache[key] = idx
-            return idx
-
         next_faces: list[tuple[int, int, int]] = []
         for i, j, k in faces:
-            a = _midpoint(i, j)
-            b = _midpoint(j, k)
-            c = _midpoint(k, i)
+            a = _midpoint(i, j, midpoint_cache)
+            b = _midpoint(j, k, midpoint_cache)
+            c = _midpoint(k, i, midpoint_cache)
             next_faces.extend(((i, a, c), (j, b, a), (k, c, b), (a, b, c)))
         faces = next_faces
 
@@ -984,8 +988,8 @@ class PyVistaOffscreenBackend(FrameRendererBackend):
         ssaa = max(1, int(self._config.ssaa_factor))
         expected = self._config.width * self._config.height * RGB24_BYTES_PER_PIXEL
         if ssaa > 1:
-            from PIL import Image
             import numpy as np
+            from PIL import Image
 
             arr = np.ascontiguousarray(img[:, :, :3], dtype=np.uint8)
             pil = Image.fromarray(arr, mode="RGB")

@@ -13,12 +13,12 @@ from app.domain.stock_parser import (
     CIRCUIT_BREAKER_THRESHOLD,
     STOCK_PARSER_DEFAULT_CHUNK_SIZE,
     STOCK_SNAPSHOT_UPSERT_BATCH_SIZE,
-    ParseSkuRequest,
     ParsedSkuSnapshot,
     ParserErrorKind,
     ParserHealthStatus,
     ParserHealthView,
     ParserMarketplace,
+    ParseSkuRequest,
     SkuItemView,
     StockLevel,
     StockSnapshotView,
@@ -30,7 +30,6 @@ from app.domain.stock_parser import (
     stabilize_captured_at,
     stock_snapshot_partition_name,
 )
-from app.workers.stock_parser_tasks import build_nightly_batch_payloads
 from app.infrastructure.stock_parser.exceptions import (
     ParserHttpError,
     ParserSchemaError,
@@ -44,6 +43,7 @@ from app.infrastructure.stock_parser.proxy_pool import ProxyPool
 from app.infrastructure.stock_parser.wildberries_mobile_client import (
     _map_wb_product,
 )
+from app.workers.stock_parser_tasks import build_nightly_batch_payloads
 
 
 def test_normalize_marketplace_aliases() -> None:

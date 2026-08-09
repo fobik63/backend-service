@@ -19,9 +19,9 @@ from pydantic import ValidationError
 from app.core.prompt_safety import fence_untrusted_text, harden_system_prompt
 from app.schemas.templates import CanvasStateDTO
 from app.services.infographic_service import (
+    TRANSIENT_HTTP_CODES,
     LLMConfig,
     LLMIntegrationError,
-    TRANSIENT_HTTP_CODES,
 )
 
 logger = logging.getLogger(__name__)

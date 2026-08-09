@@ -17,8 +17,8 @@ from app.services.three_d.render_engine import (
 from app.services.three_d.styles import (
     ALLOWED_FRAME_ASPECTS,
     LIGHTING_PRESETS,
-    LightRole,
     LightingPresetName,
+    LightRole,
     RenderSettingsDTO,
     ShadowCatcherFloorSettings,
     StudioBackgroundMode,

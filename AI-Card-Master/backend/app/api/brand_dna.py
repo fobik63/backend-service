@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.payments import get_current_user
+from app.api.dependencies.auth import get_current_user
 from app.domain.brand_dna import BrandDNAStatus, BrandDNAView
 from app.infrastructure.brand_dna_factory import build_brand_dna_service
 from app.infrastructure.celery_app import celery_app

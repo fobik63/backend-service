@@ -37,6 +37,7 @@ import {
   addCustomBadge,
   addQuickBadgeById,
 } from "@/lib/editor/canvas-actions"
+import { useI18n } from "@/lib/i18n"
 import { useEditorStore } from "@/lib/store/editor-store"
 import type { FeatureChipDraft } from "@/types/canvas"
 import { cn } from "@/lib/utils"
@@ -237,6 +238,7 @@ function BadgeToolbarMenu() {
 }
 
 function BadgeParamsSection() {
+  const { t } = useI18n()
   const layers = useEditorStore((s) => s.layers)
   const selectedLayerId = useEditorStore((s) => s.selectedLayerId)
   const updateLayer = useEditorStore((s) => s.updateLayer)
@@ -252,7 +254,7 @@ function BadgeParamsSection() {
       chip: { ...layer.chip, ...patch },
       name:
         patch.label !== undefined
-          ? `Плашка «${patch.label || layer.chip.label}»`
+          ? `${t("editor.badge")} «${patch.label || layer.chip.label}»`
           : layer.name,
     })
   }
@@ -268,33 +270,33 @@ function BadgeParamsSection() {
       <div className="flex items-center gap-2">
         <SquareStack className="size-4 text-emerald" aria-hidden />
         <h3 className="font-heading text-sm font-semibold tracking-tight">
-          Плашка
+          {t("editor.badge")}
         </h3>
       </div>
 
       {!isBadge ? (
         <p className="text-[11px] text-muted-foreground">
-          Выберите плашку на холсте
+          {t("editor.badgeSelectHint")}
         </p>
       ) : null}
 
       <div className={cn("space-y-2.5", !isBadge && "opacity-45")}>
         <div className="space-y-1.5">
           <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-            Текст
+            {t("editor.badgeText")}
           </span>
           <Input
             value={chip?.label ?? ""}
             disabled={disabled}
             maxLength={48}
-            placeholder="Текст плашки"
+            placeholder={t("editor.badgeTextPlaceholder")}
             onChange={(e) => patchChip({ label: e.target.value })}
             className="h-8 border-white/10 bg-white/[0.04] text-xs"
           />
         </div>
 
         <ColorSwatchRow
-          label="Цвет фона"
+          label={t("editor.badgeBgColor")}
           value={chip?.bgColor ?? "#0F1115"}
           presets={FEATURE_CHIP_BG_PRESETS}
           disabled={disabled}
@@ -307,7 +309,7 @@ function BadgeParamsSection() {
         />
 
         <ColorSwatchRow
-          label="Цвет текста"
+          label={t("editor.badgeTextColor")}
           value={textColor}
           presets={TEXT_COLOR_PRESETS}
           disabled={disabled}
@@ -316,7 +318,7 @@ function BadgeParamsSection() {
 
         <div className="space-y-1.5">
           <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-            Иконка
+            {t("editor.badgeIcon")}
           </span>
           <div className="grid grid-cols-4 gap-1.5">
             {FEATURE_CHIP_ICONS.map((icon) => {
@@ -345,7 +347,7 @@ function BadgeParamsSection() {
         </div>
 
         <SliderControl
-          label="Прозрачность"
+          label={t("editor.opacity")}
           value={opacityPct}
           min={10}
           max={100}
@@ -360,7 +362,7 @@ function BadgeParamsSection() {
         />
 
         <SliderControl
-          label="Размытие"
+          label={t("editor.blur")}
           value={blurValue}
           min={0}
           max={32}
@@ -373,9 +375,7 @@ function BadgeParamsSection() {
               variant: next > 0 ? "glass" : "solid",
             })
           }}
-          hint={
-            <span>Glassmorphism: backdrop-blur поверх карточки</span>
-          }
+          hint={<span>{t("editor.badgeGlassHint")}</span>}
         />
       </div>
     </section>

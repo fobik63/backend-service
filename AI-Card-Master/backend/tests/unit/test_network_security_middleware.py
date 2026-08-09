@@ -8,6 +8,7 @@ import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from starlette.responses import Response
 
 from app.core.config import Settings
 from app.core.payload_size_limiter_middleware import (
@@ -16,7 +17,6 @@ from app.core.payload_size_limiter_middleware import (
 )
 from app.core.security_headers import SECURITY_HEADER_VALUES, apply_security_headers
 from app.core.security_headers_middleware import SecurityHeadersMiddleware
-from starlette.responses import Response
 
 
 def _settings(**overrides: Any) -> Settings:

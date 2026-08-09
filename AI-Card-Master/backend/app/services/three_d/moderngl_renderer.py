@@ -159,7 +159,7 @@ class ModernglOffscreenBackend:
 
         interleaved: list[float] = []
         indices: list[int] = []
-        for v, n in zip(verts, normals):
+        for v, n in zip(verts, normals, strict=True):
             interleaved.extend((v[0], v[1], v[2], n[0], n[1], n[2]))
         for a, b, c in mesh.faces:
             indices.extend((a, b, c))

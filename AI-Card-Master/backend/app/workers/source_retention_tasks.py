@@ -15,11 +15,11 @@ from app.infrastructure.persistence.source_retention_repository import (
     SourceRetentionRepository,
 )
 from app.models.database import SessionLocal
-from app.workers.async_runtime import run_worker_async
 from app.services.s3_storage import (
     S3StorageConfigurationError,
     get_s3_storage,
 )
+from app.workers.async_runtime import run_worker_async
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")

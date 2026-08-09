@@ -2,7 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod"
 import { CheckCircle2, Eye, EyeOff, Loader2, PlugZap } from "lucide-react"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useForm } from "react-hook-form"
 import { toast } from "sonner"
 
@@ -13,6 +13,11 @@ import {
 import { Button } from "@/components/ui/button"
 import { GlassButton } from "@/components/ui/glass-button"
 import { Input } from "@/components/ui/input"
+import {
+  getApiErrorMessage,
+  listExportCredentials,
+  saveExportCredentials,
+} from "@/lib/api"
 import {
   integrationsSchema,
   type IntegrationsValues,
@@ -135,6 +140,40 @@ function IntegrationsTab() {
 
   const [ozonStatus, setOzonStatus] = useState<ConnectionStatus>("idle")
   const [wbStatus, setWbStatus] = useState<ConnectionStatus>("idle")
+  const [configured, setConfigured] = useState<{
+    ozon: boolean
+    wildberries: boolean
+  }>({ ozon: false, wildberries: false })
+
+  useEffect(() => {
+    let cancelled = false
+    void listExportCredentials()
+      .then((items) => {
+        if (cancelled) return
+        setConfigured({
+          ozon: items.some((item) => item.platform === "ozon" && item.is_configured),
+          wildberries: items.some(
+            (item) => item.platform === "wildberries" && item.is_configured
+          ),
+        })
+        if (items.some((item) => item.platform === "ozon" && item.is_configured)) {
+          setOzonStatus("ok")
+        }
+        if (
+          items.some(
+            (item) => item.platform === "wildberries" && item.is_configured
+          )
+        ) {
+          setWbStatus("ok")
+        }
+      })
+      .catch(() => {
+        // Credentials list is optional for the form; save still works.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const checkConnection = async (
     marketplace: "ozon" | "wb",
@@ -142,6 +181,7 @@ function IntegrationsTab() {
   ) => {
     const setStatus = marketplace === "ozon" ? setOzonStatus : setWbStatus
     const label = marketplace === "ozon" ? "Ozon Seller" : "Wildberries"
+    const values = form.getValues()
 
     if (!hasKey) {
       toast.error(`Введите API-ключ ${label}`)
@@ -150,25 +190,82 @@ function IntegrationsTab() {
     }
 
     setStatus("checking")
-    await new Promise((r) => setTimeout(r, 800))
-    // UI stub until marketplace credentials API is wired
-    setStatus("ok")
-    toast.success(`${label}: связь установлена`)
+    try {
+      if (marketplace === "ozon") {
+        await saveExportCredentials("ozon", {
+          client_id: values.ozonClientId.trim(),
+          api_key: values.ozonApiKey.trim(),
+        })
+        setConfigured((prev) => ({ ...prev, ozon: true }))
+      } else {
+        await saveExportCredentials("wildberries", {
+          api_key: values.wildberriesApiKey.trim(),
+        })
+        setConfigured((prev) => ({ ...prev, wildberries: true }))
+      }
+      setStatus("ok")
+      toast.success(`${label}: ключи сохранены и доступны для экспорта`)
+    } catch (error) {
+      setStatus("error")
+      toast.error(
+        getApiErrorMessage(
+          error,
+          `${label}: не удалось проверить/сохранить ключи`
+        )
+      )
+    }
   }
 
-  const onSubmit = form.handleSubmit(async () => {
-    await new Promise((r) => setTimeout(r, 500))
-    toast.success("Ключи интеграций сохранены")
+  const onSubmit = form.handleSubmit(async (values) => {
+    try {
+      const jobs: Promise<unknown>[] = []
+      if (values.ozonApiKey.trim() && values.ozonClientId.trim()) {
+        jobs.push(
+          saveExportCredentials("ozon", {
+            client_id: values.ozonClientId.trim(),
+            api_key: values.ozonApiKey.trim(),
+          })
+        )
+      }
+      if (values.wildberriesApiKey.trim()) {
+        jobs.push(
+          saveExportCredentials("wildberries", {
+            api_key: values.wildberriesApiKey.trim(),
+          })
+        )
+      }
+      if (jobs.length === 0) {
+        toast.error("Заполните хотя бы один маркетплейс перед сохранением")
+        return
+      }
+      await Promise.all(jobs)
+      toast.success("Ключи интеграций сохранены")
+    } catch (error) {
+      toast.error(
+        getApiErrorMessage(error, "Не удалось сохранить ключи интеграций")
+      )
+    }
   })
 
   const busy = form.formState.isSubmitting
+  // React Compiler cannot memoize RHF watch; values are local form state only.
+  // eslint-disable-next-line react-hooks/incompatible-library -- react-hook-form watch
   const values = form.watch()
 
   return (
     <form onSubmit={onSubmit} className="space-y-6" noValidate>
       <p className="text-sm text-muted-foreground">
-        Ключи нужны для авто-импорта карточек с маркетплейсов. Они хранятся в
-        зашифрованном виде и не отображаются полностью после сохранения.
+        Ключи нужны для one-click export на маркетплейсы. Они хранятся в
+        зашифрованном виде
+        {configured.ozon || configured.wildberries
+          ? ` · уже настроено: ${[
+              configured.ozon ? "Ozon" : null,
+              configured.wildberries ? "WB" : null,
+            ]
+              .filter(Boolean)
+              .join(", ")}`
+          : ""}
+        .
       </p>
 
       <section className="space-y-4 rounded-xl border border-white/10 bg-loft-surface/40 p-4 sm:p-5">

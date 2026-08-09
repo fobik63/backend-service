@@ -16,7 +16,13 @@ import { Button } from "@/components/ui/button"
 import { GlassButton } from "@/components/ui/glass-button"
 import { GlassCard } from "@/components/ui/glass-card"
 import { Input } from "@/components/ui/input"
-import { apiClient } from "@/lib/api"
+import {
+  loginWithPassword,
+  loginWithTelegram,
+  registerWithPassword,
+  sendOtp,
+  verifyOtp,
+} from "@/lib/api/auth"
 import {
   getApiErrorMessage,
   isNetworkError,
@@ -35,18 +41,6 @@ import {
   type OtpEmailValues,
 } from "@/lib/validators/auth"
 
-type AuthSessionResponse = {
-  user: { id: string; email: string }
-  tokens: { access_token: string; refresh_token: string }
-}
-
-type OtpRequestResponse = {
-  ok: boolean
-  expires_in: number
-  message: string
-  dev_code?: string | null
-}
-
 type AuthFormProps = {
   initialMode?: AuthMode
   /** Compact title for modal context */
@@ -56,23 +50,8 @@ type AuthFormProps = {
   onModeChange?: (mode: AuthMode) => void
   /** Hide built-in home link when parent already shows one */
   hideHomeLink?: boolean
-}
-
-const IS_DEV =
-  process.env.NODE_ENV === "development" ||
-  process.env.NEXT_PUBLIC_AUTH_DEV_BYPASS === "1"
-
-function persistSession(tokens: AuthSessionResponse["tokens"]) {
-  if (typeof window !== "undefined") {
-    window.localStorage.setItem("access_token", tokens.access_token)
-    window.localStorage.setItem("refresh_token", tokens.refresh_token)
-  }
-  useAuthStore.getState().setAccessToken(tokens.access_token)
-}
-
-function enterLocalDevSession() {
-  const token = `dev-local-${Date.now()}`
-  persistSession({ access_token: token, refresh_token: `dev-refresh-${Date.now()}` })
+  /** When true, start on OTP email step (modal default). */
+  otpFirst?: boolean
 }
 
 function FieldError({ message }: { message?: string }) {
@@ -87,16 +66,19 @@ function AuthForm({
   onSuccess,
   onModeChange,
   hideHomeLink = false,
+  otpFirst = false,
 }: AuthFormProps) {
   const router = useRouter()
-  const [mode, setMode] = useState<AuthMode>(initialMode)
+  const setSession = useAuthStore((s) => s.setSession)
+  const [mode, setMode] = useState<AuthMode>(
+    otpFirst ? "otp" : initialMode,
+  )
   const [otpStep, setOtpStep] = useState<1 | 2>(1)
   const [otpEmail, setOtpEmail] = useState("")
   const [resendIn, setResendIn] = useState(0)
   const [isPending, startTransition] = useTransition()
   const [formError, setFormError] = useState<string | null>(null)
   const [sendingOtp, setSendingOtp] = useState(false)
-  const [backendOffline, setBackendOffline] = useState(false)
 
   const credentialsForm = useForm<AuthCredentialsValues>({
     resolver: zodResolver(authCredentialsSchema),
@@ -141,48 +123,23 @@ function AuthForm({
     })
   }
 
-  const notifyOfflineDev = () => {
-    setBackendOffline(true)
-    toast.message("Локальный режим", {
-      description: `Бэкенд недоступен (${DEFAULT_API_BASE_URL}). Можно протестировать интерфейс без сервера.`,
-      duration: 8_000,
-      action: IS_DEV
-        ? {
-            label: "Demo-вход",
-            onClick: () => {
-              enterLocalDevSession()
-              finishAuth("Demo-вход (бэкенд недоступен)")
-            },
-          }
-        : undefined,
-    })
-  }
-
   const mapAuthError = (err: unknown, fallback: string) => {
     if (isNetworkError(err)) {
-      if (IS_DEV) notifyOfflineDev()
       return `${NETWORK_ERROR_MESSAGES.offline}. Запустите API на ${DEFAULT_API_BASE_URL}`
     }
     return getApiErrorMessage(err, fallback)
   }
 
-  const continueAsLocalDev = () => {
-    enterLocalDevSession()
-    finishAuth("Demo-вход (локальный режим)")
-  }
-
   const onCredentialsSubmit = credentialsForm.handleSubmit(async (values) => {
     setFormError(null)
-    const endpoint = mode === "register" ? "/auth/register" : "/auth/login"
     try {
-      const { data } = await apiClient.post<AuthSessionResponse>(
-        endpoint,
-        values,
-        { skipErrorToast: true }
-      )
-      persistSession(data.tokens)
+      const data =
+        mode === "register"
+          ? await registerWithPassword(values.email, values.password)
+          : await loginWithPassword(values.email, values.password)
+      setSession(data.tokens, data.user)
       finishAuth(
-        mode === "register" ? "Аккаунт создан" : "Вы вошли в аккаунт"
+        mode === "register" ? "Аккаунт создан" : "Вы вошли в аккаунт",
       )
     } catch (err: unknown) {
       setFormError(
@@ -190,8 +147,8 @@ function AuthForm({
           err,
           mode === "register"
             ? "Не удалось зарегистрироваться"
-            : "Неверный email или пароль"
-        )
+            : "Неверный email или пароль",
+        ),
       )
     }
   })
@@ -200,19 +157,12 @@ function AuthForm({
     setSendingOtp(true)
     setFormError(null)
     try {
-      const { data } = await apiClient.post<OtpRequestResponse>(
-        "/auth/otp/request",
-        { email },
-        { skipErrorToast: true }
-      )
+      const data = await sendOtp(email)
       setOtpEmail(email)
       setOtpStep(2)
       setResendIn(60)
       otpCodeForm.reset({ code: "" })
       toast.success(data.message || "Код отправлен на email")
-      if (data.dev_code) {
-        toast.message("Dev OTP", { description: data.dev_code })
-      }
     } catch (err: unknown) {
       setFormError(mapAuthError(err, "Не удалось отправить код"))
     } finally {
@@ -227,12 +177,8 @@ function AuthForm({
   const onOtpCodeSubmit = otpCodeForm.handleSubmit(async (values) => {
     setFormError(null)
     try {
-      const { data } = await apiClient.post<AuthSessionResponse>(
-        "/auth/otp/verify",
-        { email: otpEmail, code: values.code },
-        { skipErrorToast: true }
-      )
-      persistSession(data.tokens)
+      const data = await verifyOtp(otpEmail, values.code)
+      setSession(data.tokens, data.user)
       finishAuth("Вы вошли по коду")
     } catch (err: unknown) {
       setFormError(mapAuthError(err, "Неверный или просроченный код"))
@@ -243,20 +189,16 @@ function AuthForm({
     async (user: TelegramLoginPayload) => {
       setFormError(null)
       try {
-        const { data } = await apiClient.post<AuthSessionResponse>(
-          "/auth/telegram",
-          {
-            id: user.id,
-            first_name: user.first_name,
-            last_name: user.last_name || "",
-            username: user.username || "",
-            photo_url: user.photo_url || "",
-            auth_date: user.auth_date,
-            hash: user.hash,
-          },
-          { skipErrorToast: true }
-        )
-        persistSession(data.tokens)
+        const data = await loginWithTelegram({
+          id: user.id,
+          first_name: user.first_name,
+          last_name: user.last_name || "",
+          username: user.username || "",
+          photo_url: user.photo_url || "",
+          auth_date: user.auth_date,
+          hash: user.hash,
+        })
+        setSession(data.tokens, data.user)
         finishAuth("Вы вошли через Telegram")
       } catch (err: unknown) {
         setFormError(mapAuthError(err, "Не удалось войти через Telegram"))
@@ -264,7 +206,7 @@ function AuthForm({
     },
     // finishAuth closes over router/onSuccess — intentional
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    []
+    [setSession],
   )
 
   const busy =
@@ -279,7 +221,7 @@ function AuthForm({
       ? "Регистрация"
       : mode === "otp"
         ? otpStep === 1
-          ? "Вход по коду"
+          ? "Вход по email"
           : "Подтверждение"
         : "Вход"
 
@@ -312,7 +254,7 @@ function AuthForm({
         className={cn(
           "mb-6",
           !hideHomeLink ? "mt-4" : "",
-          compact ? "space-y-1" : "space-y-2"
+          compact ? "space-y-1" : "space-y-2",
         )}
       >
         <p className="font-heading text-xs font-medium tracking-[0.18em] text-copper uppercase">
@@ -321,37 +263,29 @@ function AuthForm({
         <h1
           className={cn(
             "font-heading font-semibold tracking-tight text-foreground",
-            compact ? "text-xl" : "text-2xl"
+            compact ? "text-xl" : "text-2xl",
           )}
         >
           {title}
         </h1>
         <p className="text-sm text-muted-foreground">{subtitle}</p>
+        {mode === "otp" ? (
+          <div className="flex items-center gap-2 pt-2" aria-hidden>
+            <span
+              className={cn(
+                "h-1 flex-1 rounded-full",
+                otpStep >= 1 ? "bg-emerald" : "bg-white/10",
+              )}
+            />
+            <span
+              className={cn(
+                "h-1 flex-1 rounded-full",
+                otpStep >= 2 ? "bg-emerald" : "bg-white/10",
+              )}
+            />
+          </div>
+        ) : null}
       </div>
-
-      {IS_DEV && backendOffline ? (
-        <div
-          className="mb-5 rounded-xl border border-copper/30 bg-copper/10 px-3.5 py-3"
-          role="status"
-        >
-          <p className="text-sm text-foreground/90">
-            Бэкенд недоступен — можно проверить UI локально.
-          </p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Ожидается {DEFAULT_API_BASE_URL}
-          </p>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="mt-3 h-9 w-full border-white/15 bg-transparent"
-            disabled={busy}
-            onClick={continueAsLocalDev}
-          >
-            Продолжить в demo-режиме
-          </Button>
-        </div>
-      ) : null}
 
       {mode === "otp" && otpStep === 1 ? (
         <form onSubmit={onOtpEmailSubmit} className="space-y-4" noValidate>
@@ -389,15 +323,27 @@ function AuthForm({
             Отправить код
           </GlassButton>
 
-          <Button
-            type="button"
-            variant="ghost"
-            className="w-full"
-            disabled={busy}
-            onClick={() => switchMode("login")}
-          >
-            Назад к входу по паролю
-          </Button>
+          {!otpFirst ? (
+            <Button
+              type="button"
+              variant="ghost"
+              className="w-full"
+              disabled={busy}
+              onClick={() => switchMode("login")}
+            >
+              Назад к входу по паролю
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              variant="ghost"
+              className="w-full"
+              disabled={busy}
+              onClick={() => switchMode("login")}
+            >
+              Войти по паролю
+            </Button>
+          )}
         </form>
       ) : null}
 

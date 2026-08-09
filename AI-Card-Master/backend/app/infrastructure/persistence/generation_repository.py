@@ -17,6 +17,7 @@ from sqlalchemy.orm import selectinload
 from app.config.style_presets import resolve_niche_key
 from app.core.config import get_settings
 from app.core.pricing import generation_cost_for_mode
+from app.domain.cost_analytics import CostCallStatus, CostEventRecord
 from app.domain.generation import (
     AttemptWorkItem,
     GenerationEngineMode,
@@ -32,6 +33,7 @@ from app.domain.generation import (
     SlideStatus,
     SlideWorkItem,
 )
+from app.infrastructure.persistence.cost_analytics_repository import CostAnalyticsRepository
 from app.infrastructure.persistence.style_analytics_repository import StyleAnalyticsRepository
 from app.models.generation_error_log import GenerationErrorLog
 from app.models.generation_job import (
@@ -41,8 +43,6 @@ from app.models.generation_job import (
     GenerationSlide,
     GenerationWebhookEvent,
 )
-from app.domain.cost_analytics import CostCallStatus, CostEventRecord
-from app.infrastructure.persistence.cost_analytics_repository import CostAnalyticsRepository
 from app.models.user import User
 from app.services.billing_service import BillingService
 from app.services.series_generator import SeriesTask

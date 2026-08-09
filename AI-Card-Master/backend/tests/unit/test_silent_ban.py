@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import random
 
+from app.domain.signup_trial import TrialDenialReason
 from app.domain.silent_ban import (
     FLAGGED_IP_RATE_LIMIT,
     FLAGGED_IP_RATE_WINDOW_SECONDS,
@@ -12,7 +13,6 @@ from app.domain.silent_ban import (
     pick_shadow_delay_seconds,
     should_silent_flag,
 )
-from app.domain.signup_trial import TrialDenialReason
 
 
 def test_should_silent_flag_only_fingerprint_and_subnet() -> None:

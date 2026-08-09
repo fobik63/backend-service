@@ -30,7 +30,6 @@ from app.domain.competitor_audit import (
     CompetitorAuditTransientError,
     CompetitorCardDeepAnalysis,
     CompetitorCardScrapeResult,
-    CompetitorDeepAnalysisBundle,
     assemble_deep_analysis_bundle,
     attach_cross_check_to_card,
     build_insufficient_card_analysis,

@@ -1,8 +1,8 @@
 "use client"
 
 import { Center, ContactShadows, Environment, OrbitControls, useGLTF } from "@react-three/drei"
-import { Canvas } from "@react-three/fiber"
-import { Suspense, useEffect, useMemo, useState } from "react"
+import { Canvas, useThree } from "@react-three/fiber"
+import { Suspense, useEffect, useMemo, useSyncExternalStore } from "react"
 import {
   DoubleSide,
   SRGBColorSpace,
@@ -109,6 +109,40 @@ async function applyColorVariant(root: Group, gltf: GltfWithParser, variantName:
   await Promise.all(tasks)
 }
 
+function disposeObjectTree(root: Group) {
+  root.traverse((child) => {
+    const mesh = child as Mesh
+    if (!mesh.isMesh) return
+
+    mesh.geometry?.dispose()
+
+    const materials = Array.isArray(mesh.material)
+      ? mesh.material
+      : mesh.material
+        ? [mesh.material]
+        : []
+
+    for (const material of materials) {
+      const standard = material as MeshStandardMaterial
+      const maps: Array<Texture | null | undefined> = [
+        standard.map,
+        standard.normalMap,
+        standard.roughnessMap,
+        standard.metalnessMap,
+        standard.aoMap,
+        standard.emissiveMap,
+        standard.bumpMap,
+        standard.displacementMap,
+        standard.alphaMap,
+      ]
+      for (const map of maps) {
+        map?.dispose()
+      }
+      material.dispose()
+    }
+  })
+}
+
 function SneakerModel({ scale = 1 }: { scale?: number }) {
   const gltf = useGLTF(SHOE_MODEL_URL) as unknown as GltfWithParser
 
@@ -122,6 +156,11 @@ function SneakerModel({ scale = 1 }: { scale?: number }) {
       mesh.receiveShadow = true
       // Avoid pop-in when looking into the collar / mesh openings.
       mesh.frustumCulled = false
+
+      // Deep-clone geometry so this viewer owns disposable GPU resources.
+      if (mesh.geometry) {
+        mesh.geometry = mesh.geometry.clone()
+      }
 
       if (Array.isArray(mesh.material)) {
         mesh.material = mesh.material.map((m) => {
@@ -145,6 +184,7 @@ function SneakerModel({ scale = 1 }: { scale?: number }) {
     })
     return () => {
       cancelled = true
+      disposeObjectTree(model)
     }
   }, [gltf, model])
 
@@ -156,6 +196,19 @@ function SneakerModel({ scale = 1 }: { scale?: number }) {
       position={[0, 0.02, 0]}
     />
   )
+}
+
+function WebGLResourceCleanup() {
+  const gl = useThree((state) => state.gl)
+
+  useEffect(() => {
+    return () => {
+      gl.dispose()
+      gl.forceContextLoss()
+    }
+  }, [gl])
+
+  return null
 }
 
 function ViewerScene({
@@ -171,6 +224,7 @@ function ViewerScene({
 
   return (
     <>
+      <WebGLResourceCleanup />
       <color attach="background" args={["#1a1612"]} />
 
       {/* Soft key + fill lighting for readable PBR color */}
@@ -188,7 +242,7 @@ function ViewerScene({
 
       <Suspense fallback={null}>
         <Center>
-          <SneakerModel scale={isCard ? 1.05 : 1.25} />
+          <SneakerModel scale={isCard ? 1.55 : 1.85} />
         </Center>
         <Environment preset="studio" environmentIntensity={0.85} />
         <ContactShadows
@@ -206,15 +260,23 @@ function ViewerScene({
         autoRotateSpeed={isCard ? 1.6 : 1.15}
         enablePan={false}
         enableZoom={enableZoom}
-        zoomSpeed={0.85}
+        zoomSpeed={1.05}
         rotateSpeed={0.9}
-        minDistance={isCard ? 1.35 : 1.15}
-        maxDistance={isCard ? 3.4 : 4.2}
-        minPolarAngle={Math.PI / 5}
-        maxPolarAngle={Math.PI / 1.65}
+        minDistance={isCard ? 0.35 : 0.28}
+        maxDistance={isCard ? 5.5 : 6.5}
+        minPolarAngle={Math.PI / 6}
+        maxPolarAngle={Math.PI / 1.55}
         target={[0, 0.05, 0]}
       />
     </>
+  )
+}
+
+function useIsClient() {
+  return useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false
   )
 }
 
@@ -225,11 +287,7 @@ function Sneaker3DViewer({
   enableZoom = true,
   showHint = true,
 }: Sneaker3DViewerProps) {
-  const [mounted, setMounted] = useState(false)
-
-  useEffect(() => {
-    setMounted(true)
-  }, [])
+  const mounted = useIsClient()
 
   return (
     <div
@@ -254,8 +312,9 @@ function Sneaker3DViewer({
           className="touch-none"
           dpr={[1, 1.75]}
           camera={{
-            position: variant === "card" ? [0.15, 0.55, 2.35] : [0.2, 0.65, 2.55],
-            fov: variant === "card" ? 38 : 36,
+            // Default framing sits close so mesh/collar detail reads immediately
+            position: variant === "card" ? [0.12, 0.42, 1.35] : [0.15, 0.48, 1.45],
+            fov: variant === "card" ? 36 : 34,
             // Tight near plane avoids clipping the sole/mesh when zooming into openings;
             // far stays generous for Environment + shadows.
             near: 0.01,

@@ -403,10 +403,12 @@ def extract_json_object(raw_text: str) -> dict[str, Any]:
             raw = raw[4:].strip()
     try:
         payload = json.loads(raw)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
         match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
         if match is None:
-            raise ValueError("Claude response does not contain a JSON object.")
+            raise ValueError(
+                "Claude response does not contain a JSON object."
+            ) from exc
         payload = json.loads(match.group(0))
     if not isinstance(payload, dict):
         raise ValueError("Claude response JSON root must be an object.")

@@ -13,13 +13,13 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Sequence
 from uuid import UUID
 
+from app.application.ports.claude_reasoning import ClaudeStageCachePort
 from app.application.ports.eye_of_god import (
     EyeOfGodPersistencePort,
     EyeOfGodTriggerPort,
     EyeOfGodVisionPort,
     SkuCardImagePort,
 )
-from app.application.ports.claude_reasoning import ClaudeStageCachePort
 from app.application.ports.stock_parser import StockParserPersistencePort
 from app.domain.eye_of_god import (
     EyeOfGodJobStatus,

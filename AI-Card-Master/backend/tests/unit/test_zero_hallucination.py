@@ -292,13 +292,13 @@ def test_attach_cross_check_to_competitor_card() -> None:
 
 def test_advice_reliability_on_strategy_plan() -> None:
     from app.domain.ai_strategy import (
-        StrategyActionType,
-        RecommendationPriority,
-        KillerRecommendation,
-        StrategyCompareReport,
-        StrategyCompareConfig,
-        FeatureDelta,
         ClaudeStrategyEnrichment,
+        FeatureDelta,
+        KillerRecommendation,
+        RecommendationPriority,
+        StrategyActionType,
+        StrategyCompareConfig,
+        StrategyCompareReport,
         build_plan_result,
     )
 

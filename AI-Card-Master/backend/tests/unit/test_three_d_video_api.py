@@ -27,7 +27,6 @@ from app.domain.three_d import (
 from app.domain.three_d_video import (
     ThreeDVideoTaskStatus,
     ThreeDVideoTaskView,
-    VideoAssetFormat,
     VideoAssetView,
     VideoBackgroundType,
     VideoPresignedUrls,

@@ -17,7 +17,7 @@ from app.domain.brand_dna import (
 )
 from app.domain.generation import GenerationJobStatus, SlideStatus
 from app.models.brand_dna import BrandDNA
-from app.models.generation_job import GenerationJob, GenerationSlide
+from app.models.generation_job import GenerationJob
 
 
 def _to_utc(value: datetime) -> datetime:

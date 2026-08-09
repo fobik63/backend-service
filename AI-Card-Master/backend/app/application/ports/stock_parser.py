@@ -7,12 +7,12 @@ from typing import Protocol, Sequence
 from uuid import UUID
 
 from app.domain.stock_parser import (
-    ParseSkuRequest,
     ParsedSkuSnapshot,
     ParserErrorKind,
     ParserHealthStatus,
     ParserHealthView,
     ParserMarketplace,
+    ParseSkuRequest,
     SkuItemView,
     StockSnapshotView,
     StockSnapshotWrite,

@@ -20,12 +20,12 @@ from app.application.ports.stock_parser import (
 from app.domain.stock_parser import (
     CIRCUIT_BREAKER_THRESHOLD,
     STOCK_SNAPSHOT_FALLBACK_WAREHOUSE_ID,
-    ParseSkuRequest,
     ParsedSkuSnapshot,
     ParserErrorKind,
     ParserHealthStatus,
     ParserMarketplace,
     ParserRunResult,
+    ParseSkuRequest,
     StockSnapshotWrite,
     stabilize_captured_at,
 )

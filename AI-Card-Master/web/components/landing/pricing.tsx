@@ -249,7 +249,7 @@ function PricingCard({
             className={cn(
               "w-full",
               !plan.highlighted &&
-                "border border-white/10 bg-none bg-[#1a1d24]/80 text-foreground [background-image:none] hover:bg-[#22262f] hover:brightness-100"
+                "border border-white/10 bg-none bg-loft-surface/80 text-foreground [background-image:none] hover:bg-[#1a1e26] hover:brightness-100"
             )}
             onClick={() => router.push(plan.href)}
           >

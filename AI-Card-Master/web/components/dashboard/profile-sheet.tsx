@@ -8,6 +8,7 @@ import {
   UserRound,
 } from "lucide-react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
@@ -34,13 +35,14 @@ type ProfileSheetProps = {
   onOpenChange: (open: boolean) => void
   user?: ProfileSheetUser
   balance?: { current: number; limit: number }
+  onLogout?: () => void
 }
 
 const DEFAULT_USER: ProfileSheetUser = {
-  name: "Алексей Иванов",
-  email: "alexey@example.com",
+  name: "Гость",
+  email: undefined,
   avatarUrl: null,
-  statusLabel: "PRO",
+  statusLabel: "FREE",
 }
 
 const QUICK_LINKS = [
@@ -65,8 +67,10 @@ function ProfileSheet({
   open,
   onOpenChange,
   user = DEFAULT_USER,
-  balance = { current: 48, limit: 50 },
+  balance = { current: 0, limit: 50 },
+  onLogout,
 }: ProfileSheetProps) {
+  const router = useRouter()
   const initials = user.name
     .split(" ")
     .map((part) => part[0])
@@ -171,9 +175,16 @@ function ProfileSheet({
         </div>
 
         <SheetFooter>
-          <Link
-            href="/login"
-            onClick={() => onOpenChange(false)}
+          <button
+            type="button"
+            onClick={() => {
+              onOpenChange(false)
+              if (onLogout) {
+                onLogout()
+                return
+              }
+              router.push("/login")
+            }}
             className={cn(
               buttonVariants({ variant: "outline" }),
               "w-full gap-2 border-white/10 bg-transparent text-destructive hover:bg-destructive/10 hover:text-destructive"
@@ -181,7 +192,7 @@ function ProfileSheet({
           >
             <LogOut className="size-4" aria-hidden />
             Выйти
-          </Link>
+          </button>
         </SheetFooter>
       </SheetContent>
     </Sheet>

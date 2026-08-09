@@ -7,16 +7,17 @@ from uuid import UUID
 
 from app.application.ports.auth import AuthRepositoryPort
 from app.application.ports.coin_wallet import CoinWalletPort
-from app.application.ports.silent_ban import (
-    SilentBanStorePort,
-    SilentBanStoreUnavailableError,
-)
 from app.application.ports.signup_trial import (
     ProxyDetectorPort,
     SignupTrialClaimRepositoryPort,
     SignupTrialStorePort,
     SignupTrialStoreUnavailableError,
 )
+from app.application.ports.silent_ban import (
+    SilentBanStorePort,
+    SilentBanStoreUnavailableError,
+)
+from app.application.ports.unit_of_work import UnitOfWorkPort
 from app.core.security import (
     decode_and_validate_token,
     hash_password,
@@ -30,17 +31,8 @@ from app.domain.auth import (
     OtpVerifyCommand,
     RegisterCommand,
 )
-from app.services.auth import (
-    FAMILY_REUSE_DETAIL,
-    InvalidRefreshTokenError,
-    RefreshTokenRotationService,
-    TokenFamilyRevokedError,
-    TokenRotationStoreError,
-    get_refresh_token_rotation_service,
-)
 from app.domain.disposable_email import is_disposable_email
 from app.domain.referral import generate_referral_code
-from app.domain.silent_ban import flag_reason_for, should_silent_flag
 from app.domain.signup_trial import (
     SignupAbuseContext,
     TrialDenialReason,
@@ -49,7 +41,16 @@ from app.domain.signup_trial import (
     decide_trial_after_checks,
     ipv4_subnet_24,
 )
+from app.domain.silent_ban import flag_reason_for, should_silent_flag
 from app.models.user import User
+from app.services.auth import (
+    FAMILY_REUSE_DETAIL,
+    InvalidRefreshTokenError,
+    RefreshTokenRotationService,
+    TokenFamilyRevokedError,
+    TokenRotationStoreError,
+    get_refresh_token_rotation_service,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +142,7 @@ class AuthService:
         proxy_detector: ProxyDetectorPort | None = None,
         silent_ban_store: SilentBanStorePort | None = None,
         token_rotation: RefreshTokenRotationService | None = None,
+        unit_of_work: UnitOfWorkPort | None = None,
         otp_store: object | None = None,
         trial_coins: int = 5,
         subnet_max_accounts: int = 3,
@@ -156,6 +158,7 @@ class AuthService:
         self._proxy_detector = proxy_detector
         self._silent_ban_store = silent_ban_store
         self._token_rotation = token_rotation or get_refresh_token_rotation_service()
+        self._unit_of_work = unit_of_work
         self._otp_store = otp_store
         self._trial_coins = max(0, int(trial_coins))
         self._subnet_max_accounts = max(1, int(subnet_max_accounts))
@@ -163,6 +166,15 @@ class AuthService:
         self._fingerprint_ttl_seconds = max(0, int(fingerprint_ttl_seconds))
         self._flagged_ip_ttl_seconds = max(0, int(flagged_ip_ttl_seconds))
         self._trial_enabled = trial_enabled
+
+    async def _commit_unit_of_work(self) -> None:
+        if self._unit_of_work is None:
+            return
+        try:
+            await self._unit_of_work.commit()
+        except Exception:
+            await self._unit_of_work.rollback()
+            raise
 
     def _issue_tokens(self, user_id: UUID) -> AuthTokens:
         """Issue a new token family (login / register)."""
@@ -235,6 +247,7 @@ class AuthService:
             if refreshed is not None:
                 user = refreshed
 
+        await self._commit_unit_of_work()
         return _to_view(user), self._issue_tokens(user.id)
 
     async def login(
@@ -259,6 +272,7 @@ class AuthService:
                 if updated is not None:
                     user = updated
 
+        await self._commit_unit_of_work()
         return _to_view(user), self._issue_tokens(user.id)
 
     async def _assert_registration_allowed(
@@ -341,6 +355,7 @@ class AuthService:
             raise AuthNotFoundError("User not found.")
         if user.is_banned:
             raise AuthCredentialsError("User is banned for abuse.")
+        await self._commit_unit_of_work()
         return _to_view(user), tokens
 
     async def get_profile(self, user_id: UUID) -> AuthUserView:
@@ -652,7 +667,39 @@ class AuthService:
         elif user.is_banned:
             raise AuthCredentialsError("User is banned for abuse.")
 
+        await self._commit_unit_of_work()
         return _to_view(user), self._issue_tokens(user.id)
+
+    async def change_password(
+        self,
+        user_id: UUID,
+        *,
+        current_password: str,
+        new_password: str,
+    ) -> None:
+        """Verify the current password and replace it with a new Argon2 hash."""
+
+        user = await self._repository.get_by_id(user_id)
+        if user is None:
+            raise AuthNotFoundError("User not found.")
+        if user.is_banned:
+            raise AuthCredentialsError("User is banned for abuse.")
+        if not verify_password(current_password, user.hashed_password):
+            raise AuthCredentialsError("Current password is incorrect.")
+        cleaned = (new_password or "").strip()
+        if len(cleaned) < 8:
+            raise AuthCredentialsError("New password must be at least 8 characters.")
+        if cleaned == current_password:
+            raise AuthCredentialsError(
+                "New password must be different from the current password."
+            )
+        updated = await self._repository.update_password(
+            user_id,
+            hashed_password=hash_password(cleaned),
+        )
+        if updated is None:
+            raise AuthNotFoundError("User not found.")
+        await self._commit_unit_of_work()
 
     async def login_with_telegram(
         self,
@@ -718,4 +765,5 @@ class AuthService:
         elif user.is_banned:
             raise AuthCredentialsError("User is banned for abuse.")
 
+        await self._commit_unit_of_work()
         return _to_view(user), self._issue_tokens(user.id)

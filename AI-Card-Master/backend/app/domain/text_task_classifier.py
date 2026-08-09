@@ -11,8 +11,8 @@ from typing import Any, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.domain.smart_reasoning import ReasoningTaskKind
 from app.domain.semantic_filter import estimate_text_tokens
+from app.domain.smart_reasoning import ReasoningTaskKind
 
 
 class StrictDomainModel(BaseModel):

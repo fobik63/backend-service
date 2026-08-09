@@ -81,7 +81,7 @@ async def s3_healthcheck() -> bool:
     """Return True when the configured object store answers ``head_bucket``."""
 
     try:
-        from app.services.s3_storage import S3StorageError, get_s3_storage
+        from app.services.s3_storage import get_s3_storage
 
         return bool(await get_s3_storage().healthcheck())
     except Exception:

@@ -10,8 +10,7 @@ from __future__ import annotations
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
-
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 LayerAlignment = Literal["left", "center", "right"]
 BadgeType = Literal["discount", "rating", "top_sales"]
@@ -28,7 +27,7 @@ class StrictTemplateModel(BaseModel):
 class BaseLayerDTO(StrictTemplateModel):
     """Common transform and stacking attributes for every canvas layer."""
 
-    id: UUID
+    id: str = Field(..., min_length=1, max_length=256)
     name: str = Field(..., min_length=1, max_length=256)
     visible: bool = True
     locked: bool = False
@@ -49,9 +48,9 @@ class BaseLayerDTO(StrictTemplateModel):
         """Accept JSON UUID strings while keeping ``strict`` for other fields."""
 
         if isinstance(value, UUID):
-            return value
+            return str(value)
         if isinstance(value, str):
-            return UUID(value)
+            return value.strip()
         return value
 
 
@@ -155,6 +154,118 @@ class CanvasStateDTO(StrictTemplateModel):
     layers: list[CanvasLayerDTO] = Field(default_factory=list)
 
 
+class EditorSoftboxDTO(StrictTemplateModel):
+    """Editor lighting state persisted with a multi-page project."""
+
+    enabled: bool = True
+    light_angle: float = Field(default=45.0, ge=0.0, le=360.0)
+    light_elevation: float = Field(default=55.0, ge=10.0, le=90.0)
+    color_temp_k: int = Field(default=5500, ge=2700, le=6500)
+    intensity: float = Field(default=100.0, ge=0.0, le=200.0)
+    softbox_diffusion: float = Field(default=65.0, ge=0.0, le=100.0)
+
+
+class EditorTextStyleDTO(StrictTemplateModel):
+    font_family: Literal["Inter", "Montserrat", "Roboto", "Space Grotesk"]
+    font_size: int = Field(..., ge=1, le=512)
+    font_weight: int = Field(..., ge=100, le=900)
+    color: str = Field(..., min_length=1, max_length=64)
+    stroke_width: float = Field(default=0.0, ge=0.0, le=32.0)
+    stroke_color: str = Field(default="#000000", min_length=1, max_length=64)
+    shadow_enabled: bool = False
+    shadow_color: str = Field(default="#00000066", min_length=1, max_length=64)
+    shadow_blur: float = Field(default=0.0, ge=0.0, le=128.0)
+    shadow_offset_x: float = Field(default=0.0, ge=-256.0, le=256.0)
+    shadow_offset_y: float = Field(default=0.0, ge=-256.0, le=256.0)
+
+
+class EditorChipDTO(StrictTemplateModel):
+    label: str = Field(..., min_length=1, max_length=256)
+    subtitle: str | None = Field(default=None, max_length=256)
+    bg_color: str = Field(..., min_length=1, max_length=128)
+    border_radius: float = Field(default=14.0, ge=0.0, le=256.0)
+    icon_id: str = Field(..., min_length=1, max_length=128)
+    variant: Literal["solid", "glass"] = "solid"
+    text_color: str | None = Field(default=None, min_length=1, max_length=64)
+    blur: float = Field(default=0.0, ge=0.0, le=128.0)
+
+
+class EditorLayerBaseDTO(StrictTemplateModel):
+    id: str = Field(..., min_length=1, max_length=256)
+    name: str = Field(..., min_length=1, max_length=256)
+    visible: bool = True
+    locked: bool = False
+    opacity: float = Field(default=1.0, ge=0.0, le=1.0)
+    z_index: int = Field(default=0, ge=-10_000, le=10_000)
+    x: float = Field(default=0.0, ge=-200.0, le=300.0)
+    y: float = Field(default=0.0, ge=-200.0, le=300.0)
+    width: float = Field(default=10.0, gt=0.0, le=500.0)
+    height: float = Field(default=10.0, gt=0.0, le=500.0)
+    scale: float = Field(default=1.0, gt=0.0, le=100.0)
+    rotation: float = Field(default=0.0, ge=-3600.0, le=3600.0)
+
+
+class EditorBackgroundLayerDTO(EditorLayerBaseDTO):
+    type: Literal["background"] = "background"
+
+
+class EditorImageLayerDTO(EditorLayerBaseDTO):
+    type: Literal["image"] = "image"
+
+
+class EditorTextLayerDTO(EditorLayerBaseDTO):
+    type: Literal["text"] = "text"
+    text: str = Field(default="", max_length=8000)
+    text_style: EditorTextStyleDTO
+
+
+class EditorShapeLayerDTO(EditorLayerBaseDTO):
+    type: Literal["shape"] = "shape"
+    chip: EditorChipDTO
+
+
+EditorLayerDTO = Annotated[
+    EditorBackgroundLayerDTO
+    | EditorImageLayerDTO
+    | EditorTextLayerDTO
+    | EditorShapeLayerDTO,
+    Field(discriminator="type"),
+]
+
+
+class EditorPageDTO(StrictTemplateModel):
+    """One ordered page inside a card pack."""
+
+    id: str = Field(..., min_length=1, max_length=128)
+    layers: list[EditorLayerDTO] = Field(..., min_length=1, max_length=256)
+
+
+class EditorDocumentDTO(StrictTemplateModel):
+    """Versioned, complete editor state for all pages in a project."""
+
+    version: Literal[1] = 1
+    pages: list[EditorPageDTO] = Field(..., min_length=1, max_length=20)
+    active_page_index: int = Field(default=0, ge=0, le=19)
+    pack_size: int = Field(..., ge=1, le=20)
+    product_preview_url: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=2048,
+    )
+    softbox: EditorSoftboxDTO = Field(default_factory=EditorSoftboxDTO)
+
+    @model_validator(mode="after")
+    def validate_page_bounds(self) -> "EditorDocumentDTO":
+        if self.pack_size != len(self.pages):
+            raise ValueError("pack_size must equal the number of pages.")
+        if self.active_page_index >= len(self.pages):
+            raise ValueError("active_page_index is outside the pages array.")
+        page_ids = [page.id for page in self.pages]
+        if len(page_ids) != len(set(page_ids)):
+            raise ValueError("Editor page ids must be unique.")
+        return self
+
+
 # ---------------------------------------------------------------------------
 # REST API request / response contracts
 # ---------------------------------------------------------------------------
@@ -214,6 +325,7 @@ class SaveDesignRequest(StrictTemplateModel):
     )
     preview_url: str | None = Field(default=None, min_length=1, max_length=2048)
     canvas: CanvasStateDTO
+    editor_document: EditorDocumentDTO | None = None
 
 
 class SavedDesignDTO(StrictTemplateModel):
@@ -223,6 +335,7 @@ class SavedDesignDTO(StrictTemplateModel):
     title: str = Field(..., min_length=1, max_length=255)
     template_id: UUID | None = None
     canvas: CanvasStateDTO
+    editor_document: EditorDocumentDTO | None = None
     preview_url: str | None = None
     updated_at: str
 

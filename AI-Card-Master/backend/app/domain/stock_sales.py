@@ -527,7 +527,7 @@ def estimate_sales_window(
 
     ordered = sorted(anchors, key=lambda a: (a.day, a.captured_at))
     days: list[DailySalesEstimate] = []
-    for prev, curr in zip(ordered, ordered[1:]):
+    for prev, curr in zip(ordered, ordered[1:], strict=False):
         # Skip calendar holes larger than one day only via gap_hours gate.
         days.append(
             estimate_sales_between_anchors(

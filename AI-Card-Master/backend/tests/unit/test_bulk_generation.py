@@ -340,7 +340,7 @@ class _FakeBulkRepo:
         )
 
     def _update_item(self, item_id: UUID, **kwargs) -> BulkItemView:
-        for batch_id, items in self.items.items():
+        for items in self.items.values():
             for index, item in enumerate(items):
                 if item.id != item_id:
                     continue

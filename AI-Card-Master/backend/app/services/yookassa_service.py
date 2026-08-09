@@ -25,7 +25,6 @@ from app.infrastructure.http_resilience import (
 from app.models.enums import TariffCode
 from app.services.tariffs import TariffPlan, get_tariff_plan
 
-
 logger = logging.getLogger(__name__)
 
 

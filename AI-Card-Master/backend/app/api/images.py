@@ -13,7 +13,6 @@ from uuid import uuid4
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
-
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/images", tags=["images"])

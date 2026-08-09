@@ -1,5 +1,23 @@
 .env
-__pycache__/
-*.pyc
 .cursor/
-build/
+
+# Python generated files (at any project depth)
+**/__pycache__/
+**/*.py[cod]
+**/.mypy_cache/
+**/.pytest_cache/
+**/.ruff_cache/
+**/.venv/
+
+# JavaScript / Next.js generated files (at any project depth)
+**/node_modules/
+**/.next/
+**/out/
+**/build/
+**/coverage/
+**/playwright-report/
+**/test-results/
+**/*.tsbuildinfo
+
+# Local audit/render output
+**/artifacts/

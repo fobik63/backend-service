@@ -22,11 +22,11 @@ from app.schemas.templates import (
     ShapeLayerDTO,
     TextLayerDTO,
 )
-from app.services.templates.fonts import FontRegistry, get_font_registry
 from app.services.templates.font_manager import (
     FontManagerService,
     get_font_manager_service,
 )
+from app.services.templates.fonts import FontRegistry, get_font_registry
 from app.services.templates.image_cache import (
     ImageAssetCache,
     ImageAssetCacheError,

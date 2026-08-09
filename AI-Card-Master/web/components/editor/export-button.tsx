@@ -26,6 +26,8 @@ import {
 import { useI18n } from "@/lib/i18n"
 import { useEditorStore } from "@/lib/store/editor-store"
 import { cn } from "@/lib/utils"
+import type { CanvasLayer } from "@/types/canvas"
+import type { SoftboxSettings } from "@/lib/store/editor-store"
 
 type ExportButtonProps = {
   className?: string
@@ -33,6 +35,8 @@ type ExportButtonProps = {
   projectTitle?: string
   /** Optional product image when canvas capture is unavailable. */
   productImageUrl?: string | null
+  pages?: CanvasLayer[][]
+  softbox?: SoftboxSettings
   /** Compact mode for project cards / toolbars. */
   variant?: "editor" | "compact"
   disabled?: boolean
@@ -42,6 +46,8 @@ function ExportButton({
   className,
   projectTitle,
   productImageUrl,
+  pages: projectPages,
+  softbox: projectSoftbox,
   variant = "editor",
   disabled = false,
 }: ExportButtonProps) {
@@ -53,6 +59,8 @@ function ExportButton({
   const layers = useEditorStore((s) => s.layers)
   const storePreviewUrl = useEditorStore((s) => s.productPreviewUrl)
   const storePackSize = useEditorStore((s) => s.packSize)
+  const storePages = useEditorStore((s) => s.pages)
+  const storeSoftbox = useEditorStore((s) => s.softbox)
   const setStorePackSize = useEditorStore((s) => s.setPackSize)
 
   /** Editor variant reads/writes shared store; compact keeps local state. */
@@ -76,7 +84,9 @@ function ExportButton({
         projectTitle: title,
         canvasEl,
         productImageUrl: productImageUrl ?? storePreviewUrl,
-        layers,
+        layers: projectPages?.[0] ?? layers,
+        pages: projectPages ?? (variant === "editor" ? storePages : undefined),
+        softbox: projectSoftbox ?? (variant === "editor" ? storeSoftbox : undefined),
         zipBasename: title,
       })
       toast.success(

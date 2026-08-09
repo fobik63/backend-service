@@ -18,7 +18,7 @@ from fastapi import (
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.payments import get_current_user
+from app.api.dependencies.auth import get_current_user
 from app.application.brand_lora_service import (
     BrandLoraForbiddenError,
     BrandLoraNotFoundError,

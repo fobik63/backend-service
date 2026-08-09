@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.payments import get_current_user
+from app.api.dependencies.auth import get_current_user
 from app.application.ab_test_service import (
     AbTestNotFoundError,
     AbTestService,

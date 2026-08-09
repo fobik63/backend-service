@@ -16,6 +16,8 @@ from app.domain.audit_log import (
     AuditEventView,
     AuditSearchQuery,
     AuditSearchResult,
+)
+from app.domain.audit_log import (
     normalize_audit_event as _normalize,
 )
 from app.infrastructure.persistence.batching import (

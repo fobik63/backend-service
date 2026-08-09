@@ -7,8 +7,7 @@ import io
 import json
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Literal
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
 
 from fastapi import (
@@ -28,12 +27,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.captcha import enforce_generation_behavioral_limit
-from app.api.payments import get_current_user
+from app.api.dependencies.auth import get_current_user
 from app.application.generation_cabinet_service import GenerationCabinetService
 from app.core.config import get_settings
 from app.core.pricing import generation_cost_for_mode
 from app.core.rate_limit import generations_user_limit
-from app.domain.silent_ban import pick_shadow_delay_seconds
 from app.domain.brand_dna import (
     apply_brand_dna_to_prompt,
     apply_brand_dna_to_style,
@@ -42,8 +40,14 @@ from app.domain.brand_lora import (
     apply_brand_filter_to_prompt,
     apply_brand_filter_to_style,
 )
-from app.domain.generation import GenerationJobStatus, MarketplaceTextContent, SlideStatus
-from app.domain.generation import GenerationEngineMode, GenerationPostProcessingMode
+from app.domain.generation import (
+    GenerationEngineMode,
+    GenerationJobStatus,
+    GenerationPostProcessingMode,
+    MarketplaceTextContent,
+    SlideStatus,
+)
+from app.domain.silent_ban import pick_shadow_delay_seconds
 from app.domain.source_retention import SourceRetentionStatus
 from app.infrastructure.brand_dna_factory import build_brand_dna_service
 from app.infrastructure.brand_lora_factory import build_brand_lora_service

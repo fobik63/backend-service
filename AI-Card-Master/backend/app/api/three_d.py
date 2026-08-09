@@ -20,8 +20,8 @@ from fastapi import (
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.dependencies.auth import get_current_user
 from app.api.images import ALLOWED_IMAGE_TYPES, UPLOADS_DIR, ensure_uploads_dir
-from app.api.payments import get_current_user
 from app.application.three_d_service import (
     ThreeDNotFoundError,
     ThreeDValidationError,

@@ -11,6 +11,7 @@ import logging
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+
 from redis.exceptions import RedisError
 
 from app.infrastructure.redis import get_redis_client

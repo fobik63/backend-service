@@ -10,13 +10,15 @@ import { Badge } from "@/components/ui/badge"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { GlassCard } from "@/components/ui/glass-card"
 import type { Project } from "@/lib/constants/mock-projects"
+import { editorDocumentToState } from "@/lib/editor/editor-document"
 import { useI18n } from "@/lib/i18n"
 import { cn } from "@/lib/utils"
 
 type ProjectCardProps = {
   project: Project
   index?: number
-  onDelete: (id: string) => void
+  onDelete: (id: string) => Promise<void>
+  deleting?: boolean
 }
 
 const MARKETPLACE_LABEL: Record<Project["marketplace"], string> = {
@@ -24,9 +26,17 @@ const MARKETPLACE_LABEL: Record<Project["marketplace"], string> = {
   wb: "WB",
 }
 
-function ProjectCard({ project, index = 0, onDelete }: ProjectCardProps) {
+function ProjectCard({
+  project,
+  index = 0,
+  onDelete,
+  deleting = false,
+}: ProjectCardProps) {
   const { t, locale } = useI18n()
   const isReady = project.status === "ready"
+  const editorState = project.editorDocument
+    ? editorDocumentToState(project.editorDocument)
+    : null
 
   const createdLabel = new Intl.DateTimeFormat(
     locale === "en" ? "en-US" : "ru-RU",
@@ -51,7 +61,7 @@ function ProjectCard({ project, index = 0, onDelete }: ProjectCardProps) {
         padding="none"
         className="group flex h-full flex-col overflow-hidden border-white/10"
       >
-        <div className="relative aspect-[3/4] overflow-hidden border-b border-white/8 bg-[#14161c]">
+        <div className="relative aspect-[3/4] overflow-hidden border-b border-white/8 bg-loft-surface">
           <Image
             src={project.previewImage}
             alt={`${project.title}`}
@@ -111,7 +121,11 @@ function ProjectCard({ project, index = 0, onDelete }: ProjectCardProps) {
               variant="compact"
               disabled={!isReady}
               projectTitle={project.title}
-              productImageUrl={project.previewImage}
+              productImageUrl={
+                editorState?.productPreviewUrl ?? project.previewImage
+              }
+              pages={editorState?.pages}
+              softbox={editorState?.softbox}
             />
             <Link
               href={`/editor/${project.id}`}
@@ -127,11 +141,16 @@ function ProjectCard({ project, index = 0, onDelete }: ProjectCardProps) {
               type="button"
               size="sm"
               variant="destructive"
-              onClick={() => onDelete(project.id)}
+              disabled={deleting}
+              onClick={() => void onDelete(project.id)}
               className="gap-1.5"
               aria-label={`${t("common.delete")} «${project.title}»`}
             >
-              <Trash2 className="size-3.5" aria-hidden />
+              {deleting ? (
+                <Loader2 className="size-3.5 animate-spin" aria-hidden />
+              ) : (
+                <Trash2 className="size-3.5" aria-hidden />
+              )}
               {t("common.delete")}
             </Button>
           </div>

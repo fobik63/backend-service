@@ -11,9 +11,9 @@ from typing import Any
 from urllib.parse import urlparse
 
 from app.domain.stock_parser import (
-    ParseSkuRequest,
     ParsedSkuSnapshot,
     ParserMarketplace,
+    ParseSkuRequest,
     StockLevel,
 )
 from app.infrastructure.stock_parser.exceptions import ParserSchemaError

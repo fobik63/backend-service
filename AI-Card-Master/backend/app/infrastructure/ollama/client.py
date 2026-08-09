@@ -284,10 +284,10 @@ def _parse_json_object(content: str) -> dict[str, Any]:
         text = re.sub(r"\s*```$", "", text)
     try:
         parsed = json.loads(text)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
         match = re.search(r"\{.*\}", text, flags=re.DOTALL)
         if not match:
-            raise OllamaError("Ollama response is not a JSON object.")
+            raise OllamaError("Ollama response is not a JSON object.") from exc
         parsed = json.loads(match.group(0))
     if not isinstance(parsed, dict):
         raise OllamaError("Ollama JSON root must be an object.")

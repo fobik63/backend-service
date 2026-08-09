@@ -11,11 +11,11 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.stock_parser import (
+    STOCK_SNAPSHOT_UPSERT_BATCH_SIZE,
     ParserErrorKind,
     ParserHealthStatus,
     ParserHealthView,
     ParserMarketplace,
-    STOCK_SNAPSHOT_UPSERT_BATCH_SIZE,
     SkuItemView,
     StockSnapshotView,
     StockSnapshotWrite,

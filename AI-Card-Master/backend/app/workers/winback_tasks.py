@@ -14,8 +14,8 @@ from app.core.config import get_settings
 from app.infrastructure.celery_app import celery_app
 from app.infrastructure.persistence.winback_repository import WinbackRepository
 from app.models.database import SessionLocal
-from app.workers.async_runtime import run_worker_async
 from app.services.telegram_user_notify import TelegramUserNotifier
+from app.workers.async_runtime import run_worker_async
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")

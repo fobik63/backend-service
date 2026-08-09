@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.templates import (
@@ -63,6 +63,11 @@ def _to_design(row: UserSavedDesign) -> SavedDesignView:
         template_id=row.template_id,
         title=row.title,
         canvas_data=_as_canvas_dict(row.canvas_data),
+        editor_document_data=(
+            _as_canvas_dict(row.editor_document_data)
+            if row.editor_document_data is not None
+            else None
+        ),
         preview_url=row.preview_url,
         updated_at=_to_utc(row.updated_at),
     )
@@ -152,6 +157,7 @@ class TemplateRepository:
         user_id: UUID,
         title: str,
         canvas_data: dict[str, Any],
+        editor_document_data: dict[str, Any] | None,
         template_id: UUID | None,
         preview_url: str | None,
     ) -> SavedDesignView:
@@ -159,6 +165,7 @@ class TemplateRepository:
             user_id=user_id,
             title=title,
             canvas_data=canvas_data,
+            editor_document_data=editor_document_data,
             template_id=template_id,
             preview_url=preview_url,
             updated_at=datetime.now(UTC),
@@ -175,6 +182,7 @@ class TemplateRepository:
         user_id: UUID,
         title: str,
         canvas_data: dict[str, Any],
+        editor_document_data: dict[str, Any] | None,
         template_id: UUID | None,
         preview_url: str | None,
     ) -> SavedDesignView | None:
@@ -188,6 +196,7 @@ class TemplateRepository:
             return None
         row.title = title
         row.canvas_data = canvas_data
+        row.editor_document_data = editor_document_data
         row.template_id = template_id
         if preview_url is not None:
             row.preview_url = preview_url
@@ -201,3 +210,13 @@ class TemplateRepository:
             select(Template.id).where(Template.id == template_id)
         )
         return value is not None
+
+    async def delete_design(self, *, design_id: UUID, user_id: UUID) -> bool:
+        result = await self._session.execute(
+            delete(UserSavedDesign).where(
+                UserSavedDesign.id == design_id,
+                UserSavedDesign.user_id == user_id,
+            )
+        )
+        await self._session.commit()
+        return bool(result.rowcount)

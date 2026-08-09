@@ -18,6 +18,9 @@ import type {
   RelightProcessResponse,
   RemoveBgResponse,
   RenderCanvasResult,
+  SavedDesignDTO,
+  SavedDesignListResponse,
+  SaveDesignRequest,
 } from "@/types/api";
 
 const LONG_RUNNING_TIMEOUT_MS = 120_000;
@@ -43,9 +46,20 @@ export const apiClient = axios.create({
 
 apiClient.interceptors.request.use((config) => {
   if (typeof window !== "undefined") {
-    const token = window.localStorage.getItem("access_token");
+    const token =
+      window.localStorage.getItem("access_token") ||
+      document.cookie
+        .split("; ")
+        .find((row) => row.startsWith("access_token="))
+        ?.split("=")
+        .slice(1)
+        .join("=");
     if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
+      try {
+        config.headers.Authorization = `Bearer ${decodeURIComponent(token)}`;
+      } catch {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
     }
   }
   return config;
@@ -132,13 +146,45 @@ export async function parseProduct(url: string): Promise<ParsedProductDTO> {
 /** Natural-language prompt → validated CanvasStateDTO JSON. */
 export async function generateByPrompt(
   prompt: string,
+  baseCanvas?: CanvasStateDTO,
 ): Promise<CanvasStateDTO> {
   const { data } = await apiClient.post<CanvasStateDTO>(
     "/templates/prompt-to-json",
-    { prompt },
+    {
+      prompt,
+      ...(baseCanvas ? { base_canvas: baseCanvas } : {}),
+    },
     { timeout: LONG_RUNNING_TIMEOUT_MS },
   );
   return data;
+}
+
+export async function listDesigns(): Promise<SavedDesignListResponse> {
+  const { data } =
+    await apiClient.get<SavedDesignListResponse>("/designs");
+  return data;
+}
+
+export async function getDesign(
+  designId: string,
+  signal?: AbortSignal,
+): Promise<SavedDesignDTO> {
+  const { data } = await apiClient.get<SavedDesignDTO>(
+    `/designs/${encodeURIComponent(designId)}`,
+    { signal },
+  );
+  return data;
+}
+
+export async function saveDesign(
+  payload: SaveDesignRequest,
+): Promise<SavedDesignDTO> {
+  const { data } = await apiClient.post<SavedDesignDTO>("/designs", payload);
+  return data;
+}
+
+export async function deleteDesign(designId: string): Promise<void> {
+  await apiClient.delete(`/designs/${encodeURIComponent(designId)}`);
 }
 
 /**

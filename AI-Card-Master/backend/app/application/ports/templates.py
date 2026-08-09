@@ -43,6 +43,7 @@ class TemplatePersistencePort(Protocol):
         user_id: UUID,
         title: str,
         canvas_data: dict[str, Any],
+        editor_document_data: dict[str, Any] | None,
         template_id: UUID | None,
         preview_url: str | None,
     ) -> SavedDesignView:
@@ -55,6 +56,7 @@ class TemplatePersistencePort(Protocol):
         user_id: UUID,
         title: str,
         canvas_data: dict[str, Any],
+        editor_document_data: dict[str, Any] | None,
         template_id: UUID | None,
         preview_url: str | None,
     ) -> SavedDesignView | None:
@@ -62,6 +64,9 @@ class TemplatePersistencePort(Protocol):
 
     async def template_exists(self, template_id: UUID) -> bool:
         """Whether a templates row exists (preset or user template)."""
+
+    async def delete_design(self, *, design_id: UUID, user_id: UUID) -> bool:
+        """Delete an owned design and return whether a row was removed."""
 
 
 class DesignRenderStoragePort(Protocol):

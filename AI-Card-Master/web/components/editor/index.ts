@@ -1,9 +1,13 @@
 export { EditorWorkspace } from "./editor-workspace"
-export { EditorLeftPanel, addBadgeToCanvas } from "./left-panel"
+export { addBadgeToCanvas } from "@/lib/editor/canvas-actions"
 export { EditorCanvas } from "./canvas"
 export { EditorCanvasStage } from "./canvas-stage"
-export { EditorRightPanel } from "./right-panel"
+export { EditorPageStrip } from "./page-strip"
 export { EditorSettingsPanel } from "./settings-panel"
+/** @deprecated Use EditorSettingsPanel */
+export { EditorSettingsPanel as EditorLeftPanel } from "./settings-panel"
+/** @deprecated Use EditorSettingsPanel */
+export { EditorSettingsPanel as EditorRightPanel } from "./settings-panel"
 export { CanvasToolbar } from "./canvas-toolbar"
 export { BadgeToolbarMenu, BadgeParamsSection } from "./badge-tool"
 export { SliderControl } from "./slider-control"

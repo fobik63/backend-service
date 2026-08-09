@@ -64,6 +64,10 @@ class Template(Base):
         default=dict,
         server_default=text("'{}'::jsonb"),
     )
+    editor_document_data: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
     preview_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     downloads_count: Mapped[int] = mapped_column(
         Integer,

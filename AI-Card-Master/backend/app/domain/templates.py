@@ -55,6 +55,7 @@ class SavedDesignView:
     template_id: UUID | None
     title: str
     canvas_data: dict[str, Any]
+    editor_document_data: dict[str, Any] | None
     preview_url: str | None
     updated_at: datetime
 

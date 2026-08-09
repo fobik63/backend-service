@@ -26,9 +26,14 @@ import { GlassButton } from "@/components/ui/glass-button"
 import { Textarea } from "@/components/ui/textarea"
 import {
   downloadCardPackZip,
+  downloadCurrentCanvasImage,
   findEditorExportCanvas,
 } from "@/lib/export/card-pack"
-import { getApiErrorMessage } from "@/lib/api"
+import { generateByPrompt, getApiErrorMessage } from "@/lib/api"
+import {
+  canvasStateToLayers,
+  layersToCanvasState,
+} from "@/lib/editor/editor-document"
 import { useI18n } from "@/lib/i18n"
 import { useEditorStore } from "@/lib/store/editor-store"
 import { cn } from "@/lib/utils"
@@ -55,10 +60,14 @@ function PromptBar({
   const [exportFormat, setExportFormat] = useState<ExportFormat>("png")
 
   const setBusyKind = useEditorStore((s) => s.setBusyKind)
+  const replaceActivePage = useEditorStore((s) => s.replaceActivePage)
+  const commitActivePage = useEditorStore((s) => s.commitActivePage)
   const storeProjectId = useEditorStore((s) => s.projectId)
   const layers = useEditorStore((s) => s.layers)
+  const softbox = useEditorStore((s) => s.softbox)
   const storePreviewUrl = useEditorStore((s) => s.productPreviewUrl)
   const packSize = useEditorStore((s) => s.packSize)
+  const activePageIndex = useEditorStore((s) => s.activePageIndex)
 
   const exportOptions = [
     {
@@ -93,7 +102,11 @@ function PromptBar({
     setGenerating(true)
     setBusyKind("generating")
     try {
-      await new Promise((r) => setTimeout(r, 1600))
+      const generated = await generateByPrompt(
+        trimmed,
+        layersToCanvasState(layers, storePreviewUrl)
+      )
+      replaceActivePage(canvasStateToLayers(generated))
       toast.success(t("editor.generateSuccess"))
     } catch (error) {
       toast.error(getApiErrorMessage(error, t("editor.generateError")))
@@ -108,14 +121,28 @@ function PromptBar({
     setExportFormat(format)
     setExporting(true)
     try {
-      await new Promise((r) => setTimeout(r, 900))
+      const pageNum = activePageIndex + 1
+      const safeBase =
+        zipTitle.replace(/[^\w\-а-яё]+/gi, "-").replace(/^-+|-+$/g, "") ||
+        "card"
+      const filename =
+        format === "webp"
+          ? `${safeBase}-page-${pageNum}.webp`
+          : `${safeBase}-page-${pageNum}.png`
+
+      await downloadCurrentCanvasImage({
+        canvasEl: findEditorExportCanvas(),
+        filename,
+        format,
+      })
       toast.success(
-        `${t("editor.download")}: ${
-          format === "png" ? t("editor.exportPng") : t("editor.exportWebp")
-        }`
+        t("editor.downloadCurrentSuccess", {
+          n: String(pageNum),
+          format: format === "png" ? "PNG" : "WebP",
+        })
       )
     } catch (error) {
-      toast.error(getApiErrorMessage(error, t("export.error")))
+      toast.error(getApiErrorMessage(error, t("editor.downloadCurrentError")))
     } finally {
       setExporting(false)
     }
@@ -125,13 +152,22 @@ function PromptBar({
     if (zipping) return
     setZipping(true)
     try {
-      const canvasEl = findEditorExportCanvas()
+      commitActivePage()
+      const latestPages = useEditorStore.getState().pages
+      const pageSnapshot = latestPages.map((page) =>
+        page.map((layer) => ({
+          ...layer,
+          textStyle: layer.textStyle ? { ...layer.textStyle } : undefined,
+          chip: layer.chip ? { ...layer.chip } : undefined,
+        }))
+      )
       await downloadCardPackZip({
         packSize,
         projectTitle: zipTitle,
-        canvasEl,
         productImageUrl: storePreviewUrl,
         layers,
+        pages: pageSnapshot,
+        softbox: { ...softbox },
         zipBasename: zipTitle,
       })
       toast.success(

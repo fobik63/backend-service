@@ -10,7 +10,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
-from app.api.payments import get_current_user
+from app.api.dependencies.auth import get_current_user
 from app.models.user import User
 from app.schemas.templates import CanvasStateDTO
 from app.services.templates.renderer import (

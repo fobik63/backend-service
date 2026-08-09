@@ -1,26 +1,23 @@
 "use client"
 
 import { zodResolver } from "@hookform/resolvers/zod"
-import { Camera, Loader2 } from "lucide-react"
-import { useRef, useState, type ChangeEvent } from "react"
+import { Loader2 } from "lucide-react"
+import { useEffect } from "react"
 import { useForm } from "react-hook-form"
 import { toast } from "sonner"
 
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Button } from "@/components/ui/button"
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { GlassButton } from "@/components/ui/glass-button"
 import { Input } from "@/components/ui/input"
+import {
+  displayNameFromEmail,
+  getStoredUser,
+} from "@/lib/auth/session"
+import { fetchCurrentUser, getApiErrorMessage } from "@/lib/api"
 import {
   personalDataSchema,
   type PersonalDataValues,
 } from "@/lib/validators/settings"
-import { cn } from "@/lib/utils"
-
-const DEFAULTS: PersonalDataValues = {
-  displayName: "Алексей Иванов",
-  email: "alexey@example.com",
-  telegram: "@alexey_seller",
-}
 
 function FieldError({ message }: { message?: string }) {
   if (!message) return null
@@ -28,52 +25,52 @@ function FieldError({ message }: { message?: string }) {
 }
 
 function PersonalDataTab() {
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const [avatarPreview, setAvatarPreview] = useState<string | null>(null)
-  const [avatarFileName, setAvatarFileName] = useState<string | null>(null)
-
+  const stored = getStoredUser()
   const form = useForm<PersonalDataValues>({
     resolver: zodResolver(personalDataSchema),
-    defaultValues: DEFAULTS,
+    defaultValues: {
+      displayName: stored ? displayNameFromEmail(stored.email) : "",
+      email: stored?.email ?? "",
+      telegram: "",
+    },
     mode: "onSubmit",
   })
 
-  const initials = (form.watch("displayName") || "??")
+  useEffect(() => {
+    let cancelled = false
+    void fetchCurrentUser()
+      .then((user) => {
+        if (cancelled) return
+        form.reset({
+          displayName: displayNameFromEmail(user.email),
+          email: user.email,
+          telegram: "",
+        })
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return
+        toast.error(
+          getApiErrorMessage(error, "Не удалось загрузить профиль")
+        )
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [form])
+
+  // eslint-disable-next-line react-hooks/incompatible-library -- react-hook-form watch
+  const displayName = form.watch("displayName")
+  const initials = (displayName || "??")
     .split(" ")
     .map((part) => part[0])
     .join("")
     .slice(0, 2)
     .toUpperCase()
 
-  const onPickAvatar = () => fileInputRef.current?.click()
-
-  const onAvatarChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (!file) return
-
-    if (!file.type.startsWith("image/")) {
-      toast.error("Выберите изображение")
-      return
-    }
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error("Файл больше 5 МБ")
-      return
-    }
-
-    const url = URL.createObjectURL(file)
-    setAvatarPreview((prev) => {
-      if (prev) URL.revokeObjectURL(prev)
-      return url
-    })
-    setAvatarFileName(file.name)
-    toast.message("Аватар выбран", {
-      description: "Сохраните изменения, чтобы применить",
-    })
-  }
-
   const onSubmit = form.handleSubmit(async () => {
-    await new Promise((r) => setTimeout(r, 500))
-    toast.success("Личные данные сохранены")
+    toast.error(
+      "Обновление имени, Telegram и аватара пока недоступно: API профиля поддерживает только чтение /auth/me."
+    )
   })
 
   const busy = form.formState.isSubmitting
@@ -81,56 +78,20 @@ function PersonalDataTab() {
   return (
     <form onSubmit={onSubmit} className="space-y-6" noValidate>
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
-        <div className="relative shrink-0">
-          <Avatar
-            className="size-20 after:rounded-full data-[size=default]:size-20"
-            size="lg"
-          >
-            {avatarPreview ? (
-              <AvatarImage src={avatarPreview} alt="Аватар" />
-            ) : null}
-            <AvatarFallback className="bg-sage/60 text-lg text-emerald">
-              {initials}
-            </AvatarFallback>
-          </Avatar>
-          <button
-            type="button"
-            onClick={onPickAvatar}
-            disabled={busy}
-            aria-label="Загрузить аватар"
-            className={cn(
-              "absolute -bottom-1 -right-1 flex size-8 items-center justify-center rounded-full",
-              "border border-white/15 bg-loft-surface text-copper",
-              "transition-colors hover:bg-muted hover:text-foreground",
-              "outline-none focus-visible:ring-2 focus-visible:ring-emerald/50"
-            )}
-          >
-            <Camera className="size-3.5" aria-hidden />
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/png,image/jpeg,image/webp"
-            className="sr-only"
-            onChange={onAvatarChange}
-          />
-        </div>
+        <Avatar
+          className="size-20 after:rounded-full data-[size=default]:size-20"
+          size="lg"
+        >
+          <AvatarFallback className="bg-sage/60 text-lg text-emerald">
+            {initials}
+          </AvatarFallback>
+        </Avatar>
         <div className="min-w-0 space-y-1">
-          <p className="text-sm font-medium text-foreground">Фото профиля</p>
+          <p className="text-sm font-medium text-foreground">Профиль аккаунта</p>
           <p className="text-xs text-muted-foreground">
-            PNG, JPG или WebP до 5 МБ
-            {avatarFileName ? ` · ${avatarFileName}` : null}
+            Email загружается из API. Имя/Telegram/аватар пока нельзя сохранить
+            на сервере.
           </p>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="mt-2 border-white/10 bg-transparent"
-            onClick={onPickAvatar}
-            disabled={busy}
-          >
-            Загрузить файл
-          </Button>
         </div>
       </div>
 
@@ -164,9 +125,10 @@ function PersonalDataTab() {
             id="settings-email"
             type="email"
             autoComplete="email"
+            readOnly
             placeholder="you@example.com"
             aria-invalid={!!form.formState.errors.email}
-            className="h-10 bg-loft-surface/60"
+            className="h-10 bg-loft-surface/60 opacity-80"
             {...form.register("email")}
           />
           <FieldError message={form.formState.errors.email?.message} />

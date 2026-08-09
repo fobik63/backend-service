@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
-
 ACCOUNT_DELETION_CONFIRMATION = "DELETE MY ACCOUNT"
 
 

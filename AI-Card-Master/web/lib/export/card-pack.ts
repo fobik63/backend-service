@@ -11,6 +11,7 @@ import {
   downloadBlob,
   imageUrlToDataUrl,
 } from "@/lib/export/download-blob"
+import type { SoftboxSettings } from "@/lib/store/editor-store"
 import type { CanvasLayer } from "@/types/canvas"
 
 /** Number of photos in a generated card pack (1–20). */
@@ -99,7 +100,15 @@ export type BuildCardPackOptions = {
   canvasEl?: HTMLElement | null
   productImageUrl?: string | null
   layers?: CanvasLayer[]
+  /** Immutable page snapshot used for race-free editor exports. */
+  pages?: CanvasLayer[][]
+  softbox?: SoftboxSettings
   zipBasename?: string
+  /**
+   * Capture each pack page from the live editor (editable pages).
+   * When provided, preferred over offscreen infographic renders.
+   */
+  capturePageAtIndex?: (pageIndex: number) => Promise<Uint8Array>
 }
 
 function slugify(value: string): string {
@@ -137,7 +146,7 @@ function productTitle(layers: CanvasLayer[] | undefined, fallback: string): stri
   return textLayer?.text?.trim() || fallback
 }
 
-const CAPTURE_BG = "#0f1115"
+const CAPTURE_BG = "#0d0f12"
 
 type CaptureOptions = {
   width?: number
@@ -340,10 +349,100 @@ function buildSlideShell(): { host: HTMLDivElement; root: HTMLDivElement } {
   return { host, root }
 }
 
+function renderEditorPageSnapshot(args: {
+  layers: CanvasLayer[]
+  imageUrl: string | null
+  softbox?: SoftboxSettings
+}): Promise<Uint8Array> {
+  const { host, root } = buildSlideShell()
+  const warmth = args.softbox
+    ? Math.max(0, Math.min(1, (6500 - args.softbox.colorTempK) / 3800))
+    : 0.25
+  const warmAlpha = (0.05 + warmth * 0.12).toFixed(3)
+  const coolAlpha = (0.06 + (1 - warmth) * 0.1).toFixed(3)
+  root.style.background = args.softbox?.enabled
+    ? `linear-gradient(155deg,rgba(93,140,210,${coolAlpha}) 0%,#12151b 48%,rgba(245,158,11,${warmAlpha}) 100%)`
+    : "linear-gradient(160deg,#14171d 0%,#0d0f12 100%)"
+
+  for (const layer of [...args.layers].sort((a, b) => a.zIndex - b.zIndex)) {
+    if (!layer.visible || layer.type === "background") continue
+    const node = document.createElement("div")
+    node.dataset.layerId = layer.id
+    node.style.cssText = [
+      "position:absolute",
+      `left:${layer.x ?? 0}%`,
+      `top:${layer.y ?? 0}%`,
+      `width:${layer.width ?? (layer.type === "shape" ? 36 : 20)}%`,
+      `height:${layer.height ?? (layer.type === "shape" ? 9 : 12)}%`,
+      `opacity:${layer.opacity}`,
+      `z-index:${layer.zIndex}`,
+      `transform:rotate(${layer.rotation ?? 0}deg) scale(${layer.scale ?? 1})`,
+      "transform-origin:50% 50%",
+      "box-sizing:border-box",
+    ].join(";")
+
+    if (layer.type === "image") {
+      if (!args.imageUrl) continue
+      const image = document.createElement("img")
+      image.src = args.imageUrl
+      image.alt = ""
+      image.decoding = "sync"
+      image.style.cssText =
+        "display:block;width:100%;height:100%;object-fit:contain;filter:drop-shadow(0 28px 36px rgba(0,0,0,.4));"
+      node.appendChild(image)
+    } else if (layer.type === "text") {
+      const style = layer.textStyle
+      node.textContent = layer.text ?? ""
+      node.style.whiteSpace = "pre-wrap"
+      node.style.overflowWrap = "break-word"
+      node.style.fontFamily = style?.fontFamily ?? "Inter"
+      node.style.fontSize = `${style?.fontSize ?? 48}px`
+      node.style.fontWeight = String(style?.fontWeight ?? 700)
+      node.style.color = style?.color ?? "#FFFFFF"
+      node.style.lineHeight = "1.15"
+      if (style?.strokeWidth) {
+        node.style.webkitTextStroke = `${style.strokeWidth}px ${style.strokeColor}`
+      }
+      if (style?.shadowEnabled) {
+        node.style.textShadow = `${style.shadowOffsetX}px ${style.shadowOffsetY}px ${style.shadowBlur}px ${style.shadowColor}`
+      }
+    } else if (layer.chip) {
+      node.style.display = "flex"
+      node.style.flexDirection = "column"
+      node.style.alignItems = "center"
+      node.style.justifyContent = "center"
+      node.style.padding = "12px 18px"
+      node.style.borderRadius = `${layer.chip.borderRadius}px`
+      node.style.background = layer.chip.bgColor
+      node.style.color = layer.chip.textColor ?? "#FFFFFF"
+      node.style.fontSize = "24px"
+      node.style.fontWeight = "700"
+      node.style.textAlign = "center"
+      if (layer.chip.variant === "glass") {
+        node.style.backdropFilter = `blur(${layer.chip.blur ?? 12}px)`
+        node.style.border = "1px solid rgba(255,255,255,.18)"
+      }
+      const label = document.createElement("span")
+      label.textContent = layer.chip.label
+      node.appendChild(label)
+      if (layer.chip.subtitle) {
+        const subtitle = document.createElement("span")
+        subtitle.textContent = layer.chip.subtitle
+        subtitle.style.cssText =
+          "display:block;margin-top:4px;font-size:14px;font-weight:500;opacity:.78"
+        node.appendChild(subtitle)
+      }
+    }
+    root.appendChild(node)
+  }
+
+  return captureElementToPngBytes(root).finally(() => host.remove())
+}
+
 function setSlideBackground(root: HTMLDivElement, imageUrl: string | null) {
   const wash = document.createElement("div")
   wash.style.cssText =
-    "position:absolute;inset:0;background:linear-gradient(155deg,#1e2430 0%,#12151b 48%,#0f1115 100%);"
+    "position:absolute;inset:0;background:linear-gradient(155deg,#1a2030 0%,#12151b 48%,#0d0f12 100%);"
   root.appendChild(wash)
 
   if (imageUrl) {
@@ -543,8 +642,9 @@ async function renderInfographicSlide(args: {
 
 /**
  * Build a marketplace card pack ZIP (1–20 PNGs) and download it.
- * Main slide prefers the live editor canvas; remaining slides are
- * offscreen infographic renders from the same product assets.
+ * Prefer live per-page captures when `capturePageAtIndex` is set;
+ * otherwise main slide uses the live canvas and remaining slides are
+ * offscreen infographic renders.
  */
 async function downloadCardPackZip(options: BuildCardPackOptions): Promise<void> {
   const packSize = clampPackSize(options.packSize)
@@ -567,9 +667,20 @@ async function downloadCardPackZip(options: BuildCardPackOptions): Promise<void>
   const zip = new JSZip()
   const folder = zip.folder("cards") ?? zip
 
-  for (const slide of slides) {
+  for (let index = 0; index < slides.length; index += 1) {
+    const slide = slides[index]!
     let pngBytes: Uint8Array
-    if (slide.kind === "main" && options.canvasEl) {
+
+    const snapshotLayers = options.pages?.[index]
+    if (snapshotLayers) {
+      pngBytes = await renderEditorPageSnapshot({
+        layers: snapshotLayers,
+        imageUrl,
+        softbox: options.softbox,
+      })
+    } else if (options.capturePageAtIndex) {
+      pngBytes = await options.capturePageAtIndex(index)
+    } else if (slide.kind === "main" && options.canvasEl) {
       pngBytes = await captureLiveCanvas(options.canvasEl)
     } else if (slide.kind === "main") {
       // Fallback main card when canvas is unavailable (e.g. projects grid).
@@ -609,4 +720,75 @@ function findEditorExportCanvas(): HTMLElement | null {
   return document.querySelector<HTMLElement>("[data-export-canvas='true']")
 }
 
-export { downloadCardPackZip, findEditorExportCanvas }
+/** Wait two animation frames so React can commit the active page. */
+async function waitForPaint(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => resolve())
+    })
+  })
+  await sleep(40)
+}
+
+/**
+ * Capture the live editor canvas and trigger a direct download (PNG / WebP).
+ */
+async function downloadCurrentCanvasImage(options: {
+  canvasEl?: HTMLElement | null
+  filename: string
+  format?: "png" | "webp"
+}): Promise<void> {
+  const canvasEl = options.canvasEl ?? findEditorExportCanvas()
+  if (!canvasEl) {
+    throw new Error("Editor canvas not found")
+  }
+
+  const format = options.format ?? "png"
+  const pngBytes = await captureLiveCanvas(canvasEl)
+  const pngBlob = new Blob([Uint8Array.from(pngBytes)], { type: "image/png" })
+
+  if (format === "png") {
+    downloadBlob(pngBlob, options.filename.endsWith(".png")
+      ? options.filename
+      : `${options.filename}.png`)
+    return
+  }
+
+  // WebP: re-encode via Offscreen/canvas when supported; else fall back to PNG.
+  try {
+    const bitmap = await createImageBitmap(pngBlob)
+    const canvas = document.createElement("canvas")
+    canvas.width = bitmap.width
+    canvas.height = bitmap.height
+    const ctx = canvas.getContext("2d")
+    if (!ctx) throw new Error("2D context unavailable")
+    ctx.drawImage(bitmap, 0, 0)
+    bitmap.close()
+
+    const webpBlob = await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob((blob) => resolve(blob), "image/webp", 0.92)
+    })
+    if (!webpBlob || webpBlob.size < 256) {
+      throw new Error("WebP encode failed")
+    }
+    downloadBlob(
+      webpBlob,
+      options.filename.replace(/\.png$/i, "").endsWith(".webp")
+        ? options.filename
+        : `${options.filename.replace(/\.png$/i, "")}.webp`
+    )
+  } catch {
+    downloadBlob(
+      pngBlob,
+      options.filename.replace(/\.webp$/i, ".png")
+    )
+  }
+}
+
+export {
+  captureLiveCanvas,
+  downloadCardPackZip,
+  downloadCurrentCanvasImage,
+  findEditorExportCanvas,
+  waitForPaint,
+}

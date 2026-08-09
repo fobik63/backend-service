@@ -10,7 +10,6 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-
 STYLE_PRESETS_PATH = Path(__file__).resolve().parent / "style_presets.json"
 
 

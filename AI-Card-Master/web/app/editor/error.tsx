@@ -13,7 +13,9 @@ type EditorErrorProps = {
 
 export default function EditorError({ error, reset }: EditorErrorProps) {
   useEffect(() => {
-    console.error("[editor-error]", error)
+    if (process.env.NODE_ENV !== "production") {
+      console.error("[editor-error]", error)
+    }
   }, [error])
 
   return (

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, type ComponentProps } from "react"
+import { useState, type ComponentProps } from "react"
 
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
@@ -31,10 +31,12 @@ function ImageWithSkeleton({
   ...props
 }: ImageWithSkeletonProps) {
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading")
+  const [currentSrc, setCurrentSrc] = useState(src)
 
-  useEffect(() => {
+  if (src !== currentSrc) {
+    setCurrentSrc(src)
     setStatus("loading")
-  }, [src])
+  }
 
   return (
     <div className={cn("relative overflow-hidden", className)}>

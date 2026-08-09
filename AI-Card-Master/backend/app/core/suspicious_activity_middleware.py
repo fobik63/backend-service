@@ -24,18 +24,18 @@ from app.infrastructure.cloudflare import get_cloudflare_client
 from app.infrastructure.security.rate_limiter import (
     RateLimitDecision,
     SecurityControlUnavailableError,
+    append_blocked_threat,
     block_api_key,
     block_ip,
-    claim_ban_alert_slot,
     check_api_key_rate_limit,
     check_rate_limit,
+    claim_ban_alert_slot,
     extract_api_key_credential,
     fingerprint_api_key,
     is_api_key_blocked,
     is_ip_blocked,
     record_request_for_rps,
     record_threat_event,
-    append_blocked_threat,
     should_fail_closed_on_redis,
 )
 from app.services.telegram_alerts import notify_security_ban

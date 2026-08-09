@@ -274,7 +274,7 @@ def _notify_celery_task_failure(
         location = extract_error_location(exception)
         traceback_text = None
         if einfo is not None and hasattr(einfo, "traceback"):
-            traceback_text = str(getattr(einfo, "traceback"))
+            traceback_text = str(einfo.traceback)
         notify_error_sync(
             error_type=type(exception).__name__,
             message=str(exception),

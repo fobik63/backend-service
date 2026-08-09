@@ -747,6 +747,7 @@ async def test_recolor_failure_marks_item_failed_partial() -> None:
         sync_id=sync.id,
         subscription_status="pro",
     )
+    assert result.status is VariantSyncStatus.RUNNING
     assert len(jobs.created) == 1
     failed = [item for item in repo.items[sync.id] if item.status is VariantItemStatus.FAILED]
     assert len(failed) == 1

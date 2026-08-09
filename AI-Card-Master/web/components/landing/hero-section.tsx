@@ -1,6 +1,6 @@
 "use client"
 
-import { Maximize2, Play, Sparkles, XIcon } from "lucide-react"
+import { Maximize2, Play, Sparkles, X } from "lucide-react"
 import Image from "next/image"
 import { useRouter } from "next/navigation"
 import {
@@ -9,22 +9,14 @@ import {
   useId,
   useRef,
   useState,
+  useSyncExternalStore,
   type PointerEvent as ReactPointerEvent,
 } from "react"
+import { createPortal } from "react-dom"
 import { AnimatePresence, motion } from "framer-motion"
-import { Dialog as DialogPrimitive } from "@base-ui/react/dialog"
 
 import { Modal360 } from "@/components/landing/360-modal"
 import { TropicalLeaves } from "@/components/landing/tropical-leaves"
-import {
-  Dialog,
-  DialogDescription,
-  DialogHeader,
-  DialogOverlay,
-  DialogPortal,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import { Button } from "@/components/ui/button"
 import { GlassButton } from "@/components/ui/glass-button"
 import { cn } from "@/lib/utils"
 
@@ -190,7 +182,7 @@ function CompareFrame({
       ref={containerRef}
       className={cn(
         "relative isolate overflow-hidden rounded-2xl",
-        "bg-[#14161c] copper-border",
+        "bg-loft-surface copper-border",
         "shadow-[0_24px_80px_rgba(0,0,0,0.45)]",
         "select-none",
         className
@@ -300,6 +292,11 @@ function BeforeAfterSlider() {
   const [activeIndex, setActiveIndex] = useState(0)
   const [position, setPosition] = useState(52)
   const [fullscreenOpen, setFullscreenOpen] = useState(false)
+  const portalReady = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false
+  )
   const interacted = useRef(false)
   const example = PRODUCT_EXAMPLES[activeIndex]
 
@@ -335,6 +332,104 @@ function BeforeAfterSlider() {
     }, AUTO_ROTATE_MS)
     return () => window.clearInterval(id)
   }, [fullscreenOpen, activeIndex])
+
+  useEffect(() => {
+    if (!fullscreenOpen) return
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = "hidden"
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setFullscreenOpen(false)
+    }
+    window.addEventListener("keydown", onKey)
+    return () => {
+      document.body.style.overflow = prevOverflow
+      window.removeEventListener("keydown", onKey)
+    }
+  }, [fullscreenOpen])
+
+  const fullscreenOverlay =
+    portalReady && typeof document !== "undefined"
+      ? createPortal(
+          <AnimatePresence>
+            {fullscreenOpen ? (
+              <motion.div
+                key="compare-fullscreen"
+                className="fixed inset-0 z-[90] flex flex-col items-center justify-center p-3 sm:p-6"
+                role="dialog"
+                aria-modal="true"
+                aria-label={`Сравнение до и после — ${example.label}`}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.22 }}
+              >
+                <button
+                  type="button"
+                  className="absolute inset-0 bg-loft/90 backdrop-blur-md"
+                  aria-label="Закрыть полноэкранный режим"
+                  onClick={() => setFullscreenOpen(false)}
+                />
+
+                <motion.div
+                  className="relative z-10 flex h-full max-h-[100svh] w-full max-w-3xl flex-col items-center justify-center gap-3"
+                  initial={{ opacity: 0, scale: 0.96, y: 12 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.98, y: 8 }}
+                  transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+                >
+                  <div className="flex w-full items-center justify-between gap-3 px-1">
+                    <p className="font-heading text-sm font-medium text-foreground">
+                      {example.label}
+                      <span className="ml-2 text-text-muted">· до / после</span>
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setFullscreenOpen(false)}
+                      className="inline-flex size-10 items-center justify-center rounded-full border border-white/15 bg-loft/80 text-foreground backdrop-blur-md transition-colors hover:border-emerald/40 hover:bg-loft"
+                      aria-label="Закрыть"
+                    >
+                      <X className="size-4" />
+                    </button>
+                  </div>
+
+                  <CompareFrame
+                    key={`fs-${example.id}`}
+                    example={example}
+                    position={position}
+                    onPositionChange={setPosition}
+                    onInteract={markInteracted}
+                    sliderId={`${baseId}-compare-fs`}
+                    priority
+                    className="aspect-[3/4] h-auto max-h-[min(82svh,52rem)] w-full max-w-xl"
+                  />
+
+                  <div className="flex items-center gap-2 pb-1">
+                    {PRODUCT_EXAMPLES.map((item, index) => {
+                      const active = index === activeIndex
+                      return (
+                        <button
+                          key={`fs-${item.id}`}
+                          type="button"
+                          aria-label={item.label}
+                          title={item.label}
+                          onClick={() => goToExample(index)}
+                          className={cn(
+                            "h-2 rounded-full transition-all duration-300",
+                            active
+                              ? "w-6 bg-emerald"
+                              : "w-2 bg-white/25 hover:bg-white/45"
+                          )}
+                        />
+                      )
+                    })}
+                  </div>
+                </motion.div>
+              </motion.div>
+            ) : null}
+          </AnimatePresence>,
+          document.body
+        )
+      : null
 
   return (
     <div className="flex w-full max-w-md flex-col items-center gap-3">
@@ -380,76 +475,7 @@ function BeforeAfterSlider() {
         })}
       </div>
 
-      <Dialog open={fullscreenOpen} onOpenChange={setFullscreenOpen}>
-        <DialogPortal>
-          <DialogOverlay className="bg-loft/85 backdrop-blur-md" />
-          <DialogPrimitive.Popup
-            data-slot="dialog-content"
-            className={cn(
-              "fixed top-1/2 left-1/2 z-50 w-fit max-w-[calc(100%-1.5rem)] -translate-x-1/2 -translate-y-1/2",
-              "outline-none",
-              "data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95",
-              "data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
-            )}
-          >
-            <DialogHeader className="sr-only">
-              <DialogTitle>
-                Сравнение до и после — {example.label}
-              </DialogTitle>
-              <DialogDescription>
-                Полноэкранный просмотр карточки товара с инфографикой
-              </DialogDescription>
-            </DialogHeader>
-
-            <div className="relative flex w-fit max-w-full flex-col items-center gap-3">
-              <DialogPrimitive.Close
-                render={
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    className="absolute -top-2 -right-2 z-50 border border-white/15 bg-loft/80 text-foreground backdrop-blur-md hover:bg-loft sm:-right-3"
-                  />
-                }
-              >
-                <XIcon className="size-4" />
-                <span className="sr-only">Закрыть</span>
-              </DialogPrimitive.Close>
-
-              <CompareFrame
-                key={`fs-${example.id}`}
-                example={example}
-                position={position}
-                onPositionChange={setPosition}
-                onInteract={markInteracted}
-                sliderId={`${baseId}-compare-fs`}
-                priority
-                className="aspect-[3/4] h-auto max-h-[85vh] w-auto max-w-full"
-              />
-
-              <div className="flex items-center gap-2">
-                {PRODUCT_EXAMPLES.map((item, index) => {
-                  const active = index === activeIndex
-                  return (
-                    <button
-                      key={`fs-${item.id}`}
-                      type="button"
-                      aria-label={item.label}
-                      title={item.label}
-                      onClick={() => goToExample(index)}
-                      className={cn(
-                        "h-2 rounded-full transition-all duration-300",
-                        active
-                          ? "w-6 bg-emerald"
-                          : "w-2 bg-white/25 hover:bg-white/45"
-                      )}
-                    />
-                  )
-                })}
-              </div>
-            </div>
-          </DialogPrimitive.Popup>
-        </DialogPortal>
-      </Dialog>
+      {fullscreenOverlay}
     </div>
   )
 }
@@ -468,7 +494,7 @@ function HeroSection() {
   }, [demoOpen])
 
   return (
-    <section className="relative isolate min-h-[100svh] overflow-hidden pt-28 pb-6 sm:pt-32 sm:pb-8">
+    <section className="relative isolate min-h-[100svh] overflow-hidden pt-28 pb-2 sm:pt-32 sm:pb-3">
       <div className="pointer-events-none absolute inset-0 -z-10" aria-hidden>
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_60%_at_50%_-10%,rgba(16,185,129,0.12),transparent_55%)]" />
         <TropicalLeaves />
