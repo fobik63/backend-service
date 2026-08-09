@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import {
   Inter,
+  Manrope,
   Montserrat,
   Roboto,
   Space_Grotesk,
@@ -11,6 +12,13 @@ import { AppAtmosphere } from "@/components/shared/app-atmosphere";
 
 import "./globals.css";
 
+const manrope = Manrope({
+  subsets: ["latin", "cyrillic"],
+  variable: "--font-manrope",
+  display: "swap",
+});
+
+/** Kept for on-canvas text layers (editor font picker). */
 const inter = Inter({
   subsets: ["latin", "cyrillic"],
   variable: "--font-inter",
@@ -49,7 +57,7 @@ export default function RootLayout({
   return (
     <html lang="ru" className="dark" suppressHydrationWarning>
       <body
-        className={`${inter.variable} ${montserrat.variable} ${roboto.variable} ${spaceGrotesk.variable} relative min-h-dvh bg-transparent font-sans antialiased text-foreground`}
+        className={`${manrope.variable} ${inter.variable} ${montserrat.variable} ${roboto.variable} ${spaceGrotesk.variable} relative min-h-dvh bg-transparent font-sans antialiased text-foreground`}
       >
         <AppAtmosphere />
         <AppProviders>{children}</AppProviders>

@@ -22,6 +22,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import {
+  categoryFromCharacteristics,
   fetchProductByArticle,
   generateSeoDescription,
   getApiErrorMessage,
@@ -52,9 +53,10 @@ function ImportPublishDialog({
   onOpenChange,
   projectTitle,
 }: ImportPublishDialogProps) {
-  const applyImportedGallery = useEditorStore((s) => s.applyImportedGallery)
+  const applyParsedProduct = useEditorStore((s) => s.applyParsedProduct)
   const importGalleryUrls = useEditorStore((s) => s.importGalleryUrls)
   const productPreviewUrl = useEditorStore((s) => s.productPreviewUrl)
+  const productMeta = useEditorStore((s) => s.productMeta)
   const setProductPreviewUrl = useEditorStore((s) => s.setProductPreviewUrl)
 
   const [articleInput, setArticleInput] = useState("")
@@ -71,6 +73,19 @@ function ImportPublishDialog({
   const [seoBenefits, setSeoBenefits] = useState<string[]>([])
   const [seoDescription, setSeoDescription] = useState("")
 
+  // Keep dialog SEO seed in sync with the panel parser / store meta.
+  useEffect(() => {
+    if (!open) return
+    if (productMeta.title) {
+      setImportedTitle(productMeta.title)
+      setSeoTitle((prev) => prev || productMeta.title)
+    }
+    if (productMeta.category) setImportedCategory(productMeta.category)
+    if (productMeta.description) {
+      setSeoDescription((prev) => prev || productMeta.description)
+    }
+  }, [open, productMeta.title, productMeta.category, productMeta.description])
+
   const [publishPlatform, setPublishPlatform] =
     useState<SeoTargetPlatform>("wb")
   const [products, setProducts] = useState<SellerProductDTO[]>([])
@@ -78,11 +93,24 @@ function ImportPublishDialog({
   const [selectedProductId, setSelectedProductId] = useState("")
   const [publishPhase, setPublishPhase] = useState<PublishPhase>("idle")
   const [publishMessage, setPublishMessage] = useState<string | null>(null)
+  const productsFetchKey = open ? publishPlatform : null
+  const [activeProductsFetchKey, setActiveProductsFetchKey] = useState<
+    string | null
+  >(null)
+
+  // Reset loading when the dialog opens or marketplace changes (React-recommended
+  // adjust-state-during-render; avoids sync setState inside an effect).
+  if (productsFetchKey !== activeProductsFetchKey) {
+    setActiveProductsFetchKey(productsFetchKey)
+    setProductsLoading(productsFetchKey !== null)
+    if (productsFetchKey === null) {
+      setProducts([])
+    }
+  }
 
   useEffect(() => {
     if (!open) return
     let cancelled = false
-    setProductsLoading(true)
     void listSellerProducts(publishPlatform)
       .then((items) => {
         if (cancelled) return
@@ -136,12 +164,15 @@ function ImportPublishDialog({
         return
       }
 
-      applyImportedGallery(images)
+      applyParsedProduct({
+        images,
+        title: product.title,
+        category: categoryFromCharacteristics(product.characteristics),
+        brand: product.brand ?? "",
+        description: product.description ?? "",
+      })
       setImportedTitle(product.title)
-      const category =
-        product.characteristics?.find((c) =>
-          /категор|category|предмет/i.test(c.name),
-        )?.value ?? "Товары"
+      const category = categoryFromCharacteristics(product.characteristics)
       setImportedCategory(category)
       const features: Record<string, string> = {}
       for (const row of product.characteristics ?? []) {
@@ -149,6 +180,9 @@ function ImportPublishDialog({
       }
       setImportedFeatures(features)
       if (!seoTitle) setSeoTitle(product.title)
+      if (!seoDescription && product.description) {
+        setSeoDescription(product.description)
+      }
       toast.success(
         `Импортировано: ${product.title} (${images.length} фото)`,
       )
@@ -189,9 +223,15 @@ function ImportPublishDialog({
   }
 
   const handleCopySeo = async () => {
-    const text = [seoTitle, "", ...seoBenefits.map((b) => `• ${b}`), "", seoDescription]
+    const text = [
+      seoTitle ? `Оффер:\n${seoTitle}` : "",
+      seoBenefits.length > 0
+        ? `Ключевые теги:\n${seoBenefits.map((b) => `• ${b}`).join("\n")}`
+        : "",
+      seoDescription ? `Подробное описание:\n${seoDescription}` : "",
+    ]
       .filter(Boolean)
-      .join("\n")
+      .join("\n\n")
     if (!text.trim()) return
     try {
       await navigator.clipboard.writeText(text)
@@ -285,7 +325,7 @@ function ImportPublishDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="max-h-[min(92vh,880px)] w-full overflow-y-auto sm:max-w-xl"
+        className="max-h-[min(92vh,920px)] w-full overflow-y-auto sm:max-w-2xl"
         showCloseButton
       >
         <DialogHeader>
@@ -339,7 +379,7 @@ function ImportPublishDialog({
                     className={cn(
                       "relative size-14 shrink-0 overflow-hidden rounded-md border",
                       active
-                        ? "border-emerald/50 ring-1 ring-emerald/40"
+                        ? "border-white/40 ring-1 ring-white/25"
                         : "border-white/10",
                     )}
                     title="Показать на холсте"
@@ -355,16 +395,18 @@ function ImportPublishDialog({
               })}
             </div>
           ) : (
-            <p className="text-[11px] text-muted-foreground">
-              После загрузки фото попадут в галерею слоёв холста
-            </p>
+            <div className="rounded-lg border border-dashed border-white/12 px-3 py-4 text-center">
+              <p className="text-[11px] text-muted-foreground">
+                Галерея пуста — загрузите артикул или URL, чтобы увидеть превью
+              </p>
+            </div>
           )}
         </section>
 
-        <section className="space-y-2.5 rounded-xl border border-white/10 bg-white/[0.03] p-3">
+        <section className="space-y-3 rounded-xl border border-white/10 bg-white/[0.03] p-3">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
-              <Sparkles className="size-4 text-amber" aria-hidden />
+              <Sparkles className="size-4 text-muted-foreground" aria-hidden />
               <h3 className="font-heading text-sm font-semibold">
                 AI SEO-Копирайтер
               </h3>
@@ -378,7 +420,7 @@ function ImportPublishDialog({
                   className={cn(
                     "rounded-md border px-2 py-1 text-[10px] font-medium uppercase",
                     seoPlatform === platform
-                      ? "border-amber/40 bg-amber/15 text-amber"
+                      ? "border-white/25 bg-white/10 text-foreground"
                       : "border-white/10 text-muted-foreground",
                   )}
                 >
@@ -387,12 +429,24 @@ function ImportPublishDialog({
               ))}
             </div>
           </div>
-          <Input
-            value={seoTitle}
-            onChange={(e) => setSeoTitle(e.target.value)}
-            placeholder="Название товара"
-            className="h-8 border-white/10 bg-white/[0.04] text-xs"
-          />
+
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            Продающий текст о товаре для карточки WB / Ozon — без описания
+            дизайна и визуала фото.
+          </p>
+
+          <label className="block space-y-1.5">
+            <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+              Оффер
+            </span>
+            <Input
+              value={seoTitle}
+              onChange={(e) => setSeoTitle(e.target.value)}
+              placeholder="Название товара или готовый оффер с ключевыми словами"
+              className="h-9 border-white/10 bg-white/[0.04] text-xs"
+            />
+          </label>
+
           <Button
             type="button"
             size="sm"
@@ -407,19 +461,50 @@ function ImportPublishDialog({
             )}
             Сгенерировать SEO-описание
           </Button>
-          <Textarea
-            value={seoDescription}
-            onChange={(e) => setSeoDescription(e.target.value)}
-            placeholder="Сгенерированное SEO-описание появится здесь…"
-            className="min-h-24 border-white/10 bg-white/[0.04] text-xs"
-          />
-          {seoBenefits.length > 0 ? (
-            <ul className="space-y-1 rounded-lg border border-white/8 bg-black/20 p-2 text-[11px] text-muted-foreground">
-              {seoBenefits.map((benefit) => (
-                <li key={benefit}>• {benefit}</li>
-              ))}
-            </ul>
-          ) : null}
+
+          <div className="space-y-1.5">
+            <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+              Ключевые теги
+            </span>
+            {seoBenefits.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5 rounded-lg border border-white/8 bg-black/20 p-2.5">
+                {seoBenefits.map((benefit) => (
+                  <span
+                    key={benefit}
+                    className="rounded-md border border-white/12 bg-white/[0.06] px-2 py-1 text-[11px] text-foreground/90"
+                  >
+                    {benefit}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-lg border border-dashed border-white/12 px-3 py-3 text-center">
+                <p className="text-[11px] text-muted-foreground">
+                  После генерации здесь появятся ключевые теги и УТП
+                </p>
+              </div>
+            )}
+          </div>
+
+          <label className="block space-y-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+                Подробное описание
+              </span>
+              {seoDescription ? (
+                <span className="text-[10px] tabular-nums text-muted-foreground">
+                  {seoDescription.length} симв.
+                </span>
+              ) : null}
+            </div>
+            <Textarea
+              value={seoDescription}
+              onChange={(e) => setSeoDescription(e.target.value)}
+              placeholder="Подробное продающее SEO-описание товара (800–1200 символов)…"
+              className="min-h-44 resize-y border-white/10 bg-white/[0.04] text-xs leading-relaxed"
+            />
+          </label>
+
           <div className="flex flex-wrap gap-2">
             <Button
               type="button"
@@ -440,7 +525,7 @@ function ImportPublishDialog({
               onClick={handleApplyBullets}
               className="gap-1.5"
             >
-              Применить буллеты на холст
+              Применить теги на холст
             </Button>
           </div>
         </section>

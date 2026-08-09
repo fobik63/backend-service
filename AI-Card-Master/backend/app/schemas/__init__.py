@@ -1,5 +1,21 @@
 """API / persistence DTO schemas (Pydantic v2)."""
 
+from app.schemas.generate_pipeline import (
+    GeneratePipelineRequest,
+    GeneratePipelineResponse,
+    PipelineBadge,
+    PipelineLayerUrls,
+)
+from app.schemas.generations import (
+    GenerationCreateResponse,
+    GenerationErrorResponse,
+    GenerationForm,
+    GenerationHistoryItemResponse,
+    GenerationSlideResponse,
+    GenerationStatusResponse,
+    MarketplaceTextResponse,
+    ModelModeRequest,
+)
 from app.schemas.templates import (
     BadgeLayerDTO,
     BadgeType,
@@ -30,9 +46,21 @@ __all__ = [
     "CanvasStateDTO",
     "DesignRenderRequest",
     "DesignRenderResponse",
+    "GeneratePipelineRequest",
+    "GeneratePipelineResponse",
+    "GenerationCreateResponse",
+    "GenerationErrorResponse",
+    "GenerationForm",
+    "GenerationHistoryItemResponse",
+    "GenerationSlideResponse",
+    "GenerationStatusResponse",
     "ImageLayerDTO",
     "LayerAlignment",
     "LayerType",
+    "MarketplaceTextResponse",
+    "ModelModeRequest",
+    "PipelineBadge",
+    "PipelineLayerUrls",
     "SaveDesignRequest",
     "SavedDesignDTO",
     "SavedDesignListResponse",

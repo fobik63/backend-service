@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Final
+from typing import Any, Final
 from uuid import UUID
-
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.ports.seo_text import SeoTextProviderPort
 from app.core.config import get_settings
@@ -35,7 +33,7 @@ class SeoTextService:
 
     def __init__(
         self,
-        session: AsyncSession,
+        session: Any,
         *,
         provider: SeoTextProviderPort,
         billing: BillingService | None = None,

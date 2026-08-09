@@ -11,17 +11,33 @@ type ErrorBoundaryProps = {
   description?: string
   className?: string
   onReset?: () => void
+  /** When this value changes, a previously caught error is cleared and children remount. */
+  resetKey?: string | number
 }
 
 type ErrorBoundaryState = {
   error: Error | null
+  resetKey: string | number | undefined
 }
 
 class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  state: ErrorBoundaryState = { error: null }
+  state: ErrorBoundaryState = {
+    error: null,
+    resetKey: this.props.resetKey,
+  }
 
-  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+  static getDerivedStateFromError(error: Error): Partial<ErrorBoundaryState> {
     return { error }
+  }
+
+  static getDerivedStateFromProps(
+    props: ErrorBoundaryProps,
+    state: ErrorBoundaryState
+  ): Partial<ErrorBoundaryState> | null {
+    if (props.resetKey !== state.resetKey) {
+      return { error: null, resetKey: props.resetKey }
+    }
+    return null
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {

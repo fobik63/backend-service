@@ -18,6 +18,21 @@ export type EditorZoomMode = "50" | "100" | "fit"
 
 export const PACK_SIZE_OPTIONS: PackSize[] = PRESET_PACK_SIZES
 
+/** Marketplace product fields filled by the parser (or manually). */
+export type EditorProductMeta = {
+  title: string
+  category: string
+  brand: string
+  description: string
+}
+
+export const EMPTY_PRODUCT_META: EditorProductMeta = {
+  title: "",
+  category: "",
+  brand: "",
+  description: "",
+}
+
 /** Parametric softbox — mirrors backend StudioLightDTO (+ enabled for UI). */
 export type SoftboxSettings = {
   enabled: boolean
@@ -40,6 +55,8 @@ type EditorSnapshot = {
   activePageIndex: number
   softbox: SoftboxSettings
   productPreviewUrl: string | null
+  /** AI-generated (or imported) full-bleed background for canvas layer 1. */
+  backgroundPreviewUrl: string | null
   packSize: PackSize
 }
 
@@ -72,6 +89,7 @@ function snapshotOf(state: EditorSnapshot): EditorSnapshot {
     activePageIndex: state.activePageIndex,
     softbox: { ...state.softbox },
     productPreviewUrl: state.productPreviewUrl,
+    backgroundPreviewUrl: state.backgroundPreviewUrl,
     packSize: state.packSize,
   }
 }
@@ -123,13 +141,26 @@ type EditorState = {
   flashLayerId: string | null
   zoomMode: EditorZoomMode
   softbox: SoftboxSettings
+  /**
+   * True while a softbox slider is dragged — canvas uses CSS / preview paint
+   * and skips objectCaching / full-res bitmap until commit.
+   */
+  softboxScrubbing: boolean
   /** Local product preview (blob / CDN URL) shown on canvas. */
   productPreviewUrl: string | null
+  /** AI / studio background image under the product cutout (layer 1). */
+  backgroundPreviewUrl: string | null
+  /** Bumps on every generate so Fabric rebuilds even when payload is identical. */
+  generationEpoch: number
   /** Imported marketplace photos for pack / publish gallery. */
   importGalleryUrls: string[]
+  /** Parsed / manual product card fields (title, brand, …). */
+  productMeta: EditorProductMeta
   /** How many photos to generate in the card pack (1–20). */
   packSize: PackSize
   busyKind: EditorBusyKind
+  /** 0–100 while generating; null when idle / indeterminate. */
+  busyProgress: number | null
   history: EditorHistory
   historyTransaction: EditorSnapshot | null
   canUndo: boolean
@@ -142,13 +173,39 @@ type EditorState = {
   setZoomMode: (mode: EditorZoomMode) => void
   updateLayer: (id: string, patch: Partial<CanvasLayer>) => void
   replaceActivePage: (layers: CanvasLayer[]) => void
+  /**
+   * Atomically apply a generate/import result (layers + preview URLs) as one
+   * undo step — avoids triple history entries and multi-scene rebuild races.
+   */
+  applyGenerationResult: (payload: {
+    layers: CanvasLayer[]
+    productPreviewUrl?: string | null
+    backgroundPreviewUrl?: string | null
+  }) => void
   addLayer: (layer: CanvasLayer) => void
   removeLayer: (id: string) => void
   setSoftbox: (patch: Partial<SoftboxSettings>) => void
+  setSoftboxScrubbing: (scrubbing: boolean) => void
   setProductPreviewUrl: (url: string | null) => void
+  setBackgroundPreviewUrl: (url: string | null) => void
+  /** Patch layer geometry without pushing history (auto-fit, sync). */
+  syncLayerGeometry: (id: string, patch: Partial<CanvasLayer>) => void
   applyImportedGallery: (urls: string[]) => void
+  /**
+   * Apply marketplace parse result: cutout/gallery + product meta fields
+   * as one undo step for the image side.
+   */
+  applyParsedProduct: (payload: {
+    images: string[]
+    title: string
+    category: string
+    brand: string
+    description: string
+  }) => void
+  setProductMeta: (patch: Partial<EditorProductMeta>) => void
   setPackSize: (size: PackSize) => void
   setBusyKind: (kind: EditorBusyKind) => void
+  setBusyProgress: (progress: number | null) => void
   beginHistoryTransaction: () => void
   commitHistoryTransaction: () => void
   undo: () => void
@@ -182,10 +239,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   flashLayerId: null,
   zoomMode: "fit",
   softbox: DEFAULT_SOFTBOX,
+  softboxScrubbing: false,
   productPreviewUrl: DEFAULT_PRODUCT_CUTOUT,
+  backgroundPreviewUrl: null,
+  generationEpoch: 0,
   importGalleryUrls: [],
+  productMeta: { ...EMPTY_PRODUCT_META },
   packSize: INITIAL_PACK_SIZE,
   busyKind: "idle",
+  busyProgress: null,
   history: { past: [], future: [] },
   historyTransaction: null,
   canUndo: false,
@@ -207,9 +269,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       selectedLayerId: defaultSelectedLayerId(layers),
       flashLayerId: null,
       softbox: { ...project.softbox },
+      softboxScrubbing: false,
       productPreviewUrl: project.productPreviewUrl,
+      backgroundPreviewUrl: project.backgroundPreviewUrl ?? null,
+      importGalleryUrls: [],
+      productMeta: { ...EMPTY_PRODUCT_META },
       packSize,
       busyKind: "idle",
+      busyProgress: null,
       history: { past: [], future: [] },
       historyTransaction: null,
       canUndo: false,
@@ -286,6 +353,31 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         canRedo: false,
       }
     }),
+  applyGenerationResult: ({ layers: nextLayers, productPreviewUrl, backgroundPreviewUrl }) =>
+    set((state) => {
+      const layers = nextLayers.map(cloneLayer)
+      const nextProduct =
+        productPreviewUrl !== undefined
+          ? productPreviewUrl
+          : state.productPreviewUrl
+      const nextBackground =
+        backgroundPreviewUrl !== undefined
+          ? backgroundPreviewUrl
+          : state.backgroundPreviewUrl
+      const history = pushPast(state.history, snapshotOf(state))
+      return {
+        layers,
+        pages: syncActivePage(state.pages, state.activePageIndex, layers),
+        selectedLayerId: defaultSelectedLayerId(layers),
+        flashLayerId: null,
+        productPreviewUrl: nextProduct,
+        backgroundPreviewUrl: nextBackground,
+        generationEpoch: state.generationEpoch + 1,
+        history,
+        canUndo: true,
+        canRedo: false,
+      }
+    }),
   addLayer: (layer) =>
     set((state) => {
       const layers = [...state.layers, layer]
@@ -322,14 +414,33 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }),
   setSoftbox: (patch) =>
     set((state) => {
-      const history = pushPast(state.history, snapshotOf(state))
+      const next = { ...state.softbox, ...patch }
+      if (
+        next.enabled === state.softbox.enabled &&
+        next.lightAngle === state.softbox.lightAngle &&
+        next.lightElevation === state.softbox.lightElevation &&
+        next.colorTempK === state.softbox.colorTempK &&
+        next.intensity === state.softbox.intensity &&
+        next.softboxDiffusion === state.softbox.softboxDiffusion
+      ) {
+        return state
+      }
+      const history = state.historyTransaction
+        ? state.history
+        : pushPast(state.history, snapshotOf(state))
       return {
-        softbox: { ...state.softbox, ...patch },
+        softbox: next,
         history,
-        canUndo: true,
-        canRedo: false,
+        canUndo: history.past.length > 0,
+        canRedo: state.historyTransaction ? state.canRedo : false,
       }
     }),
+  setSoftboxScrubbing: (scrubbing) =>
+    set((state) =>
+      state.softboxScrubbing === scrubbing
+        ? state
+        : { softboxScrubbing: scrubbing }
+    ),
   setProductPreviewUrl: (url) =>
     set((state) => {
       if (state.productPreviewUrl === url) return state
@@ -339,6 +450,39 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         history,
         canUndo: true,
         canRedo: false,
+      }
+    }),
+  setBackgroundPreviewUrl: (url) =>
+    set((state) => {
+      if (state.backgroundPreviewUrl === url) return state
+      const history = pushPast(state.history, snapshotOf(state))
+      return {
+        backgroundPreviewUrl: url,
+        history,
+        canUndo: true,
+        canRedo: false,
+      }
+    }),
+  syncLayerGeometry: (id, patch) =>
+    set((state) => {
+      const layers = state.layers.map((layer) => {
+        if (layer.id !== id) return layer
+        return {
+          ...layer,
+          ...patch,
+          textStyle:
+            patch.textStyle !== undefined
+              ? { ...layer.textStyle, ...patch.textStyle }
+              : layer.textStyle,
+          chip:
+            patch.chip !== undefined
+              ? { ...layer.chip, ...patch.chip }
+              : layer.chip,
+        }
+      })
+      return {
+        layers,
+        pages: syncActivePage(state.pages, state.activePageIndex, layers),
       }
     }),
   applyImportedGallery: (urls) =>
@@ -369,6 +513,60 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         canRedo: false,
       }
     }),
+  applyParsedProduct: ({ images, title, category, brand, description }) =>
+    set((state) => {
+      const cleaned = images
+        .map((url) => url.trim())
+        .filter((url) => url.length > 0)
+      const productMeta: EditorProductMeta = {
+        title: title.trim(),
+        category: category.trim() || "Товары",
+        brand: brand.trim(),
+        description: description.trim(),
+      }
+
+      if (cleaned.length === 0) {
+        return { productMeta }
+      }
+
+      const packSize = clampPackSize(cleaned.length)
+      const synced = syncActivePage(
+        state.pages,
+        state.activePageIndex,
+        state.layers
+      )
+      const resized = resizePages(synced, packSize)
+      const history = pushPast(state.history, snapshotOf(state))
+      const layers = (resized[0] ?? []).map((layer) => {
+        if (layer.type !== "text") return layer
+        if (!/title$/i.test(layer.id) && layer.name !== "Название") {
+          return layer
+        }
+        return productMeta.title
+          ? { ...layer, text: productMeta.title }
+          : layer
+      })
+      const pages = [layers, ...resized.slice(1)]
+
+      return {
+        importGalleryUrls: cleaned,
+        productPreviewUrl: cleaned[0] ?? state.productPreviewUrl,
+        productMeta,
+        packSize,
+        pages,
+        activePageIndex: 0,
+        layers,
+        selectedLayerId: defaultSelectedLayerId(layers),
+        flashLayerId: null,
+        history,
+        canUndo: true,
+        canRedo: false,
+      }
+    }),
+  setProductMeta: (patch) =>
+    set((state) => ({
+      productMeta: { ...state.productMeta, ...patch },
+    })),
   setPackSize: (size) =>
     set((state) => {
       const packSize = clampPackSize(size)
@@ -402,7 +600,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         canRedo: false,
       }
     }),
-  setBusyKind: (kind) => set({ busyKind: kind }),
+  setBusyKind: (kind) =>
+    set((state) => ({
+      busyKind: kind,
+      busyProgress: kind === "idle" ? null : state.busyProgress,
+    })),
+  setBusyProgress: (progress) => set({ busyProgress: progress }),
   beginHistoryTransaction: () =>
     set((state) => {
       if (state.historyTransaction) return state
@@ -446,7 +649,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         selectedLayerId: defaultSelectedLayerId(layers),
         flashLayerId: null,
         softbox: { ...previous.softbox },
+        softboxScrubbing: false,
         productPreviewUrl: previous.productPreviewUrl,
+        backgroundPreviewUrl: previous.backgroundPreviewUrl,
         packSize: previous.packSize,
         history,
         historyTransaction: null,
@@ -476,7 +681,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         selectedLayerId: defaultSelectedLayerId(layers),
         flashLayerId: null,
         softbox: { ...next.softbox },
+        softboxScrubbing: false,
         productPreviewUrl: next.productPreviewUrl,
+        backgroundPreviewUrl: next.backgroundPreviewUrl,
         packSize: next.packSize,
         history,
         historyTransaction: null,
@@ -499,10 +706,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       flashLayerId: null,
       zoomMode: "fit",
       softbox: DEFAULT_SOFTBOX,
+      softboxScrubbing: false,
       productPreviewUrl: DEFAULT_PRODUCT_CUTOUT,
+      backgroundPreviewUrl: null,
+      generationEpoch: 0,
       importGalleryUrls: [],
+      productMeta: { ...EMPTY_PRODUCT_META },
       packSize: INITIAL_PACK_SIZE,
       busyKind: "idle",
+      busyProgress: null,
       projectId: null,
       history: { past: [], future: [] },
       historyTransaction: null,

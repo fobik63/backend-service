@@ -66,6 +66,7 @@ function ProjectCard({
             src={project.previewImage}
             alt={`${project.title}`}
             fill
+            priority={index === 0}
             sizes="(max-width: 768px) 50vw, (max-width: 1200px) 33vw, 280px"
             className="object-cover object-center transition-transform duration-500 group-hover:scale-[1.03]"
           />

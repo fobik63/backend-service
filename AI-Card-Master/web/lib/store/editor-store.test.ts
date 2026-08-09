@@ -67,11 +67,67 @@ describe("editor history", () => {
       activePageIndex: 0,
       softbox: current.softbox,
       productPreviewUrl: current.productPreviewUrl,
+      backgroundPreviewUrl: current.backgroundPreviewUrl,
       packSize: current.packSize,
     })
 
     expect(useEditorStore.getState().projectId).toBe("another-project")
     expect(useEditorStore.getState().canUndo).toBe(false)
     expect(useEditorStore.getState().history.past).toHaveLength(0)
+  })
+
+  it("applies generation result as a single undo step", () => {
+    const before = useEditorStore.getState()
+    const nextLayers = before.layers.map((layer) =>
+      layer.id === "p0_title" ? { ...layer, text: "Generated" } : layer
+    )
+
+    useEditorStore.getState().applyGenerationResult({
+      layers: nextLayers,
+      productPreviewUrl: "/projects/cream-sage-mist-product.png",
+      backgroundPreviewUrl: "/projects/cream-sage-mist.png",
+    })
+
+    expect(useEditorStore.getState().history.past).toHaveLength(1)
+    expect(
+      useEditorStore.getState().layers.find((l) => l.id === "p0_title")?.text
+    ).toBe("Generated")
+    expect(useEditorStore.getState().backgroundPreviewUrl).toBe(
+      "/projects/cream-sage-mist.png"
+    )
+
+    useEditorStore.getState().undo()
+    expect(
+      useEditorStore.getState().layers.find((l) => l.id === "p0_title")?.text
+    ).toBe(before.layers.find((l) => l.id === "p0_title")?.text)
+    expect(useEditorStore.getState().backgroundPreviewUrl).toBe(
+      before.backgroundPreviewUrl
+    )
+  })
+
+  it("applies parsed product cutout and meta fields", () => {
+    useEditorStore.getState().applyParsedProduct({
+      images: ["/cutout-a.png", "/cutout-b.png"],
+      title: "Test Cream",
+      category: "Кремы",
+      brand: "BrandX",
+      description: "Source description",
+    })
+
+    const state = useEditorStore.getState()
+    expect(state.productPreviewUrl).toBe("/cutout-a.png")
+    expect(state.importGalleryUrls).toEqual([
+      "/cutout-a.png",
+      "/cutout-b.png",
+    ])
+    expect(state.productMeta).toEqual({
+      title: "Test Cream",
+      category: "Кремы",
+      brand: "BrandX",
+      description: "Source description",
+    })
+    expect(
+      state.layers.find((layer) => layer.id === "p0_title")?.text
+    ).toBe("Test Cream")
   })
 })

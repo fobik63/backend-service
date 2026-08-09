@@ -4,10 +4,7 @@ export {
   generateByPrompt,
   getDesign,
   listDesigns,
-  parseProduct,
-  processRelighting,
   removeBackground,
-  renderCanvas,
   saveDesign,
 } from "./client";
 export {
@@ -22,11 +19,9 @@ export {
 export type { AuthSessionResponse, OtpRequestResponse } from "./auth";
 export {
   createPayment,
-  getBalance,
   listTariffs,
 } from "./billing";
 export type {
-  BalanceDTO,
   CreatePaymentResponse,
   TariffCode,
   TariffDTO,
@@ -37,6 +32,7 @@ export {
 } from "./exports";
 export type { CredentialDTO, MarketplacePlatform } from "./exports";
 export {
+  categoryFromCharacteristics,
   fetchProductByArticle,
   generateSeoDescription,
   listSellerProducts,
@@ -51,6 +47,22 @@ export type {
   SeoGenerateResponse,
   SeoTargetPlatform,
 } from "./marketplace";
+export {
+  enqueueEyeOfGodSpy,
+  getEyeOfGodSpyJob,
+  pollEyeOfGodSpyJob,
+} from "./analytics";
+export type {
+  EyeOfGodCompetitorSummary,
+  EyeOfGodDashboard,
+  EyeOfGodDiscoveryHit,
+  EyeOfGodEnqueueRequest,
+  EyeOfGodEnqueueResponse,
+  EyeOfGodFrequencyItem,
+  EyeOfGodJobResponse,
+  EyeOfGodJobStatus,
+  EyeOfGodPlatform,
+} from "./analytics";
 export {
   getApiErrorMessage,
   isNetworkError,

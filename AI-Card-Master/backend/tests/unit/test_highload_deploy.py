@@ -141,6 +141,7 @@ async def test_list_generation_history_uses_redis_cache(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.api import generations as generations_api
+    import app.application.generation_cabinet_service as cabinet_mod
     from app.domain.generation import GenerationJobStatus
     from app.models.enums import SubscriptionStatus
     from app.models.user import User
@@ -157,6 +158,7 @@ async def test_list_generation_history_uses_redis_cache(
             "status": GenerationJobStatus.COMPLETED.value,
             "progress": 100,
             "product_category": "electronics",
+            "slide_count": 5,
             "thumbnail_url": "https://cdn.test/t.jpg",
             "thumbnail_mime_type": "image/jpeg",
             "thumbnail_size_bytes": 1024,
@@ -175,10 +177,13 @@ async def test_list_generation_history_uses_redis_cache(
 
     class ShouldNotHitRepository:
         def __init__(self, _session: object) -> None:
+            pass
+
+        async def list_summary_for_user(self, **_kwargs: object) -> object:
             raise AssertionError("DB must not be queried on cache hit")
 
     monkeypatch.setattr(
-        generations_api,
+        cabinet_mod,
         "get_cached_generation_history",
         fake_get_cached,
     )

@@ -38,10 +38,7 @@ function SectionHeader({
         </Tag>
         <span
           aria-hidden
-          className={cn(
-            "h-0.5 w-16 rounded-full",
-            "bg-gradient-to-r from-emerald via-emerald-deep to-transparent"
-          )}
+          className="h-px w-12 bg-white/30"
         />
       </div>
       {subtitle ? (

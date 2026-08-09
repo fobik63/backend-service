@@ -59,6 +59,7 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
   const pages = useEditorStore((s) => s.pages)
   const activePageIndex = useEditorStore((s) => s.activePageIndex)
   const productPreviewUrl = useEditorStore((s) => s.productPreviewUrl)
+  const backgroundPreviewUrl = useEditorStore((s) => s.backgroundPreviewUrl)
   const softbox = useEditorStore((s) => s.softbox)
   const [saving, setSaving] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
@@ -105,11 +106,20 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
           activePageIndex: 0,
           softbox: useEditorStore.getState().softbox,
           productPreviewUrl: design.preview_url ?? cutout,
+          backgroundPreviewUrl: design.canvas.background_image_url ?? null,
           packSize: 1,
         })
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted) return
+        if (
+          (typeof DOMException !== "undefined" &&
+            error instanceof DOMException &&
+            error.name === "AbortError") ||
+          (error instanceof Error && error.name === "AbortError")
+        ) {
+          return
+        }
         setRemoteDesign({ id: projectId, title: productData?.title ?? projectId })
         toast.error(getApiErrorMessage(error, "Не удалось загрузить проект"))
       })
@@ -140,7 +150,13 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
         return
       }
       if (!(event.ctrlKey || event.metaKey) || event.altKey) return
-      if (event.key.toLowerCase() !== "z") return
+      const key = event.key.toLowerCase()
+      if (key === "y") {
+        event.preventDefault()
+        redo()
+        return
+      }
+      if (key !== "z") return
       event.preventDefault()
       if (event.shiftKey) {
         redo()
@@ -174,6 +190,7 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
         pages,
         activePageIndex,
         productPreviewUrl,
+        backgroundPreviewUrl,
         softbox,
       })
       const saved = await saveDesign({
@@ -185,7 +202,8 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
         preview_url: productPreviewUrl,
         canvas: layersToCanvasState(
           pages[activePageIndex] ?? layers,
-          productPreviewUrl
+          productPreviewUrl,
+          backgroundPreviewUrl
         ),
         editor_document: editorDocument,
       })
@@ -205,7 +223,7 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
 
   return (
     <div className="flex h-svh flex-col overflow-hidden bg-transparent text-foreground">
-      <header className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-white/8 bg-loft-surface/95 px-3 backdrop-blur-sm sm:px-4">
+      <header className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-zinc-800/80 bg-zinc-900/60 px-3 backdrop-blur-xl sm:px-4">
         <div className="flex min-w-0 items-center gap-3">
           <Link
             href="/projects"
@@ -248,7 +266,7 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
               disabled={!canRedo}
               onClick={redo}
               aria-label="Повторить изменение"
-              title="Повторить (Ctrl+Shift+Z)"
+              title="Повторить (Ctrl+Y)"
             >
               <Redo2 className="size-4" aria-hidden />
             </Button>

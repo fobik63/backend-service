@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
@@ -26,6 +26,12 @@ from app.domain.competitor_audit import (
     MAX_LINKS_PER_REQUEST,
     CompetitorAuditEnqueueRequest,
     CompetitorAuditJobStatus,
+)
+from app.domain.eye_of_god_spy import (
+    DEFAULT_TOP_COMPETITORS,
+    MAX_TOP_COMPETITORS,
+    MIN_TOP_COMPETITORS,
+    EyeOfGodSpyEnqueueRequest,
 )
 from app.domain.style_analytics import InsightMetric, InsightPriority
 from app.infrastructure.celery_app import celery_app
@@ -184,6 +190,62 @@ class AnalyzeLinksJobResponse(StrictAPIModel):
     completed_at: str | None = None
 
 
+class EyeOfGodSpyRequest(StrictAPIModel):
+    """Spy analytics: competitor article/URL → discover TOP-N → deep audit."""
+
+    input: str = Field(
+        min_length=1,
+        max_length=2048,
+        description="Wildberries / Ozon product URL or numeric article.",
+    )
+    platform: Literal["auto", "wb", "ozon"] = "auto"
+    limit: int = Field(
+        default=DEFAULT_TOP_COMPETITORS,
+        ge=MIN_TOP_COMPETITORS,
+        le=MAX_TOP_COMPETITORS,
+        description="How many TOP competitors to discover and audit (default 10).",
+    )
+
+
+class EyeOfGodSpyEnqueueResponse(StrictAPIModel):
+    """HTTP 202 payload for Eye of God spy job."""
+
+    task_id: UUID
+    status: CompetitorAuditJobStatus
+    status_url: str
+    celery_task_id: str | None = None
+    idempotent_replay: bool = False
+    competitors_count: int = Field(ge=0, le=MAX_TOP_COMPETITORS)
+    seed_title: str | None = None
+    discovery: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class EyeOfGodSpyJobResponse(StrictAPIModel):
+    """Poll response with scrape/analysis payloads + aggregated spy dashboard."""
+
+    task_id: UUID
+    status: CompetitorAuditJobStatus
+    status_url: str
+    links: list[str]
+    celery_task_id: str | None = None
+    result: dict[str, Any] | None = None
+    analysis: dict[str, Any] | None = None
+    dashboard: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Aggregated spy dashboard: badge_patterns, strong_triggers, "
+            "frequent_keywords, visual_hooks, ai_recommendation, generator_prompt."
+        ),
+    )
+    model_name: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    error_message: str | None = None
+    created_at: str
+    updated_at: str
+    completed_at: str | None = None
+
+
 async def get_style_analytics_service(
     db_session: AsyncSession = Depends(get_db_session),
 ) -> StyleAnalyticsService:
@@ -314,6 +376,114 @@ async def get_analyze_links_job(
             detail=str(exc),
         ) from exc
     return _analyze_links_job_response(job)
+
+
+@router.post(
+    "/eye-of-god",
+    response_model=EyeOfGodSpyEnqueueResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Eye of God: discover TOP competitors by article and enqueue deep audit",
+)
+async def enqueue_eye_of_god_spy(
+    body: EyeOfGodSpyRequest,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    current_user: User = Depends(get_current_user),
+    service: CompetitorAuditService = Depends(get_competitor_audit_service),
+) -> EyeOfGodSpyEnqueueResponse:
+    """Resolve competitor article/URL, find TOP-N similar cards, enqueue scrape+Claude."""
+
+    try:
+        request = EyeOfGodSpyEnqueueRequest(
+            input=body.input,
+            platform=body.platform,
+            limit=body.limit,
+        )
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=exc.errors(),
+        ) from exc
+
+    try:
+        job, replay, hits, seed_title = await service.enqueue_eye_of_god_spy(
+            user_id=current_user.id,
+            request=request,
+            idempotency_key=idempotency_key,
+        )
+    except CompetitorAuditValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    celery_task_id = job.celery_task_id
+    if not replay or not celery_task_id:
+        async_result = celery_app.send_task(
+            "analytics.run_competitor_audit",
+            args=[str(job.id)],
+            queue="analytics.scrape",
+        )
+        celery_task_id = async_result.id
+        job = await service.attach_celery_task(
+            job_id=job.id,
+            celery_task_id=celery_task_id,
+        )
+
+    return EyeOfGodSpyEnqueueResponse(
+        task_id=job.id,
+        status=job.status,
+        status_url=f"/api/v1/analytics/eye-of-god/{job.id}",
+        celery_task_id=celery_task_id,
+        idempotent_replay=replay,
+        competitors_count=len(hits) if hits else len(job.links_payload),
+        seed_title=seed_title,
+        discovery=[hit.model_dump(mode="json") for hit in hits],
+    )
+
+
+@router.get(
+    "/eye-of-god/{task_id}",
+    response_model=EyeOfGodSpyJobResponse,
+    summary="Poll Eye of God spy job (scrape + Claude + dashboard)",
+)
+async def get_eye_of_god_spy_job(
+    task_id: UUID,
+    current_user: User = Depends(get_current_user),
+    service: CompetitorAuditService = Depends(get_competitor_audit_service),
+) -> EyeOfGodSpyJobResponse:
+    """Return scrape/analysis status and aggregated spy dashboard when ready."""
+
+    try:
+        job = await service.get_job_for_user(user_id=current_user.id, job_id=task_id)
+    except CompetitorAuditNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+
+    dashboard = None
+    if job.status == CompetitorAuditJobStatus.COMPLETED or job.analysis_payload:
+        built = await service.build_spy_dashboard_async(job)
+        if built is not None:
+            dashboard = built.model_dump(mode="json")
+
+    return EyeOfGodSpyJobResponse(
+        task_id=job.id,
+        status=job.status,
+        status_url=f"/api/v1/analytics/eye-of-god/{job.id}",
+        links=list(job.links_payload),
+        celery_task_id=job.celery_task_id,
+        result=job.result_payload,
+        analysis=job.analysis_payload,
+        dashboard=dashboard,
+        model_name=job.model_name,
+        input_tokens=job.input_tokens,
+        output_tokens=job.output_tokens,
+        error_message=job.error_message,
+        created_at=job.created_at.isoformat(),
+        updated_at=job.updated_at.isoformat(),
+        completed_at=job.completed_at.isoformat() if job.completed_at else None,
+    )
 
 
 @router.get(

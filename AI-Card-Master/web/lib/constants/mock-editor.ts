@@ -246,16 +246,6 @@ export const BADGE_PRESETS = [
   },
 ] as const
 
-export const ICON_PRESETS = [
-  { id: "icon_drop", label: "Капля" },
-  { id: "icon_leaf", label: "Лист" },
-  { id: "icon_shield", label: "Щит" },
-  { id: "icon_star", label: "Звезда" },
-  { id: "icon_spark", label: "Искра" },
-  { id: "icon_box", label: "Коробка" },
-  { id: "icon_flask", label: "Колба" },
-] as const
-
 /** Default drop spot for the next badge/chip (% of canvas). */
 export function nextBadgePosition(
   existingChipCount: number

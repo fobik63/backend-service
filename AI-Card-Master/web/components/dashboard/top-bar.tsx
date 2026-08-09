@@ -68,7 +68,7 @@ function TopBar({
   return (
     <header
       className={cn(
-        "flex h-14 shrink-0 items-center gap-3 border-b border-border bg-loft-surface/80 px-4 backdrop-blur-md sm:px-6",
+        "flex h-14 shrink-0 items-center gap-3 border-b border-zinc-800/80 bg-zinc-900/60 px-4 backdrop-blur-xl sm:px-6",
         className
       )}
     >
@@ -129,7 +129,7 @@ function TopBar({
           >
             <Bell className="size-4" aria-hidden />
             <span
-              className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-emerald"
+              className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-foreground"
               aria-hidden
             />
           </DropdownMenuTrigger>

@@ -27,12 +27,11 @@ function GlassCard({
     <div
       data-slot="glass-card"
       className={cn(
-        "rounded-xl border border-white/5 copper-border",
-        "bg-[#14171d]/60 backdrop-blur-xl",
-        "shadow-[0_8px_30px_rgba(0,0,0,0.25)]",
-        "transition-[transform,box-shadow] duration-300 ease-out",
+        "rounded-xl border border-zinc-800/80 bg-zinc-900/60 backdrop-blur-xl",
+        "shadow-panel",
+        "transition-[transform,border-color,box-shadow] duration-200 ease-out",
         hoverLift &&
-          "hover:-translate-y-1.5 hover:shadow-[0_16px_40px_rgba(0,0,0,0.35)]",
+          "hover:-translate-y-0.5 hover:border-zinc-700/80 hover:shadow-[0_16px_40px_rgba(0,0,0,0.35)]",
         paddingMap[padding],
         className
       )}

@@ -16,7 +16,6 @@ import { createPortal } from "react-dom"
 import { AnimatePresence, motion } from "framer-motion"
 
 import { Modal360 } from "@/components/landing/360-modal"
-import { TropicalLeaves } from "@/components/landing/tropical-leaves"
 import { GlassButton } from "@/components/ui/glass-button"
 import { cn } from "@/lib/utils"
 
@@ -106,7 +105,7 @@ function ExampleLayer({
           "absolute top-3 rounded-md px-2 py-1 font-heading text-[11px] font-semibold tracking-wide",
           mode === "before"
             ? "left-3 bg-loft/80 text-foreground backdrop-blur-sm"
-            : "right-3 bg-emerald/90 text-loft"
+            : "right-3 bg-foreground text-loft"
         )}
       >
         {mode === "before" ? "До" : "После"}
@@ -230,7 +229,7 @@ function CompareFrame({
         }}
       >
         <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-white/80" />
-        <div className="absolute left-1/2 top-1/2 flex size-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/30 bg-loft/85 shadow-[0_0_24px_rgba(16,185,129,0.35)] backdrop-blur-md">
+        <div className="absolute left-1/2 top-1/2 flex size-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/30 bg-loft/90">
           <span className="flex gap-0.5 text-emerald">
             <span className="block h-3.5 w-0.5 rounded-full bg-current opacity-70" />
             <span className="block h-3.5 w-0.5 rounded-full bg-current" />
@@ -416,7 +415,7 @@ function BeforeAfterSlider() {
                           className={cn(
                             "h-2 rounded-full transition-all duration-300",
                             active
-                              ? "w-6 bg-emerald"
+                              ? "w-6 bg-foreground"
                               : "w-2 bg-white/25 hover:bg-white/45"
                           )}
                         />
@@ -467,7 +466,7 @@ function BeforeAfterSlider() {
               className={cn(
                 "h-2 rounded-full transition-all duration-300",
                 active
-                  ? "w-6 bg-emerald shadow-[0_0_12px_rgba(16,185,129,0.45)]"
+                  ? "w-6 bg-foreground"
                   : "w-2 bg-white/25 hover:bg-white/45"
               )}
             />
@@ -494,22 +493,17 @@ function HeroSection() {
   }, [demoOpen])
 
   return (
-    <section className="relative isolate min-h-[100svh] overflow-hidden pt-28 pb-2 sm:pt-32 sm:pb-3">
-      <div className="pointer-events-none absolute inset-0 -z-10" aria-hidden>
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_60%_at_50%_-10%,rgba(16,185,129,0.12),transparent_55%)]" />
-        <TropicalLeaves />
-      </div>
-
+    <section className="relative isolate overflow-hidden pt-28 pb-16 md:pt-32 md:pb-24">
       <div className="mx-auto max-w-6xl px-5">
-        <div className="section-glass relative overflow-hidden rounded-3xl px-6 py-10 sm:px-10 sm:py-14 lg:px-12">
-          <div className="grid items-center gap-12 lg:grid-cols-[1.05fr_0.95fr] lg:gap-16">
-            <div className="flex flex-col items-start">
+        <div className="section-glass relative overflow-hidden rounded-2xl px-6 py-10 sm:px-10 sm:py-12 lg:px-12">
+          <div className="grid items-center gap-10 lg:grid-cols-[1.05fr_0.95fr] lg:gap-12">
+            <div className="flex flex-col items-start gap-5">
               <motion.p
                 custom={0}
                 variants={fadeUp}
                 initial="hidden"
                 animate="show"
-                className="mb-4 font-heading text-sm font-medium tracking-[0.18em] text-emerald uppercase"
+                className="font-heading text-sm font-medium tracking-[0.18em] text-muted-foreground uppercase"
               >
                 CARD AI
               </motion.p>
@@ -529,7 +523,7 @@ function HeroSection() {
                 variants={fadeUp}
                 initial="hidden"
                 animate="show"
-                className="mt-5 max-w-lg text-base leading-relaxed text-text-muted sm:text-lg"
+                className="max-w-lg text-base leading-relaxed text-text-muted sm:text-lg"
               >
                 Автоматическая вырезка фона, студийный софтбокс и идеальная
                 типографика без дизайнеров
@@ -540,7 +534,7 @@ function HeroSection() {
                 variants={fadeUp}
                 initial="hidden"
                 animate="show"
-                className="mt-8 flex flex-wrap items-center gap-3"
+                className="mt-3 flex flex-wrap items-center gap-3"
               >
                 <GlassButton
                   size="lg"
@@ -552,7 +546,7 @@ function HeroSection() {
                 <GlassButton
                   size="lg"
                   icon={Play}
-                  className="border border-white/12 !bg-none bg-white/[0.04] text-foreground shadow-none [background-image:none]"
+                  className="border border-white/12 bg-transparent text-foreground"
                   onClick={() => setDemoOpen(true)}
                 >
                   Посмотреть демо 360°
@@ -561,19 +555,15 @@ function HeroSection() {
             </div>
 
             <motion.div
-              initial={{ opacity: 0, scale: 0.94, y: 36 }}
+              initial={{ opacity: 0, scale: 0.98, y: 24 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               transition={{
                 delay: 0.28,
-                duration: 0.7,
+                duration: 0.6,
                 ease: [0.22, 1, 0.36, 1],
               }}
               className="relative mx-auto flex w-full justify-center lg:justify-end"
             >
-              <div
-                className="pointer-events-none absolute -inset-8 -z-10 rounded-full bg-emerald/10 blur-3xl"
-                aria-hidden
-              />
               <BeforeAfterSlider />
             </motion.div>
           </div>

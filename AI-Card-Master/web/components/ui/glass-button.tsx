@@ -10,12 +10,12 @@ import { cn } from "@/lib/utils"
 const glassButtonVariants = cva(
   [
     "inline-flex shrink-0 items-center justify-center gap-2 rounded-lg",
-    "bg-gradient-to-br from-emerald to-emerald-deep",
-    "font-medium text-primary-foreground whitespace-nowrap",
-    "shadow-[0_0_0_transparent]",
-    "transition-[box-shadow,filter] duration-200",
+    "bg-primary text-primary-foreground",
+    "font-medium whitespace-nowrap",
+    "border border-transparent",
+    "transition-[background-color,border-color,opacity] duration-200",
     "outline-none select-none",
-    "focus-visible:ring-2 focus-visible:ring-emerald/50 focus-visible:ring-offset-2 focus-visible:ring-offset-loft",
+    "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-loft",
     "disabled:pointer-events-none disabled:opacity-50",
     "[&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   ].join(" "),
@@ -55,15 +55,8 @@ function GlassButton({
     <motion.button
       type={type}
       disabled={disabled}
-      whileHover={
-        disabled
-          ? undefined
-          : {
-              boxShadow: "0 0 22px rgba(16, 185, 129, 0.4)",
-              filter: "brightness(1.06)",
-            }
-      }
-      whileTap={disabled ? undefined : { scale: 0.96 }}
+      whileHover={disabled ? undefined : { opacity: 0.92 }}
+      whileTap={disabled ? undefined : { scale: 0.98 }}
       transition={{ type: "spring", stiffness: 420, damping: 28 }}
       className={cn(glassButtonVariants({ size }), className)}
       {...props}

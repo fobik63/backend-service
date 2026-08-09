@@ -30,14 +30,13 @@ function CategoryChip({
       whileTap={disabled ? undefined : { scale: 0.97 }}
       transition={{ type: "spring", stiffness: 420, damping: 28 }}
       className={cn(
-        "inline-flex w-full items-center gap-2 rounded-xl border px-4 py-2.5 text-left",
+        "inline-flex w-full items-center gap-2 rounded-lg border px-4 py-2.5 text-left",
         "font-heading text-sm font-medium sm:px-5 sm:py-3 sm:text-base",
-        "bg-[rgba(22,24,30,0.75)] backdrop-blur-md",
-        "outline-none transition-[border-color,box-shadow,background-color,color] duration-200",
-        "focus-visible:ring-2 focus-visible:ring-emerald/50 focus-visible:ring-offset-2 focus-visible:ring-offset-loft",
+        "bg-loft-surface outline-none transition-[border-color,background-color,color] duration-200",
+        "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-loft",
         "disabled:pointer-events-none disabled:opacity-50",
         selected
-          ? "border-emerald/60 bg-emerald/10 text-foreground shadow-[0_0_0_1px_rgba(16,185,129,0.2)]"
+          ? "border-white/30 bg-white/[0.05] text-foreground"
           : "border-white/10 text-text-muted hover:border-white/20 hover:text-foreground"
       )}
     >
@@ -45,7 +44,7 @@ function CategoryChip({
         className={cn(
           "flex size-5 shrink-0 items-center justify-center rounded-md border transition-colors",
           selected
-            ? "border-emerald bg-emerald text-primary-foreground"
+            ? "border-foreground bg-foreground text-primary-foreground"
             : "border-white/20 bg-white/5 text-transparent"
         )}
         aria-hidden

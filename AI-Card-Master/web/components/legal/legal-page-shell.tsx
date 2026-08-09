@@ -16,15 +16,15 @@ function LegalPageShell({ title, updatedAt, children }: LegalPageShellProps) {
       <header className="mx-auto flex max-w-3xl items-center px-5 pt-8 pb-4">
         <Link
           href="/landing"
-          className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-loft-surface/70 px-3 py-2 text-sm text-foreground/90 backdrop-blur-md transition-colors hover:border-copper/40"
+          className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-loft-surface px-3 py-2 text-sm text-foreground/90 transition-colors hover:border-white/20"
         >
-          <ArrowLeft className="size-4 text-copper" aria-hidden />
+          <ArrowLeft className="size-4 text-muted-foreground" aria-hidden />
           На главную
         </Link>
       </header>
 
       <main className="mx-auto max-w-3xl px-5 pb-16 pt-6">
-        <p className="font-heading text-xs font-medium tracking-[0.18em] text-copper uppercase">
+        <p className="font-heading text-xs font-medium tracking-[0.18em] text-muted-foreground uppercase">
           CARD AI
         </p>
         <h1 className="mt-2 font-heading text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
@@ -33,7 +33,7 @@ function LegalPageShell({ title, updatedAt, children }: LegalPageShellProps) {
         <p className="mt-3 text-sm text-text-muted">
           Обновлено: {updatedAt}
         </p>
-        <div className="mt-4 h-0.5 w-16 rounded-full bg-gradient-to-r from-emerald via-emerald-deep to-transparent" />
+        <div className="mt-4 h-px w-12 bg-white/30" />
 
         <article className="prose-legal mt-10 space-y-6 text-sm leading-relaxed text-text-muted sm:text-base">
           {children}

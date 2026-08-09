@@ -2,7 +2,7 @@
 
 import { Star } from "lucide-react"
 import { useRef, type CSSProperties } from "react"
-import { motion, useInView, useReducedMotion } from "framer-motion"
+import { motion, useInView } from "framer-motion"
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { GlassCard } from "@/components/ui/glass-card"
@@ -123,19 +123,21 @@ function MarqueeRow({
   direction: "left" | "right"
   durationSec: number
 }) {
-  const reduceMotion = useReducedMotion()
-  /** Two identical halves → translate ±50% loops without a seam */
-  const loop = reduceMotion ? items : [...items, ...items]
+  /**
+   * Always render two identical halves so SSR and client markup match.
+   * Animation pause for prefers-reduced-motion is handled in CSS
+   * (`.marquee-row` / `@media (prefers-reduced-motion: reduce)`).
+   */
+  const loop = [...items, ...items]
 
   return (
     <div className="marquee-row marquee-fade-edges relative overflow-hidden py-1">
       <div
         className={cn(
           "flex w-max gap-4 will-change-transform",
-          !reduceMotion &&
-            (direction === "left"
-              ? "animate-marquee-left"
-              : "animate-marquee-right")
+          direction === "left"
+            ? "animate-marquee-left"
+            : "animate-marquee-right"
         )}
         style={
           {
@@ -162,10 +164,10 @@ function TestimonialsSection() {
     <section
       id="testimonials"
       ref={sectionRef}
-      className="relative isolate scroll-mt-24 py-20 sm:py-28"
+      className="relative isolate flex flex-col gap-12 scroll-mt-24 py-16 md:py-24"
     >
-      <div className="mx-auto max-w-6xl px-5">
-        <div className="section-glass mb-10 rounded-3xl px-5 py-10 sm:mb-12 sm:px-8 sm:py-12">
+      <div className="mx-auto w-full max-w-6xl px-5">
+        <div className="section-glass rounded-3xl px-5 py-10 sm:px-8 sm:py-12">
           <motion.div
             initial={{ opacity: 0, y: 24 }}
             animate={inView ? { opacity: 1, y: 0 } : { opacity: 0, y: 24 }}

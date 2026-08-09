@@ -15,6 +15,8 @@ type SliderControlProps = {
   disabled?: boolean
   formatValue?: (value: number) => string
   onChange: (value: number) => void
+  /** Fires when the user releases the thumb / finishes keyboard / track press. */
+  onValueCommitted?: (value: number) => void
   hint?: ReactNode
   className?: string
 }
@@ -29,6 +31,7 @@ function SliderControl({
   disabled,
   formatValue,
   onChange,
+  onValueCommitted,
   hint,
   className,
 }: SliderControlProps) {
@@ -54,6 +57,11 @@ function SliderControl({
         onValueChange={(v) => {
           const next = Array.isArray(v) ? v[0] : v
           if (typeof next === "number") onChange(next)
+        }}
+        onValueCommitted={(v) => {
+          if (!onValueCommitted) return
+          const next = Array.isArray(v) ? v[0] : v
+          if (typeof next === "number") onValueCommitted(next)
         }}
       />
       {hint ? (

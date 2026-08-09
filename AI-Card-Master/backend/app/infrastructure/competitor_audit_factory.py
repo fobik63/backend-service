@@ -19,6 +19,9 @@ from app.infrastructure.competitor_audit.deep_scraper import CompetitorDeepScrap
 from app.infrastructure.competitor_audit.image_fetcher import CompetitorCardImageFetcher
 from app.infrastructure.competitor_audit.ozon_deep_client import OzonDeepClient
 from app.infrastructure.competitor_audit.wb_deep_client import WildberriesDeepClient
+from app.infrastructure.competitor_audit.wb_discovery_client import (
+    WildberriesCompetitorDiscovery,
+)
 from app.infrastructure.persistence.competitor_audit_repository import (
     CompetitorAuditRepository,
 )
@@ -95,6 +98,14 @@ def build_competitor_audit_service(
         build_token_governor,
     )
 
+    discovery = None
+    if with_scraper:
+        discovery = WildberriesCompetitorDiscovery(
+            dest=settings.stock_parser_wb_dest,
+            timeout_seconds=timeout,
+            proxy_pool=proxy_pool,
+        )
+
     return CompetitorAuditService(
         CompetitorAuditRepository(db_session),
         scraper=scraper,
@@ -111,6 +122,7 @@ def build_competitor_audit_service(
         token_governor=build_token_governor(settings),
         snapshot_store=build_competitor_snapshot_store(),
         snapshot_ttl_seconds=settings.token_governor_snapshot_ttl_seconds,
+        discovery=discovery,
     )
 
 

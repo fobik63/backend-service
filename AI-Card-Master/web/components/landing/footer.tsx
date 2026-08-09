@@ -21,7 +21,7 @@ const SUPPORT_EMAIL = "support@cardai.pro"
 function Footer() {
   return (
     <footer className="relative isolate">
-      <div className="mx-auto max-w-6xl px-5 pt-14 pb-8">
+      <div className="mx-auto max-w-6xl px-5 py-16 md:py-24">
         <div className="section-glass rounded-3xl px-6 py-10 sm:px-8 sm:py-12">
         <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-4 lg:gap-8">
           {/* Brand */}
@@ -31,7 +31,7 @@ function Footer() {
                 CARD AI
                 <span
                   aria-hidden
-                  className="ml-0.5 inline-block size-1.5 translate-y-[-0.35em] rounded-full bg-emerald shadow-[0_0_10px_rgba(16,185,129,0.7)]"
+                  className="ml-0.5 inline-block size-1.5 translate-y-[-0.35em] rounded-full bg-foreground"
                 />
               </span>
             </Link>
@@ -134,7 +134,7 @@ function Footer() {
           </p>
 
           <div
-            className="inline-flex w-fit items-center gap-2 rounded-full border border-emerald/25 bg-emerald/10 px-3 py-1.5"
+            className="inline-flex w-fit items-center gap-2 rounded-lg border border-white/12 bg-white/[0.04] px-3 py-1.5"
             role="status"
             aria-label="Статус серверов: All Systems Operational"
           >

@@ -1,5 +1,6 @@
 import { apiClient } from "@/lib/api/client"
 import type { AuthTokens, AuthUser } from "@/lib/auth/session"
+import { IS_MOCK } from "@/lib/constants/mock"
 
 export type AuthSessionResponse = {
   user: AuthUser
@@ -58,6 +59,10 @@ export async function registerWithPassword(
 }
 
 export async function fetchCurrentUser(): Promise<AuthUser> {
+  if (IS_MOCK) {
+    const { MOCK_AUTH_USER } = await import("@/lib/constants/mock")
+    return MOCK_AUTH_USER
+  }
   const { data } = await apiClient.get<AuthUser>("/auth/me", {
     skipErrorToast: true,
   })

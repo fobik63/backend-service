@@ -23,6 +23,7 @@ import {
   PRESET_PACK_SIZES,
   type PackSize,
 } from "@/lib/export/card-pack"
+import { captureFabricPagesPngBytes } from "@/lib/editor/fabric-export"
 import { useI18n } from "@/lib/i18n"
 import { useEditorStore } from "@/lib/store/editor-store"
 import { cn } from "@/lib/utils"
@@ -79,15 +80,39 @@ function ExportButton({
     setExporting(true)
     try {
       const canvasEl = findEditorExportCanvas()
+      const pages = projectPages ?? (variant === "editor" ? storePages : undefined)
+
+      let fabricPages: Uint8Array[] | null = null
+      if (variant === "editor" && pages?.length) {
+        try {
+          useEditorStore.getState().commitActivePage()
+          fabricPages = await captureFabricPagesPngBytes({
+            pageCount: Math.min(packSize, pages.length),
+            getActivePageIndex: () => useEditorStore.getState().activePageIndex,
+            setActivePageIndex: (index) =>
+              useEditorStore.getState().setActivePageIndex(index),
+          })
+        } catch {
+          fabricPages = null
+        }
+      }
+
       await downloadCardPackZip({
         packSize,
         projectTitle: title,
         canvasEl,
         productImageUrl: productImageUrl ?? storePreviewUrl,
         layers: projectPages?.[0] ?? layers,
-        pages: projectPages ?? (variant === "editor" ? storePages : undefined),
+        pages,
         softbox: projectSoftbox ?? (variant === "editor" ? storeSoftbox : undefined),
         zipBasename: title,
+        capturePageAtIndex: fabricPages
+          ? async (pageIndex) => {
+              const hit = fabricPages![pageIndex]
+              if (hit) return hit
+              return fabricPages![fabricPages!.length - 1]!
+            }
+          : undefined,
       })
       toast.success(
         t("export.success", {

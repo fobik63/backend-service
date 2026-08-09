@@ -179,7 +179,7 @@ function PricingCard({
       )}
     >
       {plan.badge ? (
-        <span className="absolute -top-3 left-1/2 z-10 -translate-x-1/2 rounded-md border border-emerald/40 bg-[#0f1a14] px-3 py-1 font-heading text-[11px] font-semibold tracking-wide text-emerald uppercase shadow-[0_0_24px_rgba(16,185,129,0.35)]">
+        <span className="absolute -top-3 left-1/2 z-10 -translate-x-1/2 rounded-md border border-white/20 bg-loft-surface px-3 py-1 font-heading text-[11px] font-semibold tracking-wide text-foreground uppercase">
           {plan.badge}
         </span>
       ) : null}
@@ -187,15 +187,14 @@ function PricingCard({
       <GlassCard
         className={cn(
           "relative flex h-full flex-col overflow-hidden",
-          plan.highlighted &&
-            "border-emerald/40 shadow-[0_0_0_1px_rgba(16,185,129,0.25),0_0_48px_rgba(16,185,129,0.22),0_16px_40px_rgba(0,0,0,0.35)]"
+          plan.highlighted && "border-white/25 shadow-panel"
         )}
         padding="lg"
         hoverLift={!plan.highlighted}
       >
         {plan.highlighted ? (
           <div
-            className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_50%_0%,rgba(16,185,129,0.18),transparent_55%)]"
+            className="pointer-events-none absolute inset-0 bg-white/[0.02]"
             aria-hidden
           />
         ) : null}
@@ -221,9 +220,9 @@ function PricingCard({
             <span className="mb-1.5 text-sm text-text-muted">₽</span>
           </div>
 
-          <div className="mt-3 inline-flex w-fit items-center gap-2 rounded-lg border border-emerald/20 bg-emerald/10 px-3 py-1.5">
-            <Sparkles className="size-3.5 text-emerald" aria-hidden />
-            <span className="font-heading text-sm font-medium text-emerald">
+          <div className="mt-3 inline-flex w-fit items-center gap-2 rounded-lg border border-white/12 bg-white/[0.04] px-3 py-1.5">
+            <Sparkles className="size-3.5 text-muted-foreground" aria-hidden />
+            <span className="font-heading text-sm font-medium text-foreground">
               {new Intl.NumberFormat("ru-RU").format(plan.coins)}{" "}
               {plan.coinsNote}
             </span>
@@ -235,7 +234,7 @@ function PricingCard({
                 key={feature}
                 className="flex items-start gap-2.5 text-sm leading-snug text-text-muted"
               >
-                <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-md border border-emerald/25 bg-emerald/10 text-emerald">
+                <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-md border border-white/12 bg-white/[0.04] text-foreground">
                   <Check className="size-3" strokeWidth={2.5} aria-hidden />
                 </span>
                 <span>{feature}</span>
@@ -249,7 +248,7 @@ function PricingCard({
             className={cn(
               "w-full",
               !plan.highlighted &&
-                "border border-white/10 bg-none bg-loft-surface/80 text-foreground [background-image:none] hover:bg-[#1a1e26] hover:brightness-100"
+                "border border-white/12 bg-transparent text-foreground hover:bg-white/[0.04]"
             )}
             onClick={() => router.push(plan.href)}
           >
@@ -275,21 +274,21 @@ function PricingSection() {
     <section
       id="pricing"
       ref={sectionRef}
-      className="relative isolate scroll-mt-24 py-20 sm:py-28"
+      className="relative isolate scroll-mt-24 py-16 md:py-24"
     >
       <div className="mx-auto max-w-6xl px-5">
-        <div className="section-glass rounded-3xl px-5 py-10 sm:px-8 sm:py-12 lg:px-10">
+        <div className="section-glass flex flex-col gap-12 rounded-3xl px-5 py-10 sm:px-8 sm:py-12 lg:px-10">
           <SectionHeader
             align="center"
             title="Тарифы"
             subtitle="Start → Pro Lite → Pro → Business. Выберите период: 1 генерация = 1 ИИ-монета."
-            className="mb-8 sm:mb-10"
           />
 
+          <div className="flex flex-col gap-8">
           <div
             role="tablist"
             aria-label="Период подписки"
-            className="mx-auto mb-10 flex w-full max-w-xl flex-wrap justify-center gap-1 rounded-xl border border-white/8 bg-[#0c0e12]/70 p-1.5 backdrop-blur-md sm:mb-12"
+            className="mx-auto flex w-full max-w-xl flex-wrap justify-center gap-1 rounded-xl border border-white/10 bg-loft p-1.5"
           >
             {PERIODS.map((item) => {
               const active = period === item.id
@@ -310,7 +309,7 @@ function PricingSection() {
                   {active ? (
                     <motion.span
                       layoutId="pricing-period-pill"
-                      className="absolute inset-0 rounded-lg border border-emerald/35 bg-emerald/15 shadow-[0_0_20px_rgba(16,185,129,0.2)]"
+                      className="absolute inset-0 rounded-lg border border-white/12 bg-white/[0.06]"
                       transition={{ type: "spring", stiffness: 380, damping: 32 }}
                     />
                   ) : null}
@@ -344,6 +343,7 @@ function PricingSection() {
               ))}
             </motion.div>
           </AnimatePresence>
+          </div>
         </div>
       </div>
     </section>

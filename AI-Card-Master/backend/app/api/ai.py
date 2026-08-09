@@ -77,10 +77,11 @@ def _get_seo_text_service(
     "/generate-description",
     response_model=GenerateDescriptionResponse,
     status_code=status.HTTP_200_OK,
-    summary="Generate SEO title, benefits, and description (OpenAI)",
+    summary="Generate SEO offer, key tags, and product description (OpenAI)",
     description=(
-        "Generates an optimized card title, 4–6 infographic benefit bullets, "
-        "and a full SEO description for WB (≤5000 chars) or Ozon (≤10000 chars). "
+        "Generates a selling marketplace offer (title), 4–6 key tags/USPs, "
+        "and a detailed product SEO description (800–1200 chars) for WB/Ozon cards. "
+        "Copy focuses on the product, not visual design of the photo. "
         f"Charges {SEO_TEXT_COST_COINS} AI-coin via BillingService when billing is enabled. "
         "Requires OPENAI_API_KEY (or LLM_API_KEY)."
     ),

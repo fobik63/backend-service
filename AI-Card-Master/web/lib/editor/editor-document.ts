@@ -107,6 +107,7 @@ const editorDocumentSchema = z
     active_page_index: z.number().int().min(0).max(19),
     pack_size: z.number().int().min(1).max(20),
     product_preview_url: z.string().min(1).max(2048).nullish(),
+    background_preview_url: z.string().min(1).max(2048).nullish(),
     softbox: softboxSchema,
   })
   .strict()
@@ -413,6 +414,7 @@ export function createEditorDocument(params: {
   pages: CanvasLayer[][]
   activePageIndex: number
   productPreviewUrl: string | null
+  backgroundPreviewUrl?: string | null
   softbox: SoftboxSettings
 }): EditorDocumentDTO {
   const document: EditorDocumentDTO = {
@@ -424,6 +426,7 @@ export function createEditorDocument(params: {
     active_page_index: params.activePageIndex,
     pack_size: params.pages.length,
     product_preview_url: params.productPreviewUrl,
+    background_preview_url: params.backgroundPreviewUrl ?? null,
     softbox: {
       enabled: params.softbox.enabled,
       light_angle: params.softbox.lightAngle,
@@ -444,6 +447,7 @@ export function editorDocumentToState(document: EditorDocumentDTO): {
   pages: CanvasLayer[][]
   activePageIndex: number
   productPreviewUrl: string | null
+  backgroundPreviewUrl: string | null
   softbox: SoftboxSettings
 } {
   const parsed = parseEditorDocument(document)
@@ -451,6 +455,7 @@ export function editorDocumentToState(document: EditorDocumentDTO): {
     pages: parsed.pages.map((page) => page.layers.map(fromEditorLayer)),
     activePageIndex: parsed.active_page_index,
     productPreviewUrl: parsed.product_preview_url ?? null,
+    backgroundPreviewUrl: parsed.background_preview_url ?? null,
     softbox: {
       enabled: parsed.softbox.enabled,
       lightAngle: parsed.softbox.light_angle,
@@ -464,13 +469,14 @@ export function editorDocumentToState(document: EditorDocumentDTO): {
 
 export function layersToCanvasState(
   layers: CanvasLayer[],
-  productPreviewUrl: string | null
+  productPreviewUrl: string | null,
+  backgroundPreviewUrl: string | null = null
 ): CanvasStateDTO {
   return {
     width: CANVAS_WIDTH,
     height: CANVAS_HEIGHT,
     background_color: "#151719",
-    background_image_url: null,
+    background_image_url: backgroundPreviewUrl,
     layers: layers
       .map((layer) => toCanvasLayerDTO(layer, productPreviewUrl))
       .filter((layer): layer is CanvasLayerDTO => layer !== null),

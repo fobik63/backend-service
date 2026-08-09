@@ -1,4 +1,4 @@
-import axios, { type AxiosResponse, type InternalAxiosRequestConfig } from "axios";
+import axios, { type InternalAxiosRequestConfig } from "axios";
 import { toast } from "sonner";
 
 import {
@@ -11,13 +11,10 @@ import {
   DEFAULT_API_BASE_URL,
   resolveApiBaseUrl,
 } from "@/lib/constants/api";
+import { IS_MOCK } from "@/lib/constants/mock";
 import type {
   CanvasStateDTO,
-  ParsedProductDTO,
-  RelightCustomParams,
-  RelightProcessResponse,
   RemoveBgResponse,
-  RenderCanvasResult,
   SavedDesignDTO,
   SavedDesignListResponse,
   SaveDesignRequest,
@@ -93,61 +90,27 @@ apiClient.interceptors.response.use(
   },
 );
 
-/**
- * Composite CanvasStateDTO server-side → PNG/WebP blob + object URL.
- * Caller should `URL.revokeObjectURL(result.url)` when finished.
- */
-export async function renderCanvas(
-  state: CanvasStateDTO,
-): Promise<RenderCanvasResult> {
-  const response = await apiClient.post<Blob>("/canvas/render", state, {
-    responseType: "blob",
-    timeout: LONG_RUNNING_TIMEOUT_MS,
-  });
-
-  const blob = await resolveImageBlob(response);
-  return {
-    blob,
-    url: URL.createObjectURL(blob),
-  };
-}
-
-/**
- * Parametric softbox relighting (`StudioLightDTO` + `image_url`).
- * POST /relighting/custom
- */
-export async function processRelighting(
-  params: RelightCustomParams,
-): Promise<RelightProcessResponse> {
-  const { image_url, ...studio_light } = params;
-
-  const { data } = await apiClient.post<RelightProcessResponse>(
-    "/relighting/custom",
-    {
-      image_url,
-      studio_light,
-    },
-    { timeout: LONG_RUNNING_TIMEOUT_MS },
-  );
-
-  return data;
-}
-
-/** Parse Ozon / Wildberries product page → structured card data. */
-export async function parseProduct(url: string): Promise<ParsedProductDTO> {
-  const { data } = await apiClient.post<ParsedProductDTO>(
-    "/parser/parse",
-    { url },
-    { timeout: LONG_RUNNING_TIMEOUT_MS },
-  );
-  return data;
-}
-
 /** Natural-language prompt → validated CanvasStateDTO JSON. */
 export async function generateByPrompt(
   prompt: string,
   baseCanvas?: CanvasStateDTO,
 ): Promise<CanvasStateDTO> {
+  if (IS_MOCK) {
+    const {
+      delay,
+      getMockGenerateLayers,
+      MOCK_GENERATE_DELAY_MS,
+      MOCK_PRODUCT_IMAGE,
+    } = await import("@/lib/constants/mock")
+    const { layersToCanvasState } = await import(
+      "@/lib/editor/editor-document"
+    )
+    await delay(MOCK_GENERATE_DELAY_MS)
+    void prompt
+    void baseCanvas
+    return layersToCanvasState(getMockGenerateLayers(), MOCK_PRODUCT_IMAGE)
+  }
+
   const { data } = await apiClient.post<CanvasStateDTO>(
     "/templates/prompt-to-json",
     {
@@ -160,15 +123,85 @@ export async function generateByPrompt(
 }
 
 export async function listDesigns(): Promise<SavedDesignListResponse> {
+  if (IS_MOCK) {
+    const { MOCK_PROJECTS } = await import("@/lib/constants/mock-projects")
+    const items: SavedDesignDTO[] = MOCK_PROJECTS.map((project) => ({
+      id: project.id,
+      title: project.title,
+      preview_url: project.previewImage,
+      canvas: {
+        width: 1080,
+        height: 1440,
+        background_color: "#151719",
+        layers: [],
+      },
+      editor_document: project.editorDocument ?? null,
+      updated_at: project.createdAt,
+    }))
+    return { items, total: items.length }
+  }
+
   const { data } =
     await apiClient.get<SavedDesignListResponse>("/designs");
   return data;
 }
 
+/** In-memory mock designs for save/get within one browser session. */
+const mockDesignMemory = new Map<string, SavedDesignDTO>()
+
 export async function getDesign(
   designId: string,
   signal?: AbortSignal,
 ): Promise<SavedDesignDTO> {
+  if (IS_MOCK) {
+    if (signal?.aborted) {
+      throw new DOMException("Aborted", "AbortError")
+    }
+    const { delay, MOCK_CARD_IMAGE, MOCK_PRODUCT_IMAGE, getMockGenerateLayers } =
+      await import("@/lib/constants/mock")
+    const { MOCK_PROJECTS } = await import("@/lib/constants/mock-projects")
+    const { layersToCanvasState, createEditorDocument } = await import(
+      "@/lib/editor/editor-document"
+    )
+    await delay(180)
+    if (signal?.aborted) {
+      throw new DOMException("Aborted", "AbortError")
+    }
+
+    const cached = mockDesignMemory.get(designId)
+    if (cached) return structuredClone(cached)
+
+    const project = MOCK_PROJECTS.find((p) => p.id === designId)
+    const layers = getMockGenerateLayers()
+    const productUrl =
+      project?.productImage ?? project?.previewImage ?? MOCK_PRODUCT_IMAGE
+    const backgroundUrl = project?.previewImage ?? MOCK_CARD_IMAGE
+    const canvas = layersToCanvasState(layers, productUrl, backgroundUrl)
+    const softbox = {
+      enabled: true,
+      lightAngle: 45,
+      lightElevation: 55,
+      colorTempK: 5500,
+      intensity: 100,
+      softboxDiffusion: 65,
+    }
+    const editor_document = createEditorDocument({
+      pages: [layers],
+      activePageIndex: 0,
+      productPreviewUrl: productUrl,
+      backgroundPreviewUrl: backgroundUrl,
+      softbox,
+    })
+    return {
+      id: designId,
+      title: project?.title ?? `Mock design ${designId}`,
+      preview_url: productUrl,
+      canvas,
+      editor_document,
+      updated_at: project?.createdAt ?? new Date().toISOString(),
+    }
+  }
+
   const { data } = await apiClient.get<SavedDesignDTO>(
     `/designs/${encodeURIComponent(designId)}`,
     { signal },
@@ -179,11 +212,35 @@ export async function getDesign(
 export async function saveDesign(
   payload: SaveDesignRequest,
 ): Promise<SavedDesignDTO> {
+  if (IS_MOCK) {
+    const { delay } = await import("@/lib/constants/mock")
+    await delay(220)
+    const id =
+      payload.id && /^[0-9a-f-]{36}$/i.test(payload.id)
+        ? payload.id
+        : crypto.randomUUID()
+    const saved: SavedDesignDTO = {
+      id,
+      title: payload.title,
+      template_id: payload.template_id ?? null,
+      preview_url: payload.preview_url ?? null,
+      canvas: payload.canvas,
+      editor_document: payload.editor_document ?? null,
+      updated_at: new Date().toISOString(),
+    }
+    mockDesignMemory.set(id, structuredClone(saved))
+    return saved
+  }
+
   const { data } = await apiClient.post<SavedDesignDTO>("/designs", payload);
   return data;
 }
 
 export async function deleteDesign(designId: string): Promise<void> {
+  if (IS_MOCK) {
+    void designId
+    return
+  }
   await apiClient.delete(`/designs/${encodeURIComponent(designId)}`);
 }
 
@@ -196,6 +253,26 @@ export async function removeBackground(params: {
   imageUrl?: string;
   idempotencyKey?: string;
 }): Promise<RemoveBgResponse> {
+  if (IS_MOCK) {
+    const { delay, MOCK_PRODUCT_IMAGE } = await import("@/lib/constants/mock")
+    await delay(900)
+    void params.idempotencyKey
+    const source =
+      params.imageUrl?.trim() ||
+      (params.file ? URL.createObjectURL(params.file) : MOCK_PRODUCT_IMAGE)
+    return {
+      success: true,
+      cdn_url: source.startsWith("blob:") ? source : MOCK_PRODUCT_IMAGE,
+      object_key: "mock/remove-bg.png",
+      coins_charged: 0,
+      new_balance: 999,
+      width: 1134,
+      height: 2638,
+      content_type: "image/png",
+      cost_coins: 0,
+    }
+  }
+
   const form = new FormData();
   if (params.file) {
     form.append("file", params.file);
@@ -236,33 +313,4 @@ export async function removeBackground(params: {
   );
 
   return data;
-}
-
-async function resolveImageBlob(
-  response: AxiosResponse<Blob>,
-): Promise<Blob> {
-  const contentType = String(response.headers["content-type"] ?? "");
-
-  if (contentType.includes("application/json")) {
-    const text = await response.data.text();
-    const payload = JSON.parse(text) as {
-      url?: string;
-      result_url?: string;
-      presigned_url?: string;
-    };
-    const imageUrl =
-      payload.url ?? payload.result_url ?? payload.presigned_url ?? null;
-    if (!imageUrl) {
-      throw new Error("Canvas render response JSON has no image URL.");
-    }
-    const imageResponse = await fetch(imageUrl);
-    if (!imageResponse.ok) {
-      throw new Error(
-        `Failed to download rendered canvas (${imageResponse.status}).`,
-      );
-    }
-    return imageResponse.blob();
-  }
-
-  return response.data;
 }

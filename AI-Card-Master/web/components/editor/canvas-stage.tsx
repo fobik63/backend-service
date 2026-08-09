@@ -2,9 +2,13 @@
 
 import { useEffect, useRef, useState } from "react"
 
-import { CanvasToolbar } from "@/components/editor/canvas-toolbar"
+import {
+  CanvasPhotoDropzone,
+  CanvasToolbar,
+} from "@/components/editor/canvas-toolbar"
 import { EditorCanvas } from "@/components/editor/canvas"
 import { EditorPageStrip } from "@/components/editor/page-strip"
+import { ErrorBoundary } from "@/components/error-boundary"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
@@ -39,9 +43,12 @@ function EditorCanvasStage() {
   const setZoomMode = useEditorStore((s) => s.setZoomMode)
   const softbox = useEditorStore((s) => s.softbox)
   const activePageIndex = useEditorStore((s) => s.activePageIndex)
+  const productPreviewUrl = useEditorStore((s) => s.productPreviewUrl)
+  const busyKind = useEditorStore((s) => s.busyKind)
 
   const viewportRef = useRef<HTMLDivElement>(null)
   const [fitScale, setFitScale] = useState(0.35)
+  const [canvasMountKey, setCanvasMountKey] = useState(0)
 
   useEffect(() => {
     const el = viewportRef.current
@@ -70,57 +77,77 @@ function EditorCanvasStage() {
   }
 
   const scale = resolveZoomScale(zoomMode, fitScale)
+  const showDropzone =
+    !productPreviewUrl &&
+    busyKind !== "loading-image" &&
+    busyKind !== "generating" &&
+    busyKind !== "removing-bg"
 
   return (
     <section
-      className="relative flex h-full min-w-0 flex-1 flex-col self-stretch bg-transparent"
+      className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col self-stretch bg-transparent"
       aria-label={t("editor.canvasArea")}
     >
-      <div className="flex h-10 shrink-0 items-center justify-between border-b border-white/8 px-3">
-        <p className="text-xs text-muted-foreground">
-          {t("editor.canvas")}{" "}
-          <span className="font-mono text-foreground/80">
-            {CANVAS_WIDTH}×{CANVAS_HEIGHT}
-          </span>
-          <span className="ml-2 text-muted-foreground/80">
-            · {t("editor.pageNShort", { n: String(activePageIndex + 1) })}
-          </span>
-        </p>
-        <div
-          className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-loft-surface/80 p-0.5"
-          role="group"
-          aria-label={t("editor.zoom")}
-        >
-          {ZOOM_OPTIONS.map((opt) => (
-            <Button
-              key={opt.mode}
-              type="button"
-              size="xs"
-              variant={zoomMode === opt.mode ? "secondary" : "ghost"}
-              className={cn(
-                "min-w-11",
-                zoomMode === opt.mode && "bg-emerald/20 text-emerald"
-              )}
-              onClick={() => setZoomMode(opt.mode)}
-            >
-              {opt.label}
-            </Button>
-          ))}
+      <div className="flex shrink-0 flex-col gap-2 border-b border-white/8 px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+          <p className="text-xs text-muted-foreground">
+            {t("editor.canvas")}{" "}
+            <span className="font-mono text-foreground/80">
+              {CANVAS_WIDTH}×{CANVAS_HEIGHT}
+            </span>
+            <span className="ml-2 text-muted-foreground/80">
+              · {t("editor.pageNShort", { n: String(activePageIndex + 1) })}
+            </span>
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+          <CanvasToolbar className="min-w-0" />
+          <div
+            className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-loft-surface p-0.5"
+            role="group"
+            aria-label={t("editor.zoom")}
+          >
+            {ZOOM_OPTIONS.map((opt) => (
+              <Button
+                key={opt.mode}
+                type="button"
+                size="xs"
+                variant={zoomMode === opt.mode ? "secondary" : "ghost"}
+                className={cn(
+                  "min-w-11",
+                  zoomMode === opt.mode && "bg-white/10 text-foreground"
+                )}
+                onClick={() => setZoomMode(opt.mode)}
+              >
+                {opt.label}
+              </Button>
+            ))}
+          </div>
         </div>
       </div>
 
       <div className="relative min-h-0 flex-1">
-        <CanvasToolbar />
         <div
           ref={viewportRef}
-          className="flex h-full items-center justify-center overflow-auto p-4"
+          className="flex h-full items-center justify-center overflow-auto p-3 sm:p-4"
         >
-          <EditorCanvas
-            key={`page-${activePageIndex}`}
-            scale={scale}
-            softbox={softbox}
-          />
+          <ErrorBoundary
+            key={`canvas-boundary-${activePageIndex}-${canvasMountKey}`}
+            resetKey={`${activePageIndex}-${canvasMountKey}`}
+            title="Ошибка элемента холста"
+            description="Один из слоёв не отрисовался. Проект в памяти сохранён — холст можно перезапустить без потери данных."
+            className="min-h-[240px] w-full max-w-full"
+            onReset={() => setCanvasMountKey((k) => k + 1)}
+          >
+            <EditorCanvas
+              key={`page-${activePageIndex}-${canvasMountKey}`}
+              scale={scale}
+              softbox={softbox}
+            />
+          </ErrorBoundary>
         </div>
+        {showDropzone ? <CanvasPhotoDropzone /> : null}
       </div>
 
       <EditorPageStrip />

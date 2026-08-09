@@ -5,6 +5,7 @@ import {
   CANVAS_HEIGHT,
   CANVAS_WIDTH,
 } from "@/lib/constants/mock-editor"
+import { captureFabricPngBytes } from "@/lib/editor/fabric-export"
 import {
   assertValidPngBlob,
   dataUrlToBlob,
@@ -226,6 +227,8 @@ async function waitForImages(root: HTMLElement): Promise<void> {
 function shouldIncludeNode(node: HTMLElement): boolean {
   if (node.dataset?.exportIgnore === "true") return false
   if (node.dataset?.exportChrome === "true") return false
+  // Fabric draws selection handles on the upper canvas — never export it.
+  if (node.classList?.contains("upper-canvas")) return false
   return true
 }
 
@@ -288,6 +291,18 @@ async function captureElementToPngBytes(
 }
 
 async function captureLiveCanvas(canvasEl: HTMLElement): Promise<Uint8Array> {
+  // Prefer native Fabric composite (all 3 layers) when the engine is mounted.
+  if (canvasEl.dataset.fabricEngine === "true") {
+    const fabricBytes = await captureFabricPngBytes({
+      width: CANVAS_WIDTH,
+      height: CANVAS_HEIGHT,
+      label: "native",
+    })
+    if (fabricBytes && fabricBytes.byteLength > 2048) {
+      return fabricBytes
+    }
+  }
+
   const prevWidth = canvasEl.style.width
   const prevHeight = canvasEl.style.height
   const prevTransform = canvasEl.style.transform
@@ -642,9 +657,8 @@ async function renderInfographicSlide(args: {
 
 /**
  * Build a marketplace card pack ZIP (1–20 PNGs) and download it.
- * Prefer live per-page captures when `capturePageAtIndex` is set;
- * otherwise main slide uses the live canvas and remaining slides are
- * offscreen infographic renders.
+ * Prefer live per-page Fabric captures when `capturePageAtIndex` is set;
+ * otherwise fall back to page DOM snapshots / offscreen infographic renders.
  */
 async function downloadCardPackZip(options: BuildCardPackOptions): Promise<void> {
   const packSize = clampPackSize(options.packSize)
@@ -671,32 +685,35 @@ async function downloadCardPackZip(options: BuildCardPackOptions): Promise<void>
     const slide = slides[index]!
     let pngBytes: Uint8Array
 
-    const snapshotLayers = options.pages?.[index]
-    if (snapshotLayers) {
-      pngBytes = await renderEditorPageSnapshot({
-        layers: snapshotLayers,
-        imageUrl,
-        softbox: options.softbox,
-      })
-    } else if (options.capturePageAtIndex) {
+    // Live Fabric capture first — exact 1080×1440 composite (no selection chrome).
+    if (options.capturePageAtIndex) {
       pngBytes = await options.capturePageAtIndex(index)
-    } else if (slide.kind === "main" && options.canvasEl) {
-      pngBytes = await captureLiveCanvas(options.canvasEl)
-    } else if (slide.kind === "main") {
-      // Fallback main card when canvas is unavailable (e.g. projects grid).
-      pngBytes = await renderInfographicSlide({
-        kind: "cta",
-        title,
-        imageUrl,
-        labels,
-      })
     } else {
-      pngBytes = await renderInfographicSlide({
-        kind: slide.kind,
-        title,
-        imageUrl,
-        labels,
-      })
+      const snapshotLayers = options.pages?.[index]
+      if (snapshotLayers) {
+        pngBytes = await renderEditorPageSnapshot({
+          layers: snapshotLayers,
+          imageUrl,
+          softbox: options.softbox,
+        })
+      } else if (slide.kind === "main" && options.canvasEl) {
+        pngBytes = await captureLiveCanvas(options.canvasEl)
+      } else if (slide.kind === "main") {
+        // Fallback main card when canvas is unavailable (e.g. projects grid).
+        pngBytes = await renderInfographicSlide({
+          kind: "cta",
+          title,
+          imageUrl,
+          labels,
+        })
+      } else {
+        pngBytes = await renderInfographicSlide({
+          kind: slide.kind,
+          title,
+          imageUrl,
+          labels,
+        })
+      }
     }
 
     // Pass raw bytes (not Blob) so JSZip always writes binary PNG correctly.
@@ -738,12 +755,58 @@ async function downloadCurrentCanvasImage(options: {
   filename: string
   format?: "png" | "webp"
 }): Promise<void> {
+  const format = options.format ?? "png"
+
+  // Prefer Fabric native export (exact layer composite at 1080×1440).
+  const fabricBytes = await captureFabricPngBytes({
+    width: CANVAS_WIDTH,
+    height: CANVAS_HEIGHT,
+    label: "1080×1440",
+  })
+  if (fabricBytes && fabricBytes.byteLength > 2048) {
+    const pngBlob = new Blob([Uint8Array.from(fabricBytes)], {
+      type: "image/png",
+    })
+    if (format === "png") {
+      downloadBlob(
+        pngBlob,
+        options.filename.endsWith(".png")
+          ? options.filename
+          : `${options.filename}.png`
+      )
+      return
+    }
+    try {
+      const bitmap = await createImageBitmap(pngBlob)
+      const canvas = document.createElement("canvas")
+      canvas.width = bitmap.width
+      canvas.height = bitmap.height
+      const ctx = canvas.getContext("2d")
+      if (!ctx) throw new Error("2D context unavailable")
+      ctx.drawImage(bitmap, 0, 0)
+      bitmap.close()
+      const webpBlob = await new Promise<Blob | null>((resolve) => {
+        canvas.toBlob((blob) => resolve(blob), "image/webp", 0.92)
+      })
+      if (!webpBlob || webpBlob.size < 256) throw new Error("WebP encode failed")
+      downloadBlob(
+        webpBlob,
+        options.filename.replace(/\.png$/i, "").endsWith(".webp")
+          ? options.filename
+          : `${options.filename.replace(/\.png$/i, "")}.webp`
+      )
+      return
+    } catch {
+      downloadBlob(pngBlob, options.filename.replace(/\.webp$/i, ".png"))
+      return
+    }
+  }
+
   const canvasEl = options.canvasEl ?? findEditorExportCanvas()
   if (!canvasEl) {
     throw new Error("Editor canvas not found")
   }
 
-  const format = options.format ?? "png"
   const pngBytes = await captureLiveCanvas(canvasEl)
   const pngBlob = new Blob([Uint8Array.from(pngBytes)], { type: "image/png" })
 

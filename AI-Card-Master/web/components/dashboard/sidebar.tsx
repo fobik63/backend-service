@@ -73,7 +73,7 @@ function Sidebar({
   return (
     <aside
       className={cn(
-        "flex h-full w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground",
+        "flex h-full w-64 shrink-0 flex-col border-r border-zinc-800/80 bg-zinc-900/60 text-sidebar-foreground backdrop-blur-xl",
         className
       )}
       aria-label={t("nav.ariaSidebar")}
@@ -138,7 +138,7 @@ function Sidebar({
             aria-label={t("nav.coins")}
           >
             <div
-              className="h-full rounded-full bg-gradient-to-r from-emerald to-emerald-deep"
+              className="h-full rounded-full bg-foreground"
               style={{
                 width: `${Math.min(
                   100,

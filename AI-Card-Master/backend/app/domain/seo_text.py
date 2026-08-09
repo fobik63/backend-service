@@ -13,11 +13,15 @@ OZON_DESCRIPTION_MAX_CHARS = 10_000
 TITLE_MAX_CHARS = 180
 BENEFITS_MIN = 4
 BENEFITS_MAX = 6
+DESCRIPTION_TARGET_MIN_CHARS = 800
+DESCRIPTION_TARGET_MAX_CHARS = 1200
 
 SEO_SYSTEM_PROMPT = (
-    "Ты профессиональный SEO-копирайтер для маркетплейсов WB и Ozon. "
-    "Составляй продающие текста с ключевыми словами, строго соблюдая лимиты "
-    "символов (для WB до 5000 символов, для Ozon до 10000)"
+    "Ты профессиональный e-commerce копирайтер. "
+    "Напиши подробное продающее SEO-описание товара "
+    f"(от {DESCRIPTION_TARGET_MIN_CHARS} до {DESCRIPTION_TARGET_MAX_CHARS} символов) "
+    "с ключевыми словами, преимуществами, характеристиками и закрытием болей покупателя. "
+    "Не описывай визуальные элементы фото."
 )
 
 
@@ -90,7 +94,11 @@ class SeoTextContent(DomainModel):
         min_length=BENEFITS_MIN,
         max_length=BENEFITS_MAX,
     )
-    description: str = Field(..., min_length=50, max_length=OZON_DESCRIPTION_MAX_CHARS)
+    description: str = Field(
+        ...,
+        min_length=DESCRIPTION_TARGET_MIN_CHARS,
+        max_length=OZON_DESCRIPTION_MAX_CHARS,
+    )
 
     @field_validator("benefits", mode="before")
     @classmethod

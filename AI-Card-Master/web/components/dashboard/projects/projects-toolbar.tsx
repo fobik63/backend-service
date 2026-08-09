@@ -42,14 +42,14 @@ function ProjectsToolbar({
             value={query}
             onChange={(e) => onQueryChange(e.target.value)}
             placeholder="Поиск по названию…"
-            className="h-10 bg-loft-surface/60 pl-9 md:text-sm"
+            className="h-10 bg-loft-surface pl-9 md:text-sm"
           />
         </label>
 
         <div
           role="group"
           aria-label="Фильтр по маркетплейсу"
-          className="flex shrink-0 items-center gap-1 rounded-lg border border-white/10 bg-loft-surface/50 p-1"
+          className="flex shrink-0 items-center gap-1 rounded-lg border border-white/10 bg-loft-surface p-1"
         >
           {MARKETPLACE_FILTERS.map((filter) => {
             const active = marketplace === filter.value
@@ -64,7 +64,7 @@ function ProjectsToolbar({
                 className={cn(
                   "h-8 min-w-12 px-3",
                   active
-                    ? "bg-emerald/15 text-emerald hover:bg-emerald/20 hover:text-emerald"
+                    ? "bg-white/10 text-foreground hover:bg-white/12 hover:text-foreground"
                     : "text-muted-foreground hover:text-foreground"
                 )}
               >
@@ -79,7 +79,7 @@ function ProjectsToolbar({
         href="/editor"
         className={cn(
           buttonVariants({ variant: "default", size: "lg" }),
-          "h-10 gap-2 bg-gradient-to-br from-emerald to-emerald-deep text-primary-foreground shadow-[0_0_18px_rgba(16,185,129,0.22)] hover:brightness-110"
+          "h-10 gap-2"
         )}
       >
         <Plus className="size-4" aria-hidden />

@@ -31,17 +31,15 @@ function MarketplaceOptionCard({
       aria-checked={selected}
       aria-label={title}
       onClick={onSelect}
-      whileHover={{ y: -2 }}
+      whileHover={{ y: -1 }}
       whileTap={{ scale: 0.985 }}
       transition={{ type: "spring", stiffness: 420, damping: 28 }}
       className={cn(
-        "group relative flex w-full flex-col items-stretch gap-4 rounded-2xl border p-5 text-left sm:p-6",
-        "bg-[rgba(22,24,30,0.75)] backdrop-blur-md",
-        "shadow-[0_8px_30px_rgba(0,0,0,0.25)]",
-        "outline-none transition-[border-color,box-shadow,background-color] duration-200",
-        "focus-visible:ring-2 focus-visible:ring-emerald/50 focus-visible:ring-offset-2 focus-visible:ring-offset-loft",
+        "group relative flex w-full flex-col items-stretch gap-4 rounded-xl border p-5 text-left sm:p-6",
+        "bg-loft-surface outline-none transition-[border-color,background-color] duration-200",
+        "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-loft",
         selected
-          ? "border-emerald/60 bg-emerald/5 shadow-[0_0_0_1px_rgba(16,185,129,0.25),0_12px_36px_rgba(0,0,0,0.35)]"
+          ? "border-white/30 bg-white/[0.04]"
           : "border-white/10 hover:border-white/20"
       )}
     >
@@ -49,7 +47,7 @@ function MarketplaceOptionCard({
         className={cn(
           "absolute right-4 top-4 flex size-6 items-center justify-center rounded-md border transition-colors sm:right-5 sm:top-5",
           selected
-            ? "border-emerald bg-emerald text-primary-foreground"
+            ? "border-foreground bg-foreground text-primary-foreground"
             : "border-white/20 bg-white/5 text-transparent group-hover:border-white/35"
         )}
         aria-hidden

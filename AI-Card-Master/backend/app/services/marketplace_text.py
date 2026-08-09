@@ -258,8 +258,10 @@ class MarketplaceTextService:
 
 
 _SYSTEM_PROMPT = harden_system_prompt(
-    "You are a senior Russian marketplace SEO copywriter for Wildberries and Ozon. "
-    "Analyze product card images and produce factual, conversion-focused copy. "
+    "Ты профессиональный e-commerce копирайтер. "
+    "Напиши подробное продающее SEO-описание товара (от 800 до 1200 символов) "
+    "с ключевыми словами, преимуществами, характеристиками и закрытием болей покупателя. "
+    "Не описывай визуальные элементы фото. "
     "Return only valid JSON without markdown."
 )
 
@@ -283,15 +285,20 @@ def _build_user_prompt(
     fenced_category = fence_untrusted_text(category, label="product_category")
     fenced_slides = fence_untrusted_text(slide_context, label="slide_context")
     prompt = (
-        "Проанализируй сгенерированные изображения товара и подготовь JSON для карточки "
-        "WB/Ozon. Структура строго такая: "
+        "Подготовь продающий SEO-текст О ТОВАРЕ для карточки Wildberries / Ozon. "
+        "Не описывай дизайн карточки, композицию, фон, шрифты, плашки и другие "
+        "визуальные элементы фото/инфографики — пиши про пользу, характеристики "
+        "и сценарии использования товара. "
+        "Структура строго такая: "
         '{"title": "...", "description": "...", "characteristics": ["...", "..."]}. '
-        "Требования: title - SEO-заголовок до 180 символов, оптимизированный под "
-        "поисковые алгоритмы Wildberries/Ozon; description - продающий текст на русском "
-        "языке минимум 1000 символов с LSI-ключами, без выдуманных фактов, сертификатов, "
-        "гарантий и точных материалов, если их не видно; characteristics - 3-12 коротких "
-        "ключевых преимуществ товара. Не используй emoji, markdown и HTML. "
-        f"Категория товара: {fenced_category}. Контекст слайдов: {fenced_slides}."
+        "Требования: title — оффер/SEO-заголовок до 180 символов под поиск WB/Ozon; "
+        "description — подробное продающее SEO-описание на русском от 800 до 1200 "
+        "символов с ключевыми словами, преимуществами, характеристиками и закрытием "
+        "болей покупателя, без выдуманных фактов, сертификатов и гарантий; "
+        "characteristics — 3-12 коротких ключевых тегов/УТП товара. "
+        "Не используй emoji, markdown и HTML. "
+        f"Категория товара: {fenced_category}. Контекст слайдов (только как "
+        f"подсказка о товаре, не как описание картинки): {fenced_slides}."
     )
     return mix_claude_user_prompt(prompt, brand_dna_context)
 

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Protocol
 from uuid import UUID
 
 from app.application.ports.claude_reasoning import ClaudeStageCachePort
@@ -30,6 +31,7 @@ from app.domain.competitor_audit import (
     CompetitorAuditTransientError,
     CompetitorCardDeepAnalysis,
     CompetitorCardScrapeResult,
+    CompetitorMarketplace,
     assemble_deep_analysis_bundle,
     attach_cross_check_to_card,
     build_insufficient_card_analysis,
@@ -38,6 +40,17 @@ from app.domain.competitor_audit import (
     dump_deep_analysis_bundle,
     parse_competitor_product_link,
     redis_competitor_audit_key,
+)
+from app.domain.eye_of_god_spy import (
+    CompetitorDiscoveryHit,
+    EyeOfGodSpyDashboard,
+    EyeOfGodSpyEnqueueRequest,
+    build_eye_of_god_dashboard,
+)
+from app.domain.product_card_parser import (
+    ProductCardPlatform,
+    ProductCardValidationError,
+    resolve_product_card_input,
 )
 from app.domain.semantic_filter import (
     build_card_snapshot,
@@ -80,6 +93,22 @@ class CompetitorAuditNotFoundError(CompetitorAuditError):
     """Job was not found for the user."""
 
 
+class CompetitorDiscoveryPort(Protocol):
+    """Discover ranked similar marketplace products for Eye of God spy."""
+
+    async def discover_by_query(
+        self,
+        *,
+        query: str,
+        exclude_article: str | None = None,
+        limit: int = 10,
+    ) -> list[CompetitorDiscoveryHit]:
+        """Return TOP-N competitor hits excluding the seed article."""
+
+    async def aclose(self) -> None:
+        """Release HTTP resources."""
+
+
 class CompetitorAuditService:
     """Coordinate link validation → Celery deep scrape → Claude deep analysis."""
 
@@ -99,6 +128,7 @@ class CompetitorAuditService:
         token_governor: TokenGovernorPort | None = None,
         snapshot_store: CompetitorSnapshotStorePort | None = None,
         snapshot_ttl_seconds: int = 604_800,
+        discovery: CompetitorDiscoveryPort | None = None,
     ) -> None:
         if redis_raw_ttl_seconds <= 0:
             raise CompetitorAuditValidationError(
@@ -119,6 +149,8 @@ class CompetitorAuditService:
         self._token_governor = token_governor
         self._snapshot_store = snapshot_store
         self._snapshot_ttl_seconds = max(0, snapshot_ttl_seconds)
+        self._discovery = discovery
+
     async def enqueue_audit(
         self,
         *,
@@ -150,6 +182,264 @@ class CompetitorAuditService:
             idempotency_key=idempotency_key.strip() if idempotency_key else None,
         )
         return job, False
+
+    async def enqueue_eye_of_god_spy(
+        self,
+        *,
+        user_id: UUID,
+        request: EyeOfGodSpyEnqueueRequest,
+        idempotency_key: str | None = None,
+    ) -> tuple[CompetitorAuditJobView, bool, list[CompetitorDiscoveryHit], str | None]:
+        """Resolve article → discover TOP-N competitors → enqueue deep audit.
+
+        Returns (job, idempotent_replay, discovery_hits, seed_title).
+        """
+
+        if idempotency_key:
+            existing = await self._repository.find_idempotent_job(
+                user_id=user_id,
+                idempotency_key=idempotency_key.strip(),
+            )
+            if existing is not None:
+                return existing, True, [], None
+
+        platform = ProductCardPlatform(request.platform)
+        try:
+            seed_link = resolve_product_card_input(request.input, platform)
+        except ProductCardValidationError as exc:
+            raise CompetitorAuditValidationError(str(exc)) from exc
+
+        notes: list[str] = []
+        seed_title: str | None = None
+        try:
+            seed_card = await self._scraper.scrape_card(seed_link)
+            seed_title = seed_card.title
+        except (
+            ParserTransportError,
+            ParserHttpError,
+            ParserSchemaError,
+            CompetitorAuditTransientError,
+            CompetitorAuditPermanentError,
+        ) as exc:
+            notes.append(f"seed_scrape_degraded: {exc}")
+            logger.warning(
+                "Eye of God seed scrape degraded article=%s: %s",
+                seed_link.article,
+                exc,
+            )
+
+        query = (seed_title or "").strip()
+        if len(query) < 3:
+            # Fall back to raw digits-free fragments from the user input URL path.
+            query = re.sub(r"\d+", " ", request.input)
+            query = re.sub(r"[^\w\sА-Яа-яЁё-]", " ", query, flags=re.UNICODE)
+            query = re.sub(r"\s+", " ", query).strip()
+        if len(query) < 3:
+            raise CompetitorAuditValidationError(
+                "Не удалось определить поисковый запрос для ТОП конкурентов. "
+                "Укажите ссылку на карточку с названием или артикул WB."
+            )
+
+        discovery = self._discovery
+        hits: list[CompetitorDiscoveryHit] = []
+        if (
+            discovery is not None
+            and seed_link.marketplace is CompetitorMarketplace.WILDBERRIES
+        ):
+            try:
+                hits = await discovery.discover_by_query(
+                    query=query,
+                    exclude_article=seed_link.article,
+                    limit=request.limit,
+                )
+            except (ParserTransportError, ParserHttpError, ParserSchemaError) as exc:
+                notes.append(f"discovery_failed: {exc}")
+                logger.warning("Eye of God discovery failed: %s", exc)
+
+        if not hits:
+            # Always include the seed card so the spy dashboard still works.
+            hits = [
+                CompetitorDiscoveryHit(
+                    rank=1,
+                    article=seed_link.article,
+                    url=seed_link.url,
+                    marketplace=seed_link.marketplace,
+                    title=seed_title,
+                )
+            ]
+            notes.append(
+                "discovery_fallback_seed_only: анализируем исходный артикул "
+                "(поиск ТОП выдачи недоступен или пуст)."
+            )
+        elif seed_link.article not in {hit.article for hit in hits}:
+            # Keep seed in the batch (rank 0 → renumber) when discovery succeeded.
+            seed_hit = CompetitorDiscoveryHit(
+                rank=1,
+                article=seed_link.article,
+                url=seed_link.url,
+                marketplace=seed_link.marketplace,
+                title=seed_title,
+            )
+            renumbered = [seed_hit]
+            for hit in hits:
+                if len(renumbered) >= request.limit:
+                    break
+                renumbered.append(
+                    CompetitorDiscoveryHit(
+                        rank=len(renumbered) + 1,
+                        article=hit.article,
+                        url=hit.url,
+                        marketplace=hit.marketplace,
+                        title=hit.title,
+                        brand=hit.brand,
+                        price_rub=hit.price_rub,
+                        rating=hit.rating,
+                        feedbacks=hit.feedbacks,
+                    )
+                )
+            hits = renumbered
+            notes.append("seed_card_included_in_top_batch")
+
+        links = [hit.url for hit in hits[: request.limit]]
+        job = await self._repository.create_job(
+            user_id=user_id,
+            links=links,
+            idempotency_key=idempotency_key.strip() if idempotency_key else None,
+        )
+
+        # Persist discovery metadata beside scrape results via Redis stage cache.
+        await self._stage_cache.set(
+            redis_competitor_audit_key(job.id, "eye_of_god_meta"),
+            {
+                "seed_article": seed_link.article,
+                "seed_marketplace": seed_link.marketplace.value,
+                "seed_title": seed_title,
+                "query": query,
+                "notes": notes,
+                "discovery": [hit.model_dump(mode="json") for hit in hits],
+            },
+            self._redis_raw_ttl_seconds,
+        )
+        return job, False, hits, seed_title
+
+    def build_spy_dashboard(self, job: CompetitorAuditJobView) -> EyeOfGodSpyDashboard | None:
+        """Build Eye of God dashboard from completed scrape + analysis payloads."""
+
+        if not job.result_payload and not job.analysis_payload:
+            return None
+
+        scrape_cards: list[CompetitorCardScrapeResult] = []
+        if isinstance(job.result_payload, dict):
+            for raw in job.result_payload.get("cards") or []:
+                if isinstance(raw, dict):
+                    try:
+                        scrape_cards.append(CompetitorCardScrapeResult.model_validate(raw))
+                    except Exception:  # noqa: BLE001 — skip malformed card rows
+                        continue
+
+        analysis_cards: list[CompetitorCardDeepAnalysis] = []
+        if isinstance(job.analysis_payload, dict):
+            for raw in job.analysis_payload.get("cards") or []:
+                if isinstance(raw, dict):
+                    try:
+                        analysis_cards.append(
+                            CompetitorCardDeepAnalysis.model_validate(raw)
+                        )
+                    except Exception:  # noqa: BLE001
+                        continue
+
+        seed_article = ""
+        seed_marketplace: CompetitorMarketplace | str = CompetitorMarketplace.WILDBERRIES
+        seed_title: str | None = None
+        discovery: list[CompetitorDiscoveryHit] = []
+        notes: list[str] = []
+
+        # Prefer live Redis meta; fall back to first link / first card.
+        # Stage cache is async — callers that need meta should use
+        # ``build_spy_dashboard_async``. This sync helper is for tests.
+        if job.links_payload:
+            try:
+                seed_link = parse_competitor_product_link(job.links_payload[0])
+                seed_article = seed_link.article
+                seed_marketplace = seed_link.marketplace
+            except ValueError:
+                seed_article = scrape_cards[0].article if scrape_cards else "unknown"
+
+        if scrape_cards and not seed_title:
+            seed_title = scrape_cards[0].title
+        if not seed_article and scrape_cards:
+            seed_article = scrape_cards[0].article
+            seed_marketplace = scrape_cards[0].marketplace
+
+        if not seed_article:
+            return None
+
+        return build_eye_of_god_dashboard(
+            seed_article=seed_article,
+            seed_marketplace=seed_marketplace,
+            seed_title=seed_title,
+            discovery=discovery,
+            scrape_cards=scrape_cards,
+            analysis_cards=analysis_cards,
+            notes=notes,
+        )
+
+    async def build_spy_dashboard_async(
+        self, job: CompetitorAuditJobView
+    ) -> EyeOfGodSpyDashboard | None:
+        """Async dashboard builder that hydrates discovery meta from Redis."""
+
+        meta = await self._stage_cache.get(
+            redis_competitor_audit_key(job.id, "eye_of_god_meta")
+        )
+        dashboard = self.build_spy_dashboard(job)
+        if dashboard is None:
+            return None
+        if not isinstance(meta, dict):
+            return dashboard
+
+        discovery: list[CompetitorDiscoveryHit] = []
+        for raw in meta.get("discovery") or []:
+            if isinstance(raw, dict):
+                try:
+                    discovery.append(CompetitorDiscoveryHit.model_validate(raw))
+                except Exception:  # noqa: BLE001
+                    continue
+
+        scrape_cards: list[CompetitorCardScrapeResult] = []
+        if isinstance(job.result_payload, dict):
+            for raw in job.result_payload.get("cards") or []:
+                if isinstance(raw, dict):
+                    try:
+                        scrape_cards.append(CompetitorCardScrapeResult.model_validate(raw))
+                    except Exception:  # noqa: BLE001
+                        continue
+
+        analysis_cards: list[CompetitorCardDeepAnalysis] = []
+        if isinstance(job.analysis_payload, dict):
+            for raw in job.analysis_payload.get("cards") or []:
+                if isinstance(raw, dict):
+                    try:
+                        analysis_cards.append(
+                            CompetitorCardDeepAnalysis.model_validate(raw)
+                        )
+                    except Exception:  # noqa: BLE001
+                        continue
+
+        seed_article = str(meta.get("seed_article") or dashboard.seed_article)
+        seed_marketplace = str(meta.get("seed_marketplace") or dashboard.seed_marketplace)
+        seed_title = meta.get("seed_title") or dashboard.seed_title
+        notes = [str(n) for n in (meta.get("notes") or []) if n][:20]
+
+        return build_eye_of_god_dashboard(
+            seed_article=seed_article,
+            seed_marketplace=seed_marketplace,
+            seed_title=str(seed_title) if seed_title else None,
+            discovery=discovery,
+            scrape_cards=scrape_cards,
+            analysis_cards=analysis_cards,
+            notes=notes,
+        )
 
     async def attach_celery_task(
         self, *, job_id: UUID, celery_task_id: str
@@ -660,6 +950,8 @@ class CompetitorAuditService:
             await self._analyzer.aclose()
         if self._images is not None:
             await self._images.aclose()
+        if self._discovery is not None:
+            await self._discovery.aclose()
         # cross_check reuses the analyzer Claude client — do not double-close.
 
 

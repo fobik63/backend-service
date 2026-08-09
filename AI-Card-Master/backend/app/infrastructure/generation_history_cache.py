@@ -78,6 +78,45 @@ async def invalidate_generation_history_cache(user_id: UUID) -> None:
         )
 
 
+async def get_cached_generation_status(
+    *,
+    user_id: UUID,
+    task_id: UUID,
+) -> dict[str, Any] | None:
+    """Return cached status payload or None on miss / Redis failure."""
+
+    try:
+        return await get_cached_json(f"generation:status:{user_id}:{task_id}")
+    except RedisUnavailableError:
+        logger.debug("Generation status cache read failed", exc_info=True)
+        return None
+
+
+async def set_cached_generation_status(
+    *,
+    user_id: UUID,
+    task_id: UUID,
+    payload: dict[str, Any],
+    terminal: bool,
+) -> None:
+    """Store status JSON under short TTL (longer for terminal jobs)."""
+
+    settings = get_settings()
+    ttl = (
+        settings.generation_status_terminal_cache_ttl_seconds
+        if terminal
+        else settings.generation_status_cache_ttl_seconds
+    )
+    try:
+        await cache_json(
+            f"generation:status:{user_id}:{task_id}",
+            payload,
+            ttl_seconds=ttl,
+        )
+    except RedisUnavailableError:
+        logger.debug("Generation status cache write failed", exc_info=True)
+
+
 async def get_cached_tariffs() -> list[dict[str, Any]] | None:
     """Return cached public tariff catalog."""
 

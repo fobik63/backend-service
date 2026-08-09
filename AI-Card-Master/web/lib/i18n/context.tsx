@@ -41,10 +41,16 @@ function I18nProvider({
   children,
   defaultLocale = "ru",
 }: I18nProviderProps) {
-  const [locale, setLocaleState] = useState<Locale>(() => {
-    if (typeof window === "undefined") return defaultLocale
-    return readStoredLocale() ?? defaultLocale
-  })
+  // Always start from defaultLocale so SSR HTML matches the first client paint.
+  // Stored preference is applied after mount (avoids hydration mismatch).
+  const [locale, setLocaleState] = useState<Locale>(defaultLocale)
+
+  useEffect(() => {
+    const stored = readStoredLocale()
+    if (stored && stored !== defaultLocale) {
+      setLocaleState(stored)
+    }
+  }, [defaultLocale])
 
   useEffect(() => {
     if (typeof document === "undefined") return

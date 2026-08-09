@@ -10,6 +10,7 @@ import {
   ProjectsToolbar,
   type MarketplaceFilter,
 } from "@/components/dashboard/projects/projects-toolbar"
+import { InlineError } from "@/components/ui/state-panel"
 import {
   type Project,
 } from "@/lib/constants/mock-projects"
@@ -142,21 +143,13 @@ function ProjectsView() {
       {loading ? (
         <ProjectsGridSkeleton />
       ) : loadError ? (
-        <div
-          className="rounded-xl border border-amber/30 bg-amber/10 px-4 py-6 text-center"
-          role="alert"
-        >
-          <p className="text-sm text-foreground">{loadError}</p>
-          <button
-            type="button"
-            className="mt-3 text-sm text-emerald underline-offset-4 hover:underline"
-            onClick={() => {
-              setReloadKey((value) => value + 1)
-            }}
-          >
-            {t("projects.showLocal")}
-          </button>
-        </div>
+        <InlineError
+          message={loadError}
+          retryLabel={t("projects.showLocal")}
+          onRetry={() => {
+            setReloadKey((value) => value + 1)
+          }}
+        />
       ) : filtered.length === 0 ? (
         <ProjectsEmptyState
           hasNoProjects={projects.length === 0}

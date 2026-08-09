@@ -1,9 +1,19 @@
 "use client"
 
-import { ChevronDown, Images, Lamp, SlidersHorizontal, Type } from "lucide-react"
-import { useState } from "react"
+import {
+  ChevronDown,
+  Eye,
+  Images,
+  Lamp,
+  SlidersHorizontal,
+  Type,
+  Wrench,
+} from "lucide-react"
+import { useEffect, useRef, useState } from "react"
 
 import { BadgeParamsSection } from "@/components/editor/badge-tool"
+import { EyeOfGodSection } from "@/components/editor/eye-of-god-section"
+import { ProductParserSection } from "@/components/editor/product-parser-section"
 import { PromptBar } from "@/components/editor/prompt-bar"
 import { SliderControl } from "@/components/editor/slider-control"
 import { Button } from "@/components/ui/button"
@@ -29,7 +39,10 @@ import {
   PRESET_PACK_SIZES,
   clampPackSize,
 } from "@/lib/export/card-pack"
-import { useEditorStore } from "@/lib/store/editor-store"
+import {
+  useEditorStore,
+  type SoftboxSettings,
+} from "@/lib/store/editor-store"
 import {
   DEFAULT_TEXT_STYLE,
   EDITOR_FONT_FAMILIES,
@@ -152,7 +165,86 @@ function SoftboxParamsSection() {
   const { t } = useI18n()
   const softbox = useEditorStore((s) => s.softbox)
   const setSoftbox = useEditorStore((s) => s.setSoftbox)
-  const disabled = !softbox.enabled
+  const setSoftboxScrubbing = useEditorStore((s) => s.setSoftboxScrubbing)
+  const beginHistoryTransaction = useEditorStore(
+    (s) => s.beginHistoryTransaction
+  )
+  const commitHistoryTransaction = useEditorStore(
+    (s) => s.commitHistoryTransaction
+  )
+
+  /** Local UI draft — slider labels update immediately without waiting on canvas. */
+  const [draft, setDraft] = useState<SoftboxSettings>(softbox)
+  const draftRef = useRef(draft)
+  const scrubbingRef = useRef(false)
+  const rafRef = useRef(0)
+  const disabled = !draft.enabled
+
+  useEffect(() => {
+    if (scrubbingRef.current) return
+    setDraft(softbox)
+    draftRef.current = softbox
+  }, [softbox])
+
+  useEffect(() => {
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current)
+      if (scrubbingRef.current) {
+        scrubbingRef.current = false
+        useEditorStore.getState().setSoftboxScrubbing(false)
+        useEditorStore.getState().commitHistoryTransaction()
+      }
+    }
+  }, [])
+
+  const pushDraftToStore = (next: SoftboxSettings) => {
+    setSoftbox({
+      intensity: next.intensity,
+      colorTempK: next.colorTempK,
+      lightAngle: next.lightAngle,
+      softboxDiffusion: next.softboxDiffusion,
+      lightElevation: next.lightElevation,
+      enabled: next.enabled,
+    })
+  }
+
+  const scheduleStoreCommit = () => {
+    // Coalesce to one store write per animation frame (16–30ms).
+    if (rafRef.current) return
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = 0
+      pushDraftToStore(draftRef.current)
+    })
+  }
+
+  const beginScrub = () => {
+    if (scrubbingRef.current) return
+    scrubbingRef.current = true
+    beginHistoryTransaction()
+    setSoftboxScrubbing(true)
+  }
+
+  const endScrub = () => {
+    if (!scrubbingRef.current) return
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current)
+      rafRef.current = 0
+    }
+    pushDraftToStore(draftRef.current)
+    scrubbingRef.current = false
+    setSoftboxScrubbing(false)
+    commitHistoryTransaction()
+  }
+
+  const patchDraft = (patch: Partial<SoftboxSettings>) => {
+    beginScrub()
+    setDraft((prev) => {
+      const next = { ...prev, ...patch }
+      draftRef.current = next
+      scheduleStoreCommit()
+      return next
+    })
+  }
 
   const tempLabel = (v: number) => {
     if (v <= 4000) return t("editor.colorTempWarm")
@@ -172,17 +264,25 @@ function SoftboxParamsSection() {
         <button
           type="button"
           role="switch"
-          aria-checked={softbox.enabled}
-          onClick={() => setSoftbox({ enabled: !softbox.enabled })}
+          aria-checked={draft.enabled}
+          onClick={() => {
+            const enabled = !draft.enabled
+            const next = { ...draftRef.current, enabled }
+            draftRef.current = next
+            setDraft(next)
+            beginHistoryTransaction()
+            pushDraftToStore(next)
+            commitHistoryTransaction()
+          }}
           className={cn(
             "relative h-5 w-9 rounded-full transition-colors",
-            softbox.enabled ? "bg-emerald" : "bg-white/15"
+            draft.enabled ? "bg-foreground" : "bg-white/15"
           )}
         >
           <span
             className={cn(
               "absolute top-0.5 left-0.5 size-4 rounded-full bg-white transition-transform",
-              softbox.enabled && "translate-x-4"
+              draft.enabled && "translate-x-4"
             )}
           />
           <span className="sr-only">{t("editor.softbox")}</span>
@@ -192,18 +292,19 @@ function SoftboxParamsSection() {
       <div className={cn("space-y-2.5", disabled && "opacity-45")}>
         <SliderControl
           label={t("editor.intensity")}
-          value={softbox.intensity}
+          value={draft.intensity}
           min={0}
           max={200}
           unit="%"
           disabled={disabled}
           onChange={(intensity) =>
-            setSoftbox({ intensity: clamp(intensity, 0, 200) })
+            patchDraft({ intensity: clamp(intensity, 0, 200) })
           }
+          onValueCommitted={endScrub}
         />
         <SliderControl
           label={t("editor.colorTemp")}
-          value={softbox.colorTempK}
+          value={draft.colorTempK}
           min={2700}
           max={6500}
           step={50}
@@ -211,8 +312,9 @@ function SoftboxParamsSection() {
           disabled={disabled}
           formatValue={(v) => `${v}K ${tempLabel(v)}`}
           onChange={(colorTempK) =>
-            setSoftbox({ colorTempK: clamp(colorTempK, 2700, 6500) })
+            patchDraft({ colorTempK: clamp(colorTempK, 2700, 6500) })
           }
+          onValueCommitted={endScrub}
           hint={
             <div className="flex justify-between">
               <span>2700 {t("editor.colorTempWarm")}</span>
@@ -222,14 +324,17 @@ function SoftboxParamsSection() {
         />
         <SliderControl
           label={t("editor.angle")}
-          value={softbox.lightAngle}
+          value={draft.lightAngle}
           min={0}
           max={360}
           unit="°"
           disabled={disabled}
           onChange={(lightAngle) =>
-            setSoftbox({ lightAngle: ((lightAngle % 360) + 360) % 360 })
+            patchDraft({
+              lightAngle: ((lightAngle % 360) + 360) % 360,
+            })
           }
+          onValueCommitted={endScrub}
           hint={
             <div className="flex justify-between">
               <span>{t("editor.angleRight")}</span>
@@ -239,14 +344,17 @@ function SoftboxParamsSection() {
         />
         <SliderControl
           label={t("editor.diffusion")}
-          value={softbox.softboxDiffusion}
+          value={draft.softboxDiffusion}
           min={0}
           max={100}
           unit="%"
           disabled={disabled}
           onChange={(softboxDiffusion) =>
-            setSoftbox({ softboxDiffusion: clamp(softboxDiffusion, 0, 100) })
+            patchDraft({
+              softboxDiffusion: clamp(softboxDiffusion, 0, 100),
+            })
           }
+          onValueCommitted={endScrub}
         />
       </div>
     </section>
@@ -318,7 +426,7 @@ function PackParamsSection() {
               className={cn(
                 "inline-flex h-8 min-w-8 flex-1 items-center justify-center rounded-md border text-xs font-medium transition-colors",
                 !customSelected && packSize === size
-                  ? "border-emerald/40 bg-emerald/20 text-emerald"
+                  ? "border-white/25 bg-white/10 text-foreground"
                   : "border-white/10 bg-white/[0.04] text-muted-foreground hover:text-foreground"
               )}
               aria-pressed={!customSelected && packSize === size}
@@ -338,7 +446,7 @@ function PackParamsSection() {
             className={cn(
               "inline-flex h-8 min-w-10 flex-[1.2] items-center justify-center rounded-md border px-2 text-[11px] font-medium transition-colors",
               customSelected
-                ? "border-emerald/40 bg-emerald/20 text-emerald"
+                ? "border-white/25 bg-white/10 text-foreground"
                 : "border-white/10 bg-white/[0.04] text-muted-foreground hover:text-foreground"
             )}
             aria-pressed={customSelected}
@@ -383,6 +491,7 @@ function PackParamsSection() {
 
 function EditorSettingsBody({ projectTitle }: EditorSettingsPanelProps) {
   const { t } = useI18n()
+  const [tab, setTab] = useState<"tools" | "eye">("tools")
 
   return (
     <>
@@ -393,19 +502,64 @@ function EditorSettingsBody({ projectTitle }: EditorSettingsPanelProps) {
         <p className="text-[11px] text-muted-foreground">
           {t("editor.toolsHint")}
         </p>
+        <div
+          role="tablist"
+          aria-label={t("editor.toolsTabs")}
+          className="mt-2.5 grid grid-cols-2 gap-1 rounded-lg border border-white/10 bg-white/[0.03] p-1"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "tools"}
+            onClick={() => setTab("tools")}
+            className={cn(
+              "inline-flex h-8 items-center justify-center gap-1.5 rounded-md text-[11px] font-medium transition-colors",
+              tab === "tools"
+                ? "bg-loft-surface text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <Wrench className="size-3.5" aria-hidden />
+            {t("editor.toolsTab")}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "eye"}
+            onClick={() => setTab("eye")}
+            className={cn(
+              "inline-flex h-8 items-center justify-center gap-1.5 rounded-md text-[11px] font-medium transition-colors",
+              tab === "eye"
+                ? "bg-loft-surface text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <Eye className="size-3.5 text-amber" aria-hidden />
+            {t("editor.eyeTab")}
+          </button>
+        </div>
       </div>
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-3 py-3">
-        <TextParamsSection />
-        <div className="border-t border-white/8 pt-3">
-          <BadgeParamsSection />
-        </div>
-        <div className="border-t border-white/8 pt-3">
-          <SoftboxParamsSection />
-        </div>
-        <div className="border-t border-white/8 pt-3">
-          <PackParamsSection />
-        </div>
+        {tab === "tools" ? (
+          <>
+            <ProductParserSection />
+            <div className="border-t border-white/8 pt-3">
+              <TextParamsSection />
+            </div>
+            <div className="border-t border-white/8 pt-3">
+              <BadgeParamsSection />
+            </div>
+            <div className="border-t border-white/8 pt-3">
+              <SoftboxParamsSection />
+            </div>
+            <div className="border-t border-white/8 pt-3">
+              <PackParamsSection />
+            </div>
+          </>
+        ) : (
+          <EyeOfGodSection />
+        )}
       </div>
 
       <div className="shrink-0 border-t border-white/8 bg-[#12151a] px-3 py-3">
@@ -422,17 +576,18 @@ function EditorSettingsPanel({ projectTitle }: EditorSettingsPanelProps) {
   return (
     <>
       <aside
-        className="hidden h-full w-[min(100%,340px)] shrink-0 flex-col self-stretch overflow-hidden border-l border-white/8 bg-[#14171d] lg:flex"
+        className="hidden h-full w-[min(100%,340px)] shrink-0 flex-col self-stretch overflow-hidden border-l border-zinc-800/80 bg-zinc-900/60 backdrop-blur-xl lg:flex"
         aria-label={t("editor.tools")}
       >
         <EditorSettingsBody projectTitle={projectTitle} />
       </aside>
 
-      <div className="pointer-events-none absolute inset-x-0 bottom-3 z-20 flex justify-center px-3 lg:hidden">
+      {/* Keep FAB above EditorPageStrip on phones. */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-[9.75rem] z-20 flex justify-center px-3 sm:bottom-[10.25rem] lg:hidden">
         <Button
           type="button"
           size="sm"
-          className="pointer-events-auto gap-2 rounded-full border border-white/15 bg-loft-surface/95 shadow-lg backdrop-blur"
+          className="pointer-events-auto gap-2 rounded-lg border border-white/15 bg-loft-surface shadow-panel"
           onClick={() => setMobileOpen(true)}
         >
           <SlidersHorizontal className="size-4" aria-hidden />
@@ -441,7 +596,7 @@ function EditorSettingsPanel({ projectTitle }: EditorSettingsPanelProps) {
         <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
           <SheetContent
             side="right"
-            className="w-full max-w-[min(100%,24rem)] border-l border-white/10 bg-[#14171d] p-0"
+            className="flex h-full min-h-0 w-full max-w-[min(100%,24rem)] flex-col border-l border-zinc-800/80 bg-zinc-900/60 p-0 backdrop-blur-xl"
           >
             <SheetHeader className="sr-only">
               <SheetTitle>{t("editor.tools")}</SheetTitle>

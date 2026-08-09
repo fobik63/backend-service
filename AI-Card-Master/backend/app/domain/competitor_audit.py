@@ -34,6 +34,8 @@ from app.domain.zero_hallucination import (
 )
 
 MAX_LINKS_PER_REQUEST = 3
+# Eye-of-God spy may enqueue up to 10 discovered competitor cards per job.
+MAX_CARDS_PER_JOB = 10
 MAX_REVIEWS_PER_CARD = 50
 REDIS_RAW_LOG_TTL_SECONDS = 3600
 MAX_VISION_IMAGES_PER_CARD = 5
@@ -212,7 +214,7 @@ class CompetitorAuditResult(PersistedDomainModel):
     schema_version: str = Field(default="1.0", min_length=1, max_length=16)
     cards: list[CompetitorCardScrapeResult] = Field(
         default_factory=list,
-        max_length=MAX_LINKS_PER_REQUEST,
+        max_length=MAX_CARDS_PER_JOB,
     )
     parse_log: list[str] = Field(default_factory=list, max_length=200)
 
@@ -350,7 +352,7 @@ class CompetitorDeepAnalysisBundle(PersistedDomainModel):
     schema_version: str = Field(default="1.0", min_length=1, max_length=16)
     cards: list[CompetitorCardDeepAnalysis] = Field(
         default_factory=list,
-        max_length=MAX_LINKS_PER_REQUEST,
+        max_length=MAX_CARDS_PER_JOB,
     )
     insufficient_data: bool = False
     model_name: str = Field(default="claude-opus-4-7", min_length=1, max_length=128)

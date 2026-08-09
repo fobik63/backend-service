@@ -21,12 +21,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies.auth import get_current_user
-from app.api.images import ALLOWED_IMAGE_TYPES, UPLOADS_DIR, ensure_uploads_dir
+from app.api.images import ALLOWED_IMAGE_TYPES, ensure_uploads_dir
 from app.application.three_d_service import (
     ThreeDNotFoundError,
     ThreeDValidationError,
     parse_webhook_json,
 )
+from app.core.config import get_settings
 from app.core.rate_limit import three_d_generate_limit
 from app.domain.three_d import (
     GpuRentalSessionView,
@@ -48,9 +49,15 @@ from app.services.three_d.errors import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/3d", tags=["3D Generation"])
-MAX_WEBHOOK_BYTES = 1024 * 1024
-MAX_GENERATE_IMAGE_BYTES = 10 * 1024 * 1024
 _QUEUED_STATUS = "QUEUED"
+
+
+def _max_generate_image_bytes() -> int:
+    return get_settings().three_d_max_generate_image_bytes
+
+
+def _max_webhook_bytes() -> int:
+    return get_settings().webhook_max_bytes
 
 
 class CreateThreeDTaskRequest(BaseModel):
@@ -273,10 +280,10 @@ async def _store_generate_image(upload: UploadFile) -> str:
                 f"{', '.join(sorted(ALLOWED_IMAGE_TYPES))}."
             ),
         )
-    ensure_uploads_dir()
+    uploads_dir = ensure_uploads_dir()
     extension = ALLOWED_IMAGE_TYPES[content_type]
     stored_filename = f"{uuid4().hex}{extension}"
-    stored_path = UPLOADS_DIR / stored_filename
+    stored_path = uploads_dir / stored_filename
     total = 0
     try:
         with stored_path.open("wb") as buffer:
@@ -285,12 +292,17 @@ async def _store_generate_image(upload: UploadFile) -> str:
                 if not chunk:
                     break
                 total += len(chunk)
-                if total > MAX_GENERATE_IMAGE_BYTES:
+                if total > _max_generate_image_bytes():
                     raise HTTPException(
                         status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                         detail="Image exceeds the 10 MB limit.",
                     )
                 buffer.write(chunk)
+        if total == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Uploaded image is empty.",
+            )
     except HTTPException:
         _safe_unlink(stored_path)
         raise
@@ -394,20 +406,23 @@ async def generate_three_d(
     content_type = (request.headers.get("content-type") or "").lower()
     if "multipart/form-data" in content_type:
         form = await request.form()
-        resolved_prompt = _form_str(form.get("prompt"))
-        resolved_polycount = _form_optional_int(form.get("polycount_limit"))
-        if resolved_polycount is None:
-            resolved_polycount = _form_optional_int(form.get("polycount_target"))
-        resolved_format = (_form_str(form.get("format")) or "GLB").upper()
-        resolved_texture = _form_optional_int(form.get("texture_resolution"))
-        resolved_mode = (_form_str(form.get("mode")) or "standard").lower()
-        resolved_model = _form_str(form.get("model"))
-        resolved_image_url = _form_str(form.get("source_image_url")) or _form_str(
-            form.get("image_url")
-        )
-        image_field = form.get("image")
-        if hasattr(image_field, "filename") and getattr(image_field, "filename", None):
-            resolved_image_url = await _store_generate_image(image_field)  # type: ignore[arg-type]
+        try:
+            resolved_prompt = _form_str(form.get("prompt"))
+            resolved_polycount = _form_optional_int(form.get("polycount_limit"))
+            if resolved_polycount is None:
+                resolved_polycount = _form_optional_int(form.get("polycount_target"))
+            resolved_format = (_form_str(form.get("format")) or "GLB").upper()
+            resolved_texture = _form_optional_int(form.get("texture_resolution"))
+            resolved_mode = (_form_str(form.get("mode")) or "standard").lower()
+            resolved_model = _form_str(form.get("model"))
+            resolved_image_url = _form_str(form.get("source_image_url")) or _form_str(
+                form.get("image_url")
+            )
+            image_field = form.get("image")
+            if hasattr(image_field, "filename") and getattr(image_field, "filename", None):
+                resolved_image_url = await _store_generate_image(image_field)  # type: ignore[arg-type]
+        finally:
+            await form.close()
     else:
         try:
             raw = await request.json()
@@ -642,13 +657,13 @@ async def receive_three_d_webhook(
 ) -> WebhookAck:
     """HMAC-validated callback from external GPU nodes / 3D APIs."""
 
-    if content_length is not None and content_length > MAX_WEBHOOK_BYTES:
+    if content_length is not None and content_length > _max_webhook_bytes():
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail="Webhook payload is too large.",
         )
     raw_body = await request.body()
-    if len(raw_body) > MAX_WEBHOOK_BYTES:
+    if len(raw_body) > _max_webhook_bytes():
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail="Webhook payload is too large.",

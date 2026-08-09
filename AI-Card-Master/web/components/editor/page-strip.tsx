@@ -26,7 +26,7 @@ function EditorPageStrip({ className }: { className?: string }) {
   return (
     <div
       className={cn(
-        "shrink-0 border-t border-white/8 bg-loft-surface/90 px-3 py-2.5 backdrop-blur-sm",
+        "shrink-0 border-t border-zinc-800/80 bg-zinc-900/60 px-3 py-2.5 backdrop-blur-xl",
         className
       )}
       role="tablist"
@@ -58,25 +58,25 @@ function EditorPageStrip({ className }: { className?: string }) {
               className={cn(
                 "group flex w-[72px] shrink-0 flex-col gap-1 rounded-lg border p-1.5 text-left transition-colors",
                 active
-                  ? "border-emerald/45 bg-emerald/15"
+                  ? "border-white/30 bg-white/[0.06]"
                   : "border-white/10 bg-white/[0.03] hover:border-white/20 hover:bg-white/[0.06]"
               )}
             >
               <div
                 className={cn(
                   "relative aspect-[3/4] w-full overflow-hidden rounded-md",
-                  active ? "ring-1 ring-emerald/50" : "ring-1 ring-white/8"
+                  active ? "ring-1 ring-white/25" : "ring-1 ring-white/8"
                 )}
                 style={{
                   background:
-                    "linear-gradient(155deg,#1a2030 0%,#12151b 48%,#0d0f12 100%)",
+                    "linear-gradient(155deg,#1a1a1c 0%,#121214 48%,#0a0a0b 100%)",
                 }}
               >
                 <span
                   className={cn(
                     "absolute inset-x-0 bottom-0 truncate px-1 py-0.5 text-center text-[8px] font-semibold",
                     active
-                      ? "bg-emerald/80 text-white"
+                      ? "bg-foreground text-primary-foreground"
                       : "bg-black/55 text-white/85"
                   )}
                 >
@@ -86,7 +86,7 @@ function EditorPageStrip({ className }: { className?: string }) {
               <span
                 className={cn(
                   "truncate text-[10px] leading-tight",
-                  active ? "text-emerald" : "text-muted-foreground"
+                  active ? "text-foreground" : "text-muted-foreground"
                 )}
               >
                 {label}

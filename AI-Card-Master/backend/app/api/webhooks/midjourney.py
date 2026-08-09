@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.midjourney_webhook_service import MidjourneyWebhookIngressService
+from app.core.config import get_settings
 from app.infrastructure.persistence.generation_repository import GenerationRepository
 from app.models.database import get_db_session
 from app.services.ai_engine import (
@@ -19,7 +20,10 @@ from app.services.ai_engine import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/webhooks/midjourney", tags=["webhooks"])
-MAX_WEBHOOK_BYTES = 1024 * 1024
+
+
+def _max_webhook_bytes() -> int:
+    return get_settings().webhook_max_bytes
 
 
 class WebhookAck(BaseModel):
@@ -51,7 +55,8 @@ async def receive_midjourney_webhook(
 ) -> WebhookAck:
     """Authenticate, normalise, persist, and acknowledge a provider callback."""
 
-    if content_length is not None and content_length > MAX_WEBHOOK_BYTES:
+    max_bytes = _max_webhook_bytes()
+    if content_length is not None and content_length > max_bytes:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail="Webhook payload is too large.",
@@ -64,7 +69,7 @@ async def receive_midjourney_webhook(
         )
 
     raw_body = await request.body()
-    if len(raw_body) > MAX_WEBHOOK_BYTES:
+    if len(raw_body) > max_bytes:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail="Webhook payload is too large.",

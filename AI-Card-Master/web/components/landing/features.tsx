@@ -244,7 +244,7 @@ function CutoutDemo() {
             className="absolute inset-0 opacity-80"
             style={{
               backgroundImage:
-                "linear-gradient(to right, rgba(16,185,129,0.18) 1px, transparent 1px), linear-gradient(to bottom, rgba(16,185,129,0.18) 1px, transparent 1px)",
+                "linear-gradient(to right, rgba(255,255,255,0.08) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.08) 1px, transparent 1px)",
               backgroundSize: "14px 14px",
               backgroundPosition: "center",
             }}
@@ -617,7 +617,7 @@ function UltraHdDemo() {
       role="img"
       aria-label="Демо 3D Ultra-HD: студийный рендер текстур кожи, ткани и металла"
     >
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(16,185,129,0.1),transparent_65%)]" />
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(255,255,255,0.04),transparent_65%)]" />
 
       <div className="absolute inset-3 flex items-end justify-center gap-2 pb-6">
         {textures.map((tex, i) => {
@@ -749,15 +749,14 @@ function FeaturesSection() {
     <section
       id="features"
       ref={sectionRef}
-      className="relative isolate scroll-mt-24 pt-2 pb-20 sm:pt-3 sm:pb-28"
+      className="relative isolate scroll-mt-24 py-16 md:py-24"
     >
       <div className="mx-auto max-w-6xl px-5">
-        <div className="section-glass rounded-3xl px-5 py-10 sm:px-8 sm:py-12 lg:px-10">
+        <div className="section-glass flex flex-col gap-12 rounded-3xl px-5 py-10 sm:px-8 sm:py-12 lg:px-10">
           <SectionHeader
             align="center"
             title="Возможности"
             subtitle="Студийный свет, вырезка, 360°, парсер конкурентов, Smart SEO и Ultra-HD — всё в одном пайплайне CARD AI"
-            className="mb-12 sm:mb-14"
           />
 
           <div className="grid gap-5 sm:grid-cols-2 lg:gap-6">
@@ -776,7 +775,7 @@ function FeaturesSection() {
                       {feature.demo}
                     </div>
                     <div className="flex items-start gap-3">
-                      <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg border border-emerald/25 bg-emerald/10 text-emerald transition-colors group-hover:border-emerald/40 group-hover:bg-emerald/15">
+                      <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg border border-white/12 bg-white/[0.04] text-foreground transition-colors group-hover:border-white/20 group-hover:bg-white/[0.06]">
                         <Icon className="size-4" strokeWidth={1.75} aria-hidden />
                       </span>
                       <div className="min-w-0">

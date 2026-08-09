@@ -29,6 +29,11 @@ import {
   NETWORK_ERROR_MESSAGES,
 } from "@/lib/api/errors"
 import { APP_NAME, DEFAULT_API_BASE_URL } from "@/lib/constants/api"
+import {
+  IS_MOCK,
+  MOCK_AUTH_TOKENS,
+  MOCK_AUTH_USER,
+} from "@/lib/constants/mock"
 import { useAuthStore } from "@/lib/store"
 import { cn } from "@/lib/utils"
 import {
@@ -105,6 +110,18 @@ function AuthForm({
     }, 1000)
     return () => window.clearInterval(id)
   }, [resendIn])
+
+  useEffect(() => {
+    if (!IS_MOCK) return
+    setSession(MOCK_AUTH_TOKENS, MOCK_AUTH_USER)
+    onSuccess?.()
+    startTransition(() => {
+      router.replace("/dashboard")
+      router.refresh()
+    })
+    // Auto-login once on mount when mock mode is enabled.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional one-shot bypass
+  }, [])
 
   const switchMode = (next: AuthMode) => {
     setFormError(null)
@@ -234,6 +251,24 @@ function AuthForm({
           : `Код отправлен на ${otpEmail}`
         : `Добро пожаловать в ${APP_NAME}`
 
+  if (IS_MOCK) {
+    return (
+      <GlassCard
+        hoverLift={false}
+        padding="lg"
+        className={cn("relative w-full border-white/10 copper-border", className)}
+      >
+        <div className="flex flex-col items-center gap-3 py-8 text-center">
+          <Loader2 className="size-6 animate-spin text-emerald" aria-hidden />
+          <p className="font-heading text-sm font-semibold">Mock-вход…</p>
+          <p className="text-xs text-muted-foreground">
+            {MOCK_AUTH_USER.email} · без OTP и пароля
+          </p>
+        </div>
+      </GlassCard>
+    )
+  }
+
   return (
     <GlassCard
       hoverLift={false}
@@ -274,13 +309,13 @@ function AuthForm({
             <span
               className={cn(
                 "h-1 flex-1 rounded-full",
-                otpStep >= 1 ? "bg-emerald" : "bg-white/10",
+                otpStep >= 1 ? "bg-foreground" : "bg-white/10",
               )}
             />
             <span
               className={cn(
                 "h-1 flex-1 rounded-full",
-                otpStep >= 2 ? "bg-emerald" : "bg-white/10",
+                otpStep >= 2 ? "bg-foreground" : "bg-white/10",
               )}
             />
           </div>

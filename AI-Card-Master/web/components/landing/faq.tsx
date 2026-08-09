@@ -44,17 +44,16 @@ function FaqSection() {
     <section
       id="faq"
       ref={sectionRef}
-      className="relative isolate scroll-mt-28 px-5 py-16 sm:py-24"
+      className="relative isolate scroll-mt-24 px-5 py-16 md:py-24"
       aria-labelledby="faq-heading"
     >
       <div className="mx-auto max-w-3xl">
-        <div className="section-glass rounded-3xl px-5 py-10 sm:px-8 sm:py-12">
+        <div className="section-glass flex flex-col gap-12 rounded-3xl px-5 py-10 sm:px-8 sm:py-12">
           <SectionHeader
             align="center"
             as="h2"
             title={<span id="faq-heading">FAQ</span>}
             subtitle="Короткие ответы на частые вопросы о CARD AI"
-            className="mb-10 sm:mb-12"
           />
 
           <ul className="flex flex-col gap-3">
@@ -68,7 +67,7 @@ function FaqSection() {
                   delay: 0.06 * i,
                   ease: [0.22, 1, 0.36, 1],
                 }}
-                className="rounded-2xl border border-white/5 bg-[#14171d]/60 px-5 py-4 backdrop-blur-xl copper-border"
+                className="rounded-xl border border-white/10 bg-loft-surface px-5 py-4"
               >
                 <h3 className="font-heading text-base font-semibold tracking-tight text-foreground">
                   {item.q}

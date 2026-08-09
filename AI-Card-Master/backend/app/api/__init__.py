@@ -19,6 +19,7 @@ from app.api.claude_analyses import router as claude_analyses_router
 from app.api.claude_reasoning import router as claude_reasoning_router
 from app.api.exports import router as exports_router
 from app.api.fonts import router as fonts_router
+from app.api.generate_pipeline import router as generate_pipeline_router
 from app.api.generations import router as generations_router
 from app.api.health import router as health_router
 from app.api.images import router as images_router
@@ -66,6 +67,7 @@ __all__ = [
     "designs_router",
     "exports_router",
     "fonts_router",
+    "generate_pipeline_router",
     "generations_router",
     "health_router",
     "images_router",

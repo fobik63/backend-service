@@ -1,8 +1,8 @@
 import type { Config } from "tailwindcss";
 
 /**
- * Dark Loft & Botanical Luxury
- * Primary source of truth for design tokens also lives in app/globals.css (@theme).
+ * Graphite studio tokens.
+ * Primary source of truth also lives in app/globals.css (@theme).
  */
 const config: Config = {
   darkMode: "class",
@@ -15,21 +15,21 @@ const config: Config = {
     extend: {
       colors: {
         loft: {
-          DEFAULT: "#0d0f12",
-          surface: "#14171d",
+          DEFAULT: "#09090b",
+          surface: "#0c0d12",
         },
         emerald: {
-          DEFAULT: "#10b981",
-          deep: "#059669",
+          DEFAULT: "#d4d4d8",
+          deep: "#a1a1aa",
         },
         sage: {
-          DEFAULT: "#2e4a38",
+          DEFAULT: "#27272a",
         },
         copper: {
-          DEFAULT: "#c2a68c",
+          DEFAULT: "#a8a29e",
         },
         amber: {
-          DEFAULT: "#d97706",
+          DEFAULT: "#d6d3d1",
         },
         background: "var(--background)",
         foreground: "var(--foreground)",
@@ -80,10 +80,8 @@ const config: Config = {
         sm: "calc(var(--radius) * 0.6)",
       },
       boxShadow: {
-        "emerald-glow": "0 0 20px rgba(16, 185, 129, 0.25)",
-      },
-      backdropBlur: {
-        md: "12px",
+        "emerald-glow": "0 0 24px rgba(212, 212, 216, 0.12)",
+        panel: "0 8px 30px rgba(0,0,0,0.28), 0 1px 0 rgba(255,255,255,0.04)",
       },
     },
   },

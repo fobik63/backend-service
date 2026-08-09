@@ -2,7 +2,7 @@
 
 import { Check, Loader2, Sparkles } from "lucide-react"
 import Link from "next/link"
-import { useEffect, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 import { toast } from "sonner"
 
 import { buttonVariants } from "@/components/ui/button"
@@ -14,16 +14,20 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { GlassButton } from "@/components/ui/glass-button"
+import { GlassCard } from "@/components/ui/glass-card"
 import {
   createPayment,
   getApiErrorMessage,
-  listTariffs,
   type TariffCode,
-  type TariffDTO,
 } from "@/lib/api"
+import {
+  IS_MOCK,
+  MOCK_TOP_UP_PLANS,
+  type MockBillingPeriod,
+} from "@/lib/constants/mock"
 import { cn } from "@/lib/utils"
 
-type BillingPeriod = "week" | "month" | "half_year" | "year"
+type BillingPeriod = MockBillingPeriod
 
 const PERIODS: { id: BillingPeriod; label: string }[] = [
   { id: "week", label: "Неделя" },
@@ -31,13 +35,6 @@ const PERIODS: { id: BillingPeriod; label: string }[] = [
   { id: "half_year", label: "6 мес." },
   { id: "year", label: "Год" },
 ]
-
-const PERIOD_BY_CODE: Record<string, BillingPeriod> = {
-  start: "week",
-  pro: "month",
-  half_year: "half_year",
-  year: "year",
-}
 
 function formatPrice(value: number): string {
   if (value === 0) return "0"
@@ -51,40 +48,25 @@ type TopUpDialogProps = {
 
 function TopUpDialog({ open, onOpenChange }: TopUpDialogProps) {
   const [period, setPeriod] = useState<BillingPeriod>("month")
-  const [tariffs, setTariffs] = useState<TariffDTO[] | null>(null)
   const [checkoutCode, setCheckoutCode] = useState<string | null>(null)
-  const loading = open && tariffs === null
 
-  useEffect(() => {
-    if (!open) return
-    let cancelled = false
-    void listTariffs()
-      .then((items) => {
-        if (!cancelled) setTariffs(items)
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return
-        setTariffs([])
-        toast.error(
-          getApiErrorMessage(error, "Не удалось загрузить тарифы для оплаты")
-        )
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [open])
-
+  // Filter by plan.period (not tariff code) so every tab has cards.
   const plans = useMemo(
-    () =>
-      (tariffs ?? []).filter((plan) => PERIOD_BY_CODE[plan.code] === period),
-    [period, tariffs]
+    () => MOCK_TOP_UP_PLANS.filter((plan) => plan.period === period),
+    [period]
   )
 
-  const handleCheckout = async (tariffCode: string) => {
+  const handleCheckout = async (tariffCode: TariffCode) => {
     if (checkoutCode) return
     setCheckoutCode(tariffCode)
     try {
-      const payment = await createPayment(tariffCode as TariffCode)
+      if (IS_MOCK) {
+        await new Promise((resolve) => setTimeout(resolve, 400))
+        toast.success(`Mock: выбран тариф «${tariffCode}»`)
+        onOpenChange(false)
+        return
+      }
+      const payment = await createPayment(tariffCode)
       if (!payment.confirmation_url) {
         toast.error(
           "Платёжный провайдер недоступен: confirmation_url не получен. Проверьте YOOKASSA_*."
@@ -107,7 +89,7 @@ function TopUpDialog({ open, onOpenChange }: TopUpDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="max-h-[min(90dvh,40rem)] w-full overflow-y-auto sm:max-w-lg"
+        className="max-h-[min(90dvh,44rem)] w-full overflow-y-auto sm:max-w-xl"
         showCloseButton
       >
         <DialogHeader>
@@ -144,64 +126,89 @@ function TopUpDialog({ open, onOpenChange }: TopUpDialogProps) {
           })}
         </div>
 
-        {loading ? (
-          <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" aria-hidden />
-            Загружаем тарифы…
-          </div>
-        ) : plans.length === 0 ? (
+        {plans.length === 0 ? (
           <p className="rounded-xl border border-amber/30 bg-amber/10 px-3 py-4 text-sm text-foreground">
             Для выбранного периода нет доступных тарифов.
           </p>
         ) : (
-          <ul className="space-y-2">
+          <ul className="space-y-3">
             {plans.map((plan) => {
-              const highlighted = plan.code === "pro" || plan.code === "year"
-              const busy = checkoutCode === plan.code
+              const busy = checkoutCode === plan.tariffCode
               return (
-                <li key={plan.code}>
-                  <button
-                    type="button"
-                    disabled={Boolean(checkoutCode)}
-                    aria-busy={busy}
+                <li key={plan.id} className="relative">
+                  {plan.advantageous ? (
+                    <span className="absolute -top-2.5 right-3 z-10 rounded-md border border-emerald/40 bg-emerald/15 px-2.5 py-0.5 font-heading text-[10px] font-semibold tracking-wide text-emerald uppercase">
+                      Выгодно
+                    </span>
+                  ) : null}
+
+                  <GlassCard
+                    padding="sm"
+                    hoverLift={false}
                     className={cn(
-                      "flex w-full items-center gap-3 rounded-xl border px-3.5 py-3 text-left transition-colors",
-                      highlighted
-                        ? "border-emerald/40 bg-emerald/10"
-                        : "border-white/10 bg-white/[0.03] hover:border-white/20 hover:bg-white/[0.05]",
-                      "disabled:opacity-60"
+                      "border-white/10 bg-white/[0.03]",
+                      plan.advantageous && "border-emerald/35 bg-emerald/[0.06]"
                     )}
-                    onClick={() => void handleCheckout(plan.code)}
                   >
-                    <span
-                      className={cn(
-                        "flex size-8 shrink-0 items-center justify-center rounded-lg",
-                        highlighted
-                          ? "bg-emerald/20 text-emerald"
-                          : "bg-white/5 text-copper"
-                      )}
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="font-heading text-base font-semibold text-foreground">
+                          {plan.name}
+                        </p>
+                        <p className="mt-0.5 text-xs text-text-muted">
+                          {plan.periodLabel}
+                        </p>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <p className="font-heading text-lg font-semibold tabular-nums text-foreground">
+                          {formatPrice(plan.priceRub)} ₽
+                        </p>
+                        <p className="mt-0.5 inline-flex items-center gap-1 text-xs text-text-muted">
+                          <Sparkles className="size-3" aria-hidden />
+                          {new Intl.NumberFormat("ru-RU").format(plan.coins)}{" "}
+                          монет
+                        </p>
+                      </div>
+                    </div>
+
+                    <ul className="mt-3 space-y-1.5">
+                      {plan.features.map((feature) => (
+                        <li
+                          key={feature}
+                          className="flex items-start gap-2 text-sm leading-snug text-text-muted"
+                        >
+                          <span className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded text-foreground">
+                            <Check
+                              className="size-3"
+                              strokeWidth={2.5}
+                              aria-hidden
+                            />
+                          </span>
+                          <span>{feature}</span>
+                        </li>
+                      ))}
+                    </ul>
+
+                    <GlassButton
+                      type="button"
+                      className="mt-4 w-full"
+                      disabled={Boolean(checkoutCode)}
+                      aria-busy={busy}
+                      onClick={() => void handleCheckout(plan.tariffCode)}
                     >
                       {busy ? (
-                        <Loader2 className="size-4 animate-spin" aria-hidden />
-                      ) : highlighted ? (
-                        <Sparkles className="size-4" aria-hidden />
+                        <>
+                          <Loader2
+                            className="size-4 animate-spin"
+                            aria-hidden
+                          />
+                          Оформляем…
+                        </>
                       ) : (
-                        <Check className="size-4" aria-hidden />
+                        "Выбрать"
                       )}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block font-heading text-sm font-semibold text-foreground">
-                        {plan.title}
-                      </span>
-                      <span className="block text-xs text-text-muted">
-                        {new Intl.NumberFormat("ru-RU").format(plan.ai_coins)}{" "}
-                        монет
-                      </span>
-                    </span>
-                    <span className="font-heading text-sm font-semibold tabular-nums text-foreground">
-                      {formatPrice(plan.price_rub)} ₽
-                    </span>
-                  </button>
+                    </GlassButton>
+                  </GlassCard>
                 </li>
               )
             })}

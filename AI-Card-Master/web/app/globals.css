@@ -9,8 +9,8 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
-  --font-heading: var(--font-space-grotesk), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
+  --font-heading: var(--font-space-grotesk), var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
@@ -42,7 +42,7 @@
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
 
-  /* Dark Loft & Botanical Luxury tokens */
+  /* Graphite studio tokens */
   --color-loft: var(--loft);
   --color-loft-surface: var(--loft-surface);
   --color-emerald: var(--emerald);
@@ -61,51 +61,51 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
-/* Dark Loft & Botanical Luxury — deep graphite base */
+/* Deep graphite UI — no flat pure black */
 :root,
 .dark {
-  --loft: #0d0f12;
-  --loft-surface: #14171d;
-  --emerald: #10b981;
-  --emerald-deep: #059669;
-  --sage: #2e4a38;
-  --botanical: #1b3e2b;
-  --copper: #c2a68c;
-  --amber: #d97706;
-  --text-muted: #9ca3af;
+  --loft: #09090b;
+  --loft-surface: #0c0d12;
+  --emerald: #d4d4d8;
+  --emerald-deep: #a1a1aa;
+  --sage: #27272a;
+  --botanical: #1c1c1f;
+  --copper: #a8a29e;
+  --amber: #d6d3d1;
+  --text-muted: #a1a1aa;
 
-  --background: #0d0f12;
-  --foreground: #f3f4f6;
-  --card: rgba(20, 23, 29, 0.6);
-  --card-foreground: #f3f4f6;
-  --popover: #14171d;
-  --popover-foreground: #f3f4f6;
-  --primary: #10b981;
-  --primary-foreground: #0d0f12;
-  --secondary: #2e4a38;
-  --secondary-foreground: #f3f4f6;
-  --muted: #14171d;
-  --muted-foreground: #9ca3af;
-  --accent: #2e4a38;
-  --accent-foreground: #f3f4f6;
+  --background: #09090b;
+  --foreground: #fafafa;
+  --card: rgba(24, 24, 27, 0.6);
+  --card-foreground: #fafafa;
+  --popover: #0c0d12;
+  --popover-foreground: #fafafa;
+  --primary: #fafafa;
+  --primary-foreground: #09090b;
+  --secondary: #18181b;
+  --secondary-foreground: #fafafa;
+  --muted: #18181b;
+  --muted-foreground: #a1a1aa;
+  --accent: #18181b;
+  --accent-foreground: #fafafa;
   --destructive: #ef4444;
-  --border: rgba(194, 166, 140, 0.2);
+  --border: rgba(39, 39, 42, 0.8);
   --input: rgba(255, 255, 255, 0.08);
-  --ring: #10b981;
-  --chart-1: #10b981;
-  --chart-2: #059669;
-  --chart-3: #c2a68c;
-  --chart-4: #d97706;
-  --chart-5: #2e4a38;
-  --radius: 0.625rem;
-  --sidebar: #14171d;
-  --sidebar-foreground: #f3f4f6;
-  --sidebar-primary: #10b981;
-  --sidebar-primary-foreground: #0d0f12;
-  --sidebar-accent: #2e4a38;
-  --sidebar-accent-foreground: #f3f4f6;
-  --sidebar-border: rgba(255, 255, 255, 0.05);
-  --sidebar-ring: #10b981;
+  --ring: rgba(250, 250, 250, 0.35);
+  --chart-1: #fafafa;
+  --chart-2: #a1a1aa;
+  --chart-3: #a8a29e;
+  --chart-4: #71717a;
+  --chart-5: #3f3f46;
+  --radius: 0.5rem;
+  --sidebar: rgba(24, 24, 27, 0.6);
+  --sidebar-foreground: #fafafa;
+  --sidebar-primary: #fafafa;
+  --sidebar-primary-foreground: #09090b;
+  --sidebar-accent: #18181b;
+  --sidebar-accent-foreground: #fafafa;
+  --sidebar-border: rgba(39, 39, 42, 0.8);
+  --sidebar-ring: rgba(250, 250, 250, 0.35);
 }
 
 @layer base {
@@ -115,11 +115,11 @@
   html {
     min-height: 100%;
     min-height: 100dvh;
-    background-color: #0d0f12;
+    background-color: #09090b;
   }
   body {
     @apply relative min-h-dvh bg-transparent text-foreground font-sans antialiased;
-    color: #f3f4f6;
+    color: #fafafa;
   }
   h1,
   h2,
@@ -128,27 +128,27 @@
   h5,
   h6 {
     font-family: var(--font-heading);
+    letter-spacing: -0.02em;
   }
 }
 
 @layer utilities {
-  /* Soft glassmorphism — single utility (glass-panel alias for navbar) */
+  /* Glassmorphism panels — zinc translucent + blur */
   .glass-panel,
   .section-glass {
-    background: rgba(20, 23, 29, 0.6);
+    background: rgba(24, 24, 27, 0.6);
     backdrop-filter: blur(24px);
     -webkit-backdrop-filter: blur(24px);
-    border: 1px solid rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(39, 39, 42, 0.8);
   }
 
   .emerald-glow {
-    box-shadow: 0 0 20px rgba(16, 185, 129, 0.25);
+    box-shadow: 0 0 24px rgba(212, 212, 216, 0.12);
   }
 
-  /* Amber/copper frame accent for cards */
   .copper-border {
-    border: 1px solid rgba(194, 166, 140, 0.2);
-    box-shadow: inset 0 0 0 1px rgba(194, 166, 140, 0.04);
+    border: 1px solid rgba(39, 39, 42, 0.8);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
   }
 
   .noise-texture {
@@ -157,28 +157,28 @@
     background-size: 180px 180px;
   }
 
-  /* Emerald-botanical side glows (blurred plant spots) */
+  /* Subtle ambient side glows on graphite */
   .botanical-glow {
     background:
-      radial-gradient(ellipse 38% 55% at 0% 35%, rgba(5, 150, 105, 0.1), transparent 60%),
-      radial-gradient(ellipse 42% 58% at 100% 65%, rgba(27, 62, 43, 0.2), transparent 60%),
-      radial-gradient(ellipse 30% 40% at 100% 20%, rgba(5, 150, 105, 0.06), transparent 55%),
-      radial-gradient(ellipse 28% 35% at 0% 80%, rgba(27, 62, 43, 0.15), transparent 55%);
+      radial-gradient(ellipse 42% 58% at 0% 28%, rgba(161, 161, 170, 0.09), transparent 62%),
+      radial-gradient(ellipse 40% 52% at 100% 72%, rgba(168, 162, 158, 0.07), transparent 60%),
+      radial-gradient(ellipse 34% 42% at 100% 18%, rgba(212, 212, 216, 0.05), transparent 55%),
+      radial-gradient(ellipse 30% 38% at 0% 82%, rgba(39, 39, 42, 0.45), transparent 55%),
+      radial-gradient(ellipse 55% 40% at 50% 0%, rgba(12, 13, 18, 0.9), transparent 70%);
   }
 
-  /* Seamless loft canvas — no hard section bands */
+  /* Seamless loft canvas — soft vertical depth */
   .bg-loft-canvas {
-    background-color: #0d0f12;
+    background-color: #09090b;
     background-image: linear-gradient(
       180deg,
-      #0d0f12 0%,
-      #10141a 35%,
-      #0e1216 65%,
-      #0d0f12 100%
+      #09090b 0%,
+      #0c0d12 38%,
+      #0a0b10 68%,
+      #09090b 100%
     );
   }
 
-  /* Infinite testimonials marquee — translate by exactly 50% of duplicated track */
   .marquee-fade-edges {
     -webkit-mask-image: linear-gradient(
       to right,
@@ -232,13 +232,22 @@
 
 @keyframes layer-flash {
   0% {
-    filter: brightness(1.35);
+    filter: brightness(1.2);
   }
   40% {
-    filter: brightness(1.15);
+    filter: brightness(1.08);
   }
   100% {
     filter: brightness(1);
+  }
+}
+
+@keyframes progress-indeterminate {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(320%);
   }
 }
 
@@ -250,6 +259,10 @@
   }
 
   .animate-\[layer-flash_0\.9s_ease-out\] {
+    animation: none !important;
+  }
+
+  .animate-\[progress-indeterminate_1\.2s_ease-in-out_infinite\] {
     animation: none !important;
   }
 }

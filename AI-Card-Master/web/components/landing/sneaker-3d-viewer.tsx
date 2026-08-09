@@ -5,6 +5,7 @@ import { Canvas, useThree } from "@react-three/fiber"
 import { Suspense, useEffect, useMemo, useSyncExternalStore } from "react"
 import {
   DoubleSide,
+  PCFShadowMap,
   SRGBColorSpace,
   type Group,
   type Material,
@@ -327,6 +328,10 @@ function Sneaker3DViewer({
             logarithmicDepthBuffer: true,
           }}
           shadows
+          onCreated={({ gl }) => {
+            // Three r185+: PCFSoftShadowMap is deprecated — pin the replacement explicitly.
+            gl.shadowMap.type = PCFShadowMap
+          }}
         >
           <ViewerScene
             variant={variant}

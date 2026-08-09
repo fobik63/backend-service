@@ -19,3 +19,6 @@ export function resolveApiBaseUrl(
 export const API_BASE_URL = resolveApiBaseUrl()
 
 export const APP_NAME = "AI Card Master"
+
+/** Re-export mock flag for convenient imports next to API config. */
+export { IS_MOCK } from "@/lib/constants/mock"

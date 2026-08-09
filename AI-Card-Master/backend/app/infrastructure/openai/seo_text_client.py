@@ -15,6 +15,8 @@ from pydantic import ValidationError
 
 from app.core.prompt_safety import fence_untrusted_text, harden_system_prompt
 from app.domain.seo_text import (
+    DESCRIPTION_TARGET_MAX_CHARS,
+    DESCRIPTION_TARGET_MIN_CHARS,
     SEO_SYSTEM_PROMPT,
     SeoTextConfigurationError,
     SeoTextContent,
@@ -202,7 +204,7 @@ def _system_prompt() -> str:
 
 
 def _build_user_prompt(request: SeoTextGenerateRequest) -> str:
-    limit = description_limit_for(request.target_platform)
+    platform_limit = description_limit_for(request.target_platform)
     features_json = json.dumps(dict(request.features), ensure_ascii=False, default=str)
     fenced_title = fence_untrusted_text(request.title, label="title")
     fenced_category = fence_untrusted_text(request.category, label="category")
@@ -211,15 +213,21 @@ def _build_user_prompt(request: SeoTextGenerateRequest) -> str:
         "Wildberries" if request.target_platform.value == "wb" else "Ozon"
     )
     return (
-        f"Сгенерируй SEO-контент карточки товара для {platform_label}. "
+        f"Сгенерируй продающий SEO-контент карточки товара для {platform_label}. "
+        "Пиши про сам товар, его пользу и сценарии использования — "
+        "не описывай дизайн карточки, композицию, фон, шрифты, плашки и другие "
+        "визуальные элементы фото/инфографики. "
         "Верни строго JSON вида: "
         '{"optimized_title":"...","benefits":["..."],"description":"..."}. '
-        f"Требования: optimized_title — SEO-заголовок до 180 символов; "
-        f"benefits — список из 4-6 коротких ключевых преимуществ (буллеты) "
-        f"для инфографики (без emoji); description — полный продающий SEO-текст "
-        f"на русском с LSI-ключами и смысловыми тегами/фразами, не длиннее "
-        f"{limit} символов. Не выдумывай сертификаты, гарантии и материалы, "
-        f"которых нет во входных данных. "
+        "Требования: "
+        "optimized_title — оффер/SEO-заголовок до 180 символов с ключевыми словами; "
+        "benefits — 4-6 коротких ключевых тегов/УТП (поисковые фразы и преимущества, "
+        "без emoji); "
+        f"description — подробное продающее SEO-описание товара на русском "
+        f"от {DESCRIPTION_TARGET_MIN_CHARS} до {DESCRIPTION_TARGET_MAX_CHARS} символов "
+        f"(жёсткий потолок площадки — {platform_limit}): ключевые слова, преимущества, "
+        "характеристики и закрытие болей покупателя. "
+        "Не выдумывай сертификаты, гарантии и материалы, которых нет во входных данных. "
         f"Заголовок: {fenced_title}. Категория: {fenced_category}. "
         f"Характеристики/фичи: {fenced_features}."
     )
@@ -274,7 +282,10 @@ def _parse_seo_content(
     except ValidationError as exc:
         raise SeoTextUpstreamError("OpenAI response failed SEO schema.") from exc
 
-    max_chars = description_limit_for(request.target_platform)
+    max_chars = min(
+        description_limit_for(request.target_platform),
+        DESCRIPTION_TARGET_MAX_CHARS,
+    )
     if len(content.description) > max_chars:
         truncated = content.description[:max_chars].rstrip()
         content = SeoTextContent(

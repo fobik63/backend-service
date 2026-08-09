@@ -19,7 +19,7 @@ function CardLogoIcon({ className }: { className?: string }) {
         rx="2.5"
         stroke="currentColor"
         strokeWidth="1.6"
-        className="text-copper/80"
+        className="text-white/35"
       />
       <rect
         x="7.5"
@@ -27,19 +27,19 @@ function CardLogoIcon({ className }: { className?: string }) {
         width="17"
         height="22"
         rx="2.5"
-        fill="rgba(22,24,30,0.9)"
+        fill="#121214"
         stroke="currentColor"
         strokeWidth="1.6"
-        className="text-emerald"
+        className="text-foreground"
       />
       <path
         d="M11 8.5h10M11 12.5h7M11 16.5h8.5"
         stroke="currentColor"
         strokeWidth="1.4"
         strokeLinecap="round"
-        className="text-copper/70"
+        className="text-white/45"
       />
-      <circle cx="21.5" cy="5.5" r="2" className="fill-emerald" />
+      <circle cx="21.5" cy="5.5" r="2" className="fill-foreground" />
     </svg>
   )
 }
@@ -55,12 +55,12 @@ function BrandLogo({ href = "/projects", className }: BrandLogoProps) {
       href={href}
       className={cn("group flex shrink-0 items-center gap-2.5", className)}
     >
-      <CardLogoIcon className="size-7 transition-transform duration-300 group-hover:scale-105" />
+      <CardLogoIcon className="size-7 transition-opacity duration-200 group-hover:opacity-80" />
       <span className="font-heading text-lg font-semibold tracking-tight text-sidebar-foreground">
         CARD AI
         <span
           aria-hidden
-          className="ml-0.5 inline-block size-1.5 translate-y-[-0.35em] rounded-full bg-emerald shadow-[0_0_10px_rgba(16,185,129,0.7)]"
+          className="ml-1 inline-block size-1.5 translate-y-[-0.35em] rounded-full bg-foreground"
         />
       </span>
     </Link>

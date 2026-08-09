@@ -60,7 +60,7 @@ async def test_seo_text_service_charges_one_coin_and_returns_usage() -> None:
                     "Амортизация",
                     "Надежная фиксация",
                 ),
-                description="A" * 120,
+                description="A" * 900,
             ),
             SeoTokenUsage(
                 prompt_tokens=100,
@@ -160,7 +160,7 @@ def test_resolve_openai_api_key_missing(monkeypatch: pytest.MonkeyPatch) -> None
 
 @pytest.mark.asyncio
 async def test_openai_client_parses_response_and_truncates_wb() -> None:
-    long_description = "X" * 6000
+    long_description = "X" * 2000
     body = {
         "choices": [
             {
@@ -202,7 +202,7 @@ async def test_openai_client_parses_response_and_truncates_wb() -> None:
             content, usage = await seo_client.generate(_request())
 
     assert usage.total_tokens == 130
-    assert len(content.description) == 5000
+    assert len(content.description) == 1200
     assert len(content.benefits) == 5
     record_cost.assert_awaited_once()
 

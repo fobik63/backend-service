@@ -11,9 +11,9 @@ export default function AuthLayout({ children }: AuthLayoutProps) {
     <div className="relative flex min-h-dvh items-center justify-center overflow-hidden px-4 py-10">
       <Link
         href="/landing"
-        className="absolute top-5 left-5 z-20 inline-flex items-center gap-2 rounded-lg border border-white/10 bg-loft-surface/80 px-3 py-2 text-sm text-foreground/90 shadow-lg backdrop-blur-md transition-colors hover:border-copper/40 hover:bg-loft-surface"
+        className="absolute top-5 left-5 z-20 inline-flex items-center gap-2 rounded-lg border border-white/10 bg-loft-surface px-3 py-2 text-sm text-foreground/90 transition-colors hover:border-white/20 hover:bg-muted"
       >
-        <ArrowLeft className="size-4 text-copper" aria-hidden />
+        <ArrowLeft className="size-4 text-muted-foreground" aria-hidden />
         Назад на главную
       </Link>
 

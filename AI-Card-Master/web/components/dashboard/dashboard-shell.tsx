@@ -14,6 +14,7 @@ import {
   persistSession,
   subscriptionLabel,
 } from "@/lib/auth/session"
+import { IS_MOCK, MOCK_AUTH_USER } from "@/lib/constants/mock"
 import { useI18n } from "@/lib/i18n"
 import { useAuthStore } from "@/lib/store"
 import { cn } from "@/lib/utils"
@@ -42,6 +43,12 @@ function DashboardShell({ children }: DashboardShellProps) {
 
   useEffect(() => {
     if (!hydrated) return
+
+    if (IS_MOCK) {
+      setUser(MOCK_AUTH_USER)
+      return
+    }
+
     if (!accessToken) {
       router.replace("/login")
       return
@@ -105,6 +112,10 @@ function DashboardShell({ children }: DashboardShellProps) {
 
   const handleLogout = () => {
     clearAuth()
+    if (IS_MOCK) {
+      router.push("/dashboard")
+      return
+    }
     router.push("/login")
   }
 

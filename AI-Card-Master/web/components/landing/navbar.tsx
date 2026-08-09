@@ -113,7 +113,7 @@ function Navbar() {
             CARD AI
             <span
               aria-hidden
-              className="ml-0.5 inline-block size-1.5 translate-y-[-0.35em] rounded-full bg-emerald shadow-[0_0_10px_rgba(16,185,129,0.7)]"
+              className="ml-0.5 inline-block size-1.5 translate-y-[-0.35em] rounded-full bg-foreground"
             />
           </span>
         </Link>
@@ -137,7 +137,7 @@ function Navbar() {
         <div className="hidden items-center gap-2 sm:flex">
           <GlassButton
             size="default"
-            className="border border-white/12 !bg-none bg-white/[0.04] text-foreground shadow-none [background-image:none]"
+            className="border border-white/12 bg-transparent text-foreground"
             onClick={openAuth}
           >
             Войти
@@ -187,7 +187,7 @@ function Navbar() {
             </ul>
             <div className="flex flex-col gap-2 border-t border-white/8 p-3 sm:hidden">
               <GlassButton
-                className="w-full border border-white/12 !bg-none bg-white/[0.04] text-foreground shadow-none [background-image:none]"
+                className="w-full border border-white/12 bg-transparent text-foreground"
                 onClick={openAuth}
               >
                 Войти

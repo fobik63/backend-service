@@ -64,6 +64,9 @@ def test_generation_and_webhook_contracts_are_exposed() -> None:
     assert "/api/v1/generations" in paths
     assert "post" in paths["/api/v1/generations"]
     assert "202" in paths["/api/v1/generations"]["post"]["responses"]
+    assert "/api/v1/generate-pipeline" in paths
+    assert "post" in paths["/api/v1/generate-pipeline"]
+    assert "200" in paths["/api/v1/generate-pipeline"]["post"]["responses"]
     assert "/api/v1/generations/model" in paths
     assert "post" in paths["/api/v1/generations/model"]
     assert "202" in paths["/api/v1/generations/model"]["post"]["responses"]
@@ -117,6 +120,11 @@ def test_generation_and_webhook_contracts_are_exposed() -> None:
     assert "202" in paths["/api/v1/analytics/analyze-links"]["post"]["responses"]
     assert "/api/v1/analytics/analyze-links/{task_id}" in paths
     assert "get" in paths["/api/v1/analytics/analyze-links/{task_id}"]
+    assert "/api/v1/analytics/eye-of-god" in paths
+    assert "post" in paths["/api/v1/analytics/eye-of-god"]
+    assert "202" in paths["/api/v1/analytics/eye-of-god"]["post"]["responses"]
+    assert "/api/v1/analytics/eye-of-god/{task_id}" in paths
+    assert "get" in paths["/api/v1/analytics/eye-of-god/{task_id}"]
     assert "/api/v1/winback/cancel-intent" in paths
     assert "post" in paths["/api/v1/winback/cancel-intent"]
     assert "/api/v1/winback/offer" in paths
@@ -282,6 +290,8 @@ def test_hd_face_fix_forces_premium_engine_profile() -> None:
 async def test_status_polling_falls_back_to_db_when_redis_is_lost(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import app.application.generation_cabinet_service as cabinet_mod
+
     user = User(
         id=uuid4(),
         email="status@example.com",
@@ -324,20 +334,20 @@ async def test_status_polling_falls_back_to_db_when_redis_is_lost(
             assert user_id == user.id
             return job
 
-    async def redis_down(_key: str) -> dict[str, object] | None:
-        raise generations_api.RedisUnavailableError("redis unavailable")
+    async def cache_miss(**_kwargs: object) -> dict[str, object] | None:
+        return None
 
-    async def cache_down(*args: object, **kwargs: object) -> None:
-        raise generations_api.RedisUnavailableError("redis unavailable")
+    async def cache_write_noop(**_kwargs: object) -> None:
+        return None
 
     monkeypatch.setattr(generations_api, "GenerationRepository", Repository)
-    monkeypatch.setattr(generations_api, "get_cached_json", redis_down)
-    monkeypatch.setattr(generations_api, "cache_json", cache_down)
+    monkeypatch.setattr(cabinet_mod, "get_cached_generation_status", cache_miss)
+    monkeypatch.setattr(cabinet_mod, "set_cached_generation_status", cache_write_noop)
     monkeypatch.setattr(
-        generations_api,
+        cabinet_mod,
         "get_s3_storage",
         lambda: (_ for _ in ()).throw(
-            generations_api.S3StorageConfigurationError("not configured")
+            cabinet_mod.S3StorageConfigurationError("not configured")
         ),
     )
 
@@ -359,6 +369,8 @@ async def test_status_polling_falls_back_to_db_when_redis_is_lost(
 async def test_generation_history_returns_thumbnail_and_expires_old_archive(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import app.application.generation_cabinet_service as cabinet_mod
+
     user = User(
         id=uuid4(),
         email="history@example.com",
@@ -425,7 +437,7 @@ async def test_generation_history_returns_thumbnail_and_expires_old_archive(
             return f"https://storage.test/{object_key}"
 
     monkeypatch.setattr(generations_api, "GenerationRepository", Repository)
-    monkeypatch.setattr(generations_api, "get_s3_storage", Storage)
+    monkeypatch.setattr(cabinet_mod, "get_s3_storage", Storage)
 
     async def cache_miss(**_kwargs: object) -> None:
         return None
@@ -433,8 +445,8 @@ async def test_generation_history_returns_thumbnail_and_expires_old_archive(
     async def cache_noop(**_kwargs: object) -> None:
         return None
 
-    monkeypatch.setattr(generations_api, "get_cached_generation_history", cache_miss)
-    monkeypatch.setattr(generations_api, "set_cached_generation_history", cache_noop)
+    monkeypatch.setattr(cabinet_mod, "get_cached_generation_history", cache_miss)
+    monkeypatch.setattr(cabinet_mod, "set_cached_generation_history", cache_noop)
 
     response = await generations_api.list_generation_history(
         request=_fake_request("/api/v1/generations/history"),

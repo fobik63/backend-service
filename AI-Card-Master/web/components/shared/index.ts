@@ -1,2 +1,2 @@
-export { AppAtmosphere } from "./app-atmosphere";
-export { BackgroundGlow } from "./background-glow";
+export { AppAtmosphere } from "./app-atmosphere"
+export { BackgroundGlow } from "./background-glow"

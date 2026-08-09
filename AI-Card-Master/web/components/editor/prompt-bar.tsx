@@ -9,7 +9,8 @@ import {
   Loader2,
   Sparkles,
 } from "lucide-react"
-import { useState, type FormEvent } from "react"
+import Image from "next/image"
+import { useEffect, useRef, useState, type FormEvent } from "react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -29,11 +30,22 @@ import {
   downloadCurrentCanvasImage,
   findEditorExportCanvas,
 } from "@/lib/export/card-pack"
+import { captureFabricPagesPngBytes } from "@/lib/editor/fabric-export"
 import { generateByPrompt, getApiErrorMessage } from "@/lib/api"
 import {
   canvasStateToLayers,
   layersToCanvasState,
 } from "@/lib/editor/editor-document"
+import {
+  delay,
+  getMockGenerateLayers,
+  IS_MOCK,
+  MOCK_CARD_IMAGE,
+  MOCK_GENERATE_DELAY_MS,
+  MOCK_PRODUCT_IMAGE,
+  MOCK_SEO_RESULT,
+  type MockSeoResult,
+} from "@/lib/constants/mock"
 import { useI18n } from "@/lib/i18n"
 import { useEditorStore } from "@/lib/store/editor-store"
 import { cn } from "@/lib/utils"
@@ -47,6 +59,45 @@ type PromptBarProps = {
   variant?: "panel" | "footer"
 }
 
+function MockSeoPreview({ result }: { result: MockSeoResult }) {
+  return (
+    <div className="space-y-2.5 rounded-xl border border-white/12 bg-white/[0.03] p-3">
+      <div className="flex items-start gap-2.5">
+        <div className="relative h-14 w-11 shrink-0 overflow-hidden rounded-md border border-white/10">
+          <Image
+            src={MOCK_CARD_IMAGE}
+            alt="Mock card preview"
+            fill
+            className="object-cover"
+            sizes="44px"
+          />
+        </div>
+        <div className="min-w-0 space-y-1">
+          <p className="text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+            Mock SEO результат
+          </p>
+          <p className="text-xs font-semibold leading-snug text-foreground">
+            {result.optimized_title}
+          </p>
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {result.benefits.map((benefit) => (
+          <span
+            key={benefit}
+            className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] text-muted-foreground"
+          >
+            {benefit}
+          </span>
+        ))}
+      </div>
+      <p className="text-[11px] leading-relaxed text-muted-foreground">
+        {result.description}
+      </p>
+    </div>
+  )
+}
+
 function PromptBar({
   className,
   projectTitle,
@@ -58,16 +109,40 @@ function PromptBar({
   const [exporting, setExporting] = useState(false)
   const [zipping, setZipping] = useState(false)
   const [exportFormat, setExportFormat] = useState<ExportFormat>("png")
+  const [mockSeo, setMockSeo] = useState<MockSeoResult | null>(null)
 
   const setBusyKind = useEditorStore((s) => s.setBusyKind)
-  const replaceActivePage = useEditorStore((s) => s.replaceActivePage)
+  const setBusyProgress = useEditorStore((s) => s.setBusyProgress)
+  const applyGenerationResult = useEditorStore((s) => s.applyGenerationResult)
   const commitActivePage = useEditorStore((s) => s.commitActivePage)
   const storeProjectId = useEditorStore((s) => s.projectId)
   const layers = useEditorStore((s) => s.layers)
   const softbox = useEditorStore((s) => s.softbox)
   const storePreviewUrl = useEditorStore((s) => s.productPreviewUrl)
+  const backgroundPreviewUrl = useEditorStore((s) => s.backgroundPreviewUrl)
   const packSize = useEditorStore((s) => s.packSize)
   const activePageIndex = useEditorStore((s) => s.activePageIndex)
+  const mockRafRef = useRef(0)
+
+  useEffect(() => {
+    return () => {
+      if (mockRafRef.current) {
+        window.cancelAnimationFrame(mockRafRef.current)
+        mockRafRef.current = 0
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    const onSeedPrompt = (event: Event) => {
+      const detail = (event as CustomEvent<string>).detail
+      if (typeof detail === "string" && detail.trim()) {
+        setPrompt(detail.trim())
+      }
+    }
+    window.addEventListener("editor:seed-prompt", onSeedPrompt)
+    return () => window.removeEventListener("editor:seed-prompt", onSeedPrompt)
+  }, [])
 
   const exportOptions = [
     {
@@ -90,6 +165,39 @@ function PromptBar({
     storeProjectId ||
     "card-pack"
 
+  const runMockGenerate = async () => {
+    setBusyProgress(0)
+    const started = performance.now()
+
+    const tick = () => {
+      const elapsed = performance.now() - started
+      const pct = Math.min(99, (elapsed / MOCK_GENERATE_DELAY_MS) * 100)
+      setBusyProgress(pct)
+      if (elapsed < MOCK_GENERATE_DELAY_MS) {
+        mockRafRef.current = window.requestAnimationFrame(tick)
+      } else {
+        mockRafRef.current = 0
+      }
+    }
+    mockRafRef.current = window.requestAnimationFrame(tick)
+
+    await delay(MOCK_GENERATE_DELAY_MS)
+    if (mockRafRef.current) {
+      window.cancelAnimationFrame(mockRafRef.current)
+      mockRafRef.current = 0
+    }
+    setBusyProgress(100)
+
+    // One store write → one undo step → one Fabric scene rebuild.
+    applyGenerationResult({
+      layers: getMockGenerateLayers(),
+      productPreviewUrl: MOCK_PRODUCT_IMAGE,
+      backgroundPreviewUrl: MOCK_CARD_IMAGE,
+    })
+    setMockSeo(MOCK_SEO_RESULT)
+    toast.success(t("editor.generateSuccess"))
+  }
+
   const handleGenerate = async (e?: FormEvent) => {
     e?.preventDefault()
     const trimmed = prompt.trim()
@@ -102,17 +210,37 @@ function PromptBar({
     setGenerating(true)
     setBusyKind("generating")
     try {
-      const generated = await generateByPrompt(
-        trimmed,
-        layersToCanvasState(layers, storePreviewUrl)
-      )
-      replaceActivePage(canvasStateToLayers(generated))
-      toast.success(t("editor.generateSuccess"))
+      if (IS_MOCK) {
+        await runMockGenerate()
+      } else {
+        setBusyProgress(null)
+        const generated = await generateByPrompt(
+          trimmed,
+          layersToCanvasState(layers, storePreviewUrl, backgroundPreviewUrl),
+        )
+        applyGenerationResult({
+          layers: canvasStateToLayers(generated),
+          backgroundPreviewUrl: generated.background_image_url
+            ? generated.background_image_url
+            : undefined,
+        })
+        toast.success(t("editor.generateSuccess"))
+      }
     } catch (error) {
       toast.error(getApiErrorMessage(error, t("editor.generateError")))
+      setBusyKind("idle")
+      setBusyProgress(null)
     } finally {
       setGenerating(false)
-      setBusyKind("idle")
+      // Keep busy overlay until Fabric finishes rebuilding the scene
+      // (fabric-canvas clears busyKind on successful rebuild). Safety timeout:
+      window.setTimeout(() => {
+        const kind = useEditorStore.getState().busyKind
+        if (kind === "generating") {
+          useEditorStore.getState().setBusyKind("idle")
+          useEditorStore.getState().setBusyProgress(null)
+        }
+      }, 8_000)
     }
   }
 
@@ -139,7 +267,7 @@ function PromptBar({
         t("editor.downloadCurrentSuccess", {
           n: String(pageNum),
           format: format === "png" ? "PNG" : "WebP",
-        })
+        }),
       )
     } catch (error) {
       toast.error(getApiErrorMessage(error, t("editor.downloadCurrentError")))
@@ -153,14 +281,29 @@ function PromptBar({
     setZipping(true)
     try {
       commitActivePage()
-      const latestPages = useEditorStore.getState().pages
+      const store = useEditorStore.getState()
+      const latestPages = store.pages
       const pageSnapshot = latestPages.map((page) =>
         page.map((layer) => ({
           ...layer,
           textStyle: layer.textStyle ? { ...layer.textStyle } : undefined,
           chip: layer.chip ? { ...layer.chip } : undefined,
-        }))
+        })),
       )
+
+      // Prefer live Fabric captures (1080×1440, no selection chrome / guides).
+      let fabricPages: Uint8Array[] | null = null
+      try {
+        fabricPages = await captureFabricPagesPngBytes({
+          pageCount: Math.min(packSize, latestPages.length),
+          getActivePageIndex: () => useEditorStore.getState().activePageIndex,
+          setActivePageIndex: (index) =>
+            useEditorStore.getState().setActivePageIndex(index),
+        })
+      } catch {
+        fabricPages = null
+      }
+
       await downloadCardPackZip({
         packSize,
         projectTitle: zipTitle,
@@ -169,11 +312,19 @@ function PromptBar({
         pages: pageSnapshot,
         softbox: { ...softbox },
         zipBasename: zipTitle,
+        capturePageAtIndex: fabricPages
+          ? async (pageIndex) => {
+              const hit = fabricPages![pageIndex]
+              if (hit) return hit
+              // Pack larger than editor pages — fall back to last captured page.
+              return fabricPages![fabricPages!.length - 1]!
+            }
+          : undefined,
       })
       toast.success(
         t("export.success", {
           count: String(packSize),
-        })
+        }),
       )
     } catch (error) {
       toast.error(getApiErrorMessage(error, t("export.error")))
@@ -190,8 +341,8 @@ function PromptBar({
     return (
       <footer
         className={cn(
-          "shrink-0 border-t border-white/8 bg-loft-surface/95 backdrop-blur-sm",
-          className
+          "shrink-0 border-t border-zinc-800/80 bg-zinc-900/60 backdrop-blur-xl",
+          className,
         )}
         aria-label={t("editor.promptBarAria")}
       >
@@ -201,7 +352,7 @@ function PromptBar({
         >
           <div className="relative min-w-0 flex-1">
             <Sparkles
-              className="pointer-events-none absolute top-3 left-3 size-4 text-emerald/70"
+              className="pointer-events-none absolute top-3 left-3 size-4 text-muted-foreground"
               aria-hidden
             />
             <Textarea
@@ -213,9 +364,9 @@ function PromptBar({
               rows={2}
               onChange={(e) => setPrompt(e.target.value)}
               className={cn(
-                "min-h-12 resize-none border-white/10 bg-loft/60 pl-10 text-sm",
+                "min-h-12 resize-none border-white/10 bg-loft pl-10 text-sm",
                 "placeholder:text-muted-foreground/70",
-                "focus-visible:border-emerald/40 focus-visible:ring-emerald/25"
+                "focus-visible:border-white/25 focus-visible:ring-white/15",
               )}
             />
           </div>
@@ -254,6 +405,11 @@ function PromptBar({
             </Button>
           </div>
         </form>
+        {IS_MOCK && mockSeo ? (
+          <div className="border-t border-white/8 px-3 py-3 sm:px-4">
+            <MockSeoPreview result={mockSeo} />
+          </div>
+        ) : null}
       </footer>
     )
   }
@@ -264,10 +420,15 @@ function PromptBar({
       aria-label={t("editor.promptBarAria")}
     >
       <div className="flex items-center gap-2">
-        <Sparkles className="size-4 text-emerald" aria-hidden />
+        <Sparkles className="size-4 text-muted-foreground" aria-hidden />
         <h3 className="font-heading text-sm font-semibold tracking-tight">
           {t("editor.promptSection")}
         </h3>
+        {IS_MOCK ? (
+          <span className="rounded border border-white/12 bg-white/[0.04] px-2 py-0.5 text-[10px] text-muted-foreground">
+            MOCK
+          </span>
+        ) : null}
       </div>
 
       <form onSubmit={handleGenerate} className="space-y-2.5">
@@ -280,9 +441,9 @@ function PromptBar({
           rows={3}
           onChange={(e) => setPrompt(e.target.value)}
           className={cn(
-            "min-h-[4.5rem] resize-none border-white/10 bg-white/[0.04] text-xs leading-relaxed",
+            "min-h-[4.5rem] resize-none border-white/10 bg-white/[0.03] text-xs leading-relaxed",
             "placeholder:text-muted-foreground/70",
-            "focus-visible:border-emerald/40 focus-visible:ring-emerald/25"
+            "focus-visible:border-white/25 focus-visible:ring-white/15",
           )}
         />
 
@@ -291,7 +452,7 @@ function PromptBar({
             type="submit"
             size="sm"
             disabled={generating || !prompt.trim() || busy}
-            className={cn("w-full shadow-emerald-glow", generating && "opacity-90")}
+            className={cn("w-full", generating && "opacity-90")}
             aria-busy={generating}
           >
             {generating ? (
@@ -311,7 +472,7 @@ function PromptBar({
                 onClick={() => handleExport(exportFormat)}
                 className={cn(
                   "h-full min-w-0 flex-1 gap-1.5 rounded-none px-2 text-xs text-foreground",
-                  "hover:bg-white/8 hover:text-foreground"
+                  "hover:bg-white/8 hover:text-foreground",
                 )}
                 aria-busy={exporting}
               >
@@ -332,7 +493,7 @@ function PromptBar({
                     "text-muted-foreground outline-none transition-colors",
                     "hover:bg-white/8 hover:text-foreground",
                     "focus-visible:ring-2 focus-visible:ring-ring/50",
-                    "disabled:pointer-events-none disabled:opacity-50"
+                    "disabled:pointer-events-none disabled:opacity-50",
                   )}
                 >
                   <ChevronDown className="size-3.5" aria-hidden />
@@ -352,13 +513,13 @@ function PromptBar({
                           onClick={() => handleExport(opt.id)}
                           className={cn(
                             "gap-2.5 py-2",
-                            selected && "bg-emerald/10 text-emerald"
+                            selected && "bg-white/10 text-foreground",
                           )}
                         >
                           <Icon
                             className={cn(
                               "size-4",
-                              selected ? "text-emerald" : "text-muted-foreground"
+                              selected ? "text-emerald" : "text-muted-foreground",
                             )}
                             aria-hidden
                           />
@@ -402,6 +563,8 @@ function PromptBar({
           {activeExport.label} · {t("export.packPhotos", { count: String(packSize) })}
         </p>
       </form>
+
+      {IS_MOCK && mockSeo ? <MockSeoPreview result={mockSeo} /> : null}
     </section>
   )
 }

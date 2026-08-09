@@ -7,28 +7,46 @@ under /api/v1/images for frontend (Next.js / Flutter) clients.
 from __future__ import annotations
 
 import logging
+from functools import lru_cache
 from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
+from app.core.config import get_settings
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/images", tags=["images"])
 
-# Absolute path to the directory where uploaded files will be stored.
-UPLOADS_DIR = Path(__file__).resolve().parents[2] / "storage" / "uploads"
-
-# Max accepted upload size in bytes (10 MB).
-MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
-
-# Allowlist of supported MIME types and deterministic file extensions.
 ALLOWED_IMAGE_TYPES = {
     "image/jpeg": ".jpg",
     "image/png": ".png",
     "image/webp": ".webp",
 }
+
+
+@lru_cache(maxsize=1)
+def _uploads_dir() -> Path:
+    configured = get_settings().image_uploads_dir.strip()
+    if configured:
+        return Path(configured)
+    return Path(__file__).resolve().parents[2] / "storage" / "uploads"
+
+
+def _max_upload_bytes() -> int:
+    return get_settings().image_upload_max_bytes
+
+
+# Backward-compatible module attributes (three_d / tests).
+# Prefer get_uploads_dir() at call time — settings may differ from import-time path.
+def get_uploads_dir() -> Path:
+    return _uploads_dir()
+
+
+UPLOADS_DIR = Path(__file__).resolve().parents[2] / "storage" / "uploads"
+MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
 
 
 class UploadImageResponse(BaseModel):
@@ -60,11 +78,53 @@ def _remove_partial_file(file_path: Path) -> None:
 def ensure_uploads_dir() -> Path:
     """Create and validate the uploads directory (used by app lifespan)."""
 
-    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
-    probe_file = UPLOADS_DIR / ".write_probe"
+    uploads_dir = _uploads_dir()
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+    probe_file = uploads_dir / ".write_probe"
     probe_file.write_text("ok", encoding="utf-8")
     probe_file.unlink(missing_ok=True)
-    return UPLOADS_DIR
+    return uploads_dir
+
+
+def _safe_stored_filename(filename: str) -> str:
+    """Reject path traversal; allow only basename tokens we write ourselves."""
+
+    name = Path(filename).name
+    if not name or name != filename or ".." in name or "/" in name or "\\" in name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid file name.",
+        )
+    if not any(name.endswith(ext) for ext in ALLOWED_IMAGE_TYPES.values()):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported file extension.",
+        )
+    return name
+
+
+@router.get(
+    "/files/{filename}",
+    summary="Serve uploaded image",
+    description="Returns a previously uploaded image by stored filename.",
+)
+async def get_uploaded_image(filename: str):
+    """Serve a file from the configured uploads directory."""
+
+    from fastapi.responses import FileResponse
+
+    safe_name = _safe_stored_filename(filename)
+    path = get_uploads_dir() / safe_name
+    if not path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Uploaded image not found.",
+        )
+    media_type = next(
+        (mime for mime, ext in ALLOWED_IMAGE_TYPES.items() if safe_name.endswith(ext)),
+        "application/octet-stream",
+    )
+    return FileResponse(path, media_type=media_type, filename=safe_name)
 
 
 @router.post(
@@ -73,23 +133,20 @@ def ensure_uploads_dir() -> Path:
     status_code=status.HTTP_201_CREATED,
     summary="Upload product image",
     description=(
-        "Accepts a single product image (JPEG / PNG / WebP, max 10 MB) "
+        "Accepts a single product image (JPEG / PNG / WebP) "
         "and stores it for downstream AI card generation."
     ),
 )
-async def upload_image(file: UploadFile = File(..., description="Product image file")) -> UploadImageResponse:
-    """Upload a single image file.
-
-    Validation steps:
-    1) Ensure file metadata exists.
-    2) Validate MIME type against allowlist.
-    3) Stream file to disk with hard size cap.
-    4) Return deterministic upload metadata.
-    """
+async def upload_image(
+    file: UploadFile = File(..., description="Product image file"),
+) -> UploadImageResponse:
+    """Upload a single image file with MIME allowlist and size cap."""
 
     file_uuid = uuid4().hex
     stored_file_path: Path | None = None
     total_size = 0
+    uploads_dir = get_uploads_dir()
+    max_bytes = _max_upload_bytes()
 
     try:
         if not file.filename or not file.filename.strip():
@@ -109,7 +166,7 @@ async def upload_image(file: UploadFile = File(..., description="Product image f
 
         extension = ALLOWED_IMAGE_TYPES[file.content_type]
         stored_filename = f"{file_uuid}{extension}"
-        stored_file_path = UPLOADS_DIR / stored_filename
+        stored_file_path = uploads_dir / stored_filename
 
         with stored_file_path.open("wb") as buffer:
             while True:
@@ -118,12 +175,12 @@ async def upload_image(file: UploadFile = File(..., description="Product image f
                     break
 
                 total_size += len(chunk)
-                if total_size > MAX_FILE_SIZE_BYTES:
+                if total_size > max_bytes:
                     raise HTTPException(
                         status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                         detail=(
                             "File is too large. Maximum allowed size is "
-                            f"{MAX_FILE_SIZE_BYTES // (1024 * 1024)} MB."
+                            f"{max_bytes // (1024 * 1024)} MB."
                         ),
                     )
 

@@ -24,22 +24,8 @@ export type CreatePaymentResponse = {
   description: string | null
 }
 
-export type BalanceDTO = {
-  ai_coins: number
-  daily_bonus_available: boolean
-  daily_bonus_streak: number
-  daily_bonus_coins: number
-  last_daily_bonus_claimed_at: string | null
-  next_daily_bonus_available_at: string
-}
-
 export async function listTariffs(): Promise<TariffDTO[]> {
   const { data } = await apiClient.get<TariffDTO[]>("/payments/tariffs")
-  return data
-}
-
-export async function getBalance(): Promise<BalanceDTO> {
-  const { data } = await apiClient.get<BalanceDTO>("/payments/balance")
   return data
 }
 

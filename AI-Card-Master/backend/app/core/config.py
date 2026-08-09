@@ -910,6 +910,61 @@ class Settings(BaseSettings):
         default=30 * 1024 * 1024,
         alias="GENERATION_MAX_RESULT_BYTES",
     )
+    image_upload_max_bytes: int = Field(
+        default=10 * 1024 * 1024,
+        alias="IMAGE_UPLOAD_MAX_BYTES",
+        description="Max size for POST /api/v1/images/upload local disk uploads.",
+    )
+    image_uploads_dir: str = Field(
+        default="",
+        alias="IMAGE_UPLOADS_DIR",
+        description="Absolute path for local image uploads; empty → backend/storage/uploads.",
+    )
+    three_d_max_generate_image_bytes: int = Field(
+        default=10 * 1024 * 1024,
+        alias="THREE_D_MAX_GENERATE_IMAGE_BYTES",
+    )
+    webhook_max_bytes: int = Field(
+        default=1024 * 1024,
+        alias="WEBHOOK_MAX_BYTES",
+        description="Max raw body size for provider webhook ingress endpoints.",
+    )
+    # n8n generate-pipeline (sync Respond to Webhook)
+    n8n_webhook_url: str = Field(
+        default="",
+        alias="N8N_WEBHOOK_URL",
+        description=(
+            "Absolute HTTPS webhook URL for the n8n generate-pipeline workflow. "
+            "Empty disables the endpoint until configured."
+        ),
+    )
+    n8n_webhook_secret: SecretStr = Field(
+        default=SecretStr(""),
+        alias="N8N_WEBHOOK_SECRET",
+        description=(
+            "Optional shared secret sent as X-N8N-Webhook-Secret when calling n8n."
+        ),
+    )
+    n8n_timeout_seconds: float = Field(
+        default=120.0,
+        ge=5.0,
+        le=600.0,
+        alias="N8N_TIMEOUT_SECONDS",
+        description="Outbound HTTP timeout waiting for n8n Respond to Webhook.",
+    )
+    n8n_connect_timeout_seconds: float = Field(
+        default=10.0,
+        ge=1.0,
+        le=60.0,
+        alias="N8N_CONNECT_TIMEOUT_SECONDS",
+    )
+    n8n_max_retries: int = Field(
+        default=1,
+        ge=0,
+        le=3,
+        alias="N8N_MAX_RETRIES",
+        description="Transport retries for transient n8n failures (timeouts/5xx).",
+    )
     generation_allowed_result_hosts: str = Field(
         default="",
         alias="GENERATION_ALLOWED_RESULT_HOSTS",
@@ -1816,6 +1871,9 @@ class Settings(BaseSettings):
         "generation_job_timeout_seconds",
         "generation_max_upload_bytes",
         "generation_max_result_bytes",
+        "image_upload_max_bytes",
+        "three_d_max_generate_image_bytes",
+        "webhook_max_bytes",
         "daily_bonus_coins",
         "referral_bonus_coins",
         "workspace_max_managers",

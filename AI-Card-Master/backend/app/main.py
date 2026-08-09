@@ -50,6 +50,7 @@ from app.api import (
     designs_router,
     exports_router,
     fonts_router,
+    generate_pipeline_router,
     generations_router,
     health_router,
     images_router,
@@ -87,6 +88,7 @@ from app.core.rate_limit import limiter, rate_limit_exceeded_handler
 from app.core.request_context_middleware import RequestContextMiddleware
 from app.core.security_headers_middleware import SecurityHeadersMiddleware
 from app.core.suspicious_activity_middleware import SuspiciousActivityMiddleware
+from app.application.generation_errors import GenerationSubmissionError
 from app.infrastructure.observability.sentry import (
     capture_unhandled_exception,
     init_sentry,
@@ -475,6 +477,7 @@ app.include_router(ai_strategy_router)
 app.include_router(pain_analysis_router)
 app.include_router(ab_tests_router)
 app.include_router(generations_router)
+app.include_router(generate_pipeline_router)
 app.include_router(text_generation_router)
 app.include_router(midjourney_webhook_router)
 
@@ -487,6 +490,28 @@ if settings.enable_three_d:
     app.include_router(three_d_router)
     app.include_router(three_d_video_router)
     app.include_router(three_d_ws_router)
+
+
+@app.exception_handler(GenerationSubmissionError)
+async def generation_submission_exception_handler(
+    _: Request, exc: GenerationSubmissionError
+) -> JSONResponse:
+    """Map typed generation pipeline errors to stable HTTP envelopes."""
+
+    logger.warning(
+        "Generation submission error code=%s status=%s detail=%s",
+        exc.code,
+        exc.status_code,
+        exc.message,
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "success": False,
+            "detail": {"code": exc.code, "message": exc.message},
+            **shape_error_envelope(code=exc.code, message=exc.message),
+        },
+    )
 
 
 @app.exception_handler(StarletteHTTPException)

@@ -97,10 +97,10 @@ class GenerationErrorInfo(DomainModel):
 
 
 class MarketplaceTextContent(DomainModel):
-    """AI-generated marketplace copy derived from completed generation images."""
+    """AI-generated marketplace selling copy for WB/Ozon product cards."""
 
     title: str = Field(min_length=10, max_length=180)
-    description: str = Field(min_length=1000, max_length=5000)
+    description: str = Field(min_length=800, max_length=5000)
     characteristics: tuple[str, ...] = Field(min_length=3, max_length=12)
 
     @field_validator("title", "description")
