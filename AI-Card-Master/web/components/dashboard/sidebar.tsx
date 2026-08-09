@@ -160,14 +160,14 @@ function Sidebar({
               {t("nav.topUp")}
             </button>
           ) : (
-            <Link
-              href="/pricing"
-              onClick={onNavigate}
+            <button
+              type="button"
+              disabled
               className={cn(buttonVariants({ size: "sm" }), "w-full gap-1.5")}
             >
               <Plus className="size-3.5" aria-hidden />
               {t("nav.topUp")}
-            </Link>
+            </button>
           )}
         </div>
 

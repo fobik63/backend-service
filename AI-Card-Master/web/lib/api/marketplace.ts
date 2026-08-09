@@ -93,10 +93,17 @@ function resolveParsePlatform(
   return /^\d{5,15}$/.test(input.trim()) ? "wb" : "auto"
 }
 
+function localParseUrl(): string {
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return `${window.location.origin}/api/parse`
+  }
+  return "/api/parse"
+}
+
 /**
- * Article / URL → structured card via FastAPI ``POST /api/v1/parser/fetch``.
- * Auth bearer is attached by ``apiClient``; 404 body is
- * ``{ error: "Товар не найден или заблокирован" }``.
+ * Article / URL → structured card via Next.js BFF ``POST /api/parse``
+ * (cheerio meta stub + marketplace scrapers). Avoids browser CORS and
+ * does not require the FastAPI parser while that backend is incomplete.
  */
 export async function fetchProductByArticle(
   input: string,
@@ -105,12 +112,17 @@ export async function fetchProductByArticle(
   const trimmed = input.trim()
   const resolvedPlatform = resolveParsePlatform(trimmed, platform)
 
-  const { data } = await apiClient.post<FetchProductResponse>(
-    "/parser/fetch",
-    { input: trimmed, platform: resolvedPlatform },
-    { timeout: 120_000, skipErrorToast: true },
-  )
-  return data
+  try {
+    const { data } = await apiClient.post<FetchProductResponse>(
+      localParseUrl(),
+      { input: trimmed, platform: resolvedPlatform },
+      { timeout: 120_000, skipErrorToast: true },
+    )
+    return data
+  } catch (error) {
+    // Caller (parser UI) maps this via getApiErrorMessage → sonner toast.
+    throw error
+  }
 }
 
 export async function generateSeoDescription(

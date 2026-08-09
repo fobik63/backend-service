@@ -35,8 +35,6 @@ import {
 } from "@/components/ui/sheet"
 import { TEXT_PRESETS } from "@/lib/constants/mock-editor"
 import { addTextPresetToCanvas } from "@/lib/editor/canvas-actions"
-import { SOFTBOX_UPDATE_MS } from "@/lib/editor/softbox"
-import { useDebounce } from "@/lib/hooks/use-debounce"
 import { useI18n } from "@/lib/i18n"
 import {
   useEditorStore,
@@ -202,6 +200,7 @@ function SoftboxParamsSection() {
   const softbox = useEditorStore((s) => s.softbox)
   const setSoftbox = useEditorStore((s) => s.setSoftbox)
   const setSoftboxScrubbing = useEditorStore((s) => s.setSoftboxScrubbing)
+  const setSoftboxLivePreview = useEditorStore((s) => s.setSoftboxLivePreview)
   const beginHistoryTransaction = useEditorStore(
     (s) => s.beginHistoryTransaction,
   )
@@ -209,11 +208,10 @@ function SoftboxParamsSection() {
     (s) => s.commitHistoryTransaction,
   )
 
-  // Local slider state — UI updates immediately without thrashing the Fabric host.
+  // Local slider state — 60fps UI; CSS overlay via softboxLivePreview; Fabric only on commit.
   const [draft, setDraft] = useState<SoftboxSettings>(softbox)
   const draftRef = useRef(draft)
   const scrubbingRef = useRef(false)
-  const debouncedDraft = useDebounce(draft, SOFTBOX_UPDATE_MS)
   const disabled = !draft.enabled
 
   useEffect(() => {
@@ -235,6 +233,7 @@ function SoftboxParamsSection() {
           lightElevation: draftRef.current.lightElevation,
           enabled: draftRef.current.enabled,
         })
+        store.setSoftboxLivePreview(null)
         store.setSoftboxScrubbing(false)
         store.commitHistoryTransaction()
       }
@@ -252,29 +251,19 @@ function SoftboxParamsSection() {
     })
   }
 
-  // Debounced store commit while scrubbing — canvas softbox applies from store, not every input tick.
-  useEffect(() => {
-    if (!scrubbingRef.current) return
-    useEditorStore.getState().setSoftbox({
-      intensity: debouncedDraft.intensity,
-      colorTempK: debouncedDraft.colorTempK,
-      lightAngle: debouncedDraft.lightAngle,
-      softboxDiffusion: debouncedDraft.softboxDiffusion,
-      lightElevation: debouncedDraft.lightElevation,
-      enabled: debouncedDraft.enabled,
-    })
-  }, [debouncedDraft])
-
   const beginScrub = () => {
     if (scrubbingRef.current) return
     scrubbingRef.current = true
     beginHistoryTransaction()
+    setSoftboxLivePreview(draftRef.current)
     setSoftboxScrubbing(true)
   }
 
   const endScrub = () => {
     if (!scrubbingRef.current) return
+    // Commit → Fabric; clear CSS live preview in the same turn.
     pushDraftToStore(draftRef.current)
+    setSoftboxLivePreview(null)
     scrubbingRef.current = false
     setSoftboxScrubbing(false)
     commitHistoryTransaction()
@@ -287,6 +276,8 @@ function SoftboxParamsSection() {
       draftRef.current = next
       return next
     })
+    // CSS overlay at 60fps — Fabric softbox stays frozen until onValueCommitted.
+    setSoftboxLivePreview({ ...draftRef.current })
   }
 
   const tempLabel = (v: number) => {

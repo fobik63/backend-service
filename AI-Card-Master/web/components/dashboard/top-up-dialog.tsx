@@ -1,11 +1,9 @@
 "use client"
 
-import { Check, Loader2, Sparkles } from "lucide-react"
-import Link from "next/link"
+import { Check, Coins, Loader2, Sparkles } from "lucide-react"
 import { useMemo, useState } from "react"
 import { toast } from "sonner"
 
-import { buttonVariants } from "@/components/ui/button"
 import {
   Dialog,
   DialogContent,
@@ -25,6 +23,7 @@ import {
   MOCK_TOP_UP_PLANS,
   type MockBillingPeriod,
 } from "@/lib/constants/mock"
+import { useAuthStore } from "@/lib/store"
 import { cn } from "@/lib/utils"
 
 type BillingPeriod = MockBillingPeriod
@@ -46,7 +45,14 @@ type TopUpDialogProps = {
   onOpenChange: (open: boolean) => void
 }
 
+/**
+ * Portal-based Dialog for tariffs & balance.
+ * Renders above the app shell so closing it restores the previous screen
+ * (e.g. editor) without a route change or data loss.
+ */
 function TopUpDialog({ open, onOpenChange }: TopUpDialogProps) {
+  const aiCoins = useAuthStore((s) => s.user?.ai_coins)
+  const subscriptionStatus = useAuthStore((s) => s.user?.subscription_status)
   const [period, setPeriod] = useState<BillingPeriod>("month")
   const [checkoutCode, setCheckoutCode] = useState<string | null>(null)
 
@@ -93,11 +99,30 @@ function TopUpDialog({ open, onOpenChange }: TopUpDialogProps) {
         showCloseButton
       >
         <DialogHeader>
-          <DialogTitle>Пополнить баланс</DialogTitle>
+          <DialogTitle>Тарифы и баланс</DialogTitle>
           <DialogDescription>
             Выберите тариф — 1 генерация = 1 ИИ-монета. Оплата через YooKassa.
           </DialogDescription>
         </DialogHeader>
+
+        {typeof aiCoins === "number" ? (
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-3.5 py-3">
+            <div className="flex items-center gap-2 text-sm text-text-muted">
+              <Coins className="size-4 text-amber" aria-hidden />
+              <span>Текущий баланс</span>
+            </div>
+            <div className="text-right">
+              <p className="font-heading text-sm font-semibold tabular-nums text-foreground">
+                {new Intl.NumberFormat("ru-RU").format(aiCoins)} монет
+              </p>
+              {subscriptionStatus ? (
+                <p className="mt-0.5 text-[11px] uppercase tracking-wide text-text-muted">
+                  {subscriptionStatus}
+                </p>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
 
         <div
           role="tablist"
@@ -205,7 +230,7 @@ function TopUpDialog({ open, onOpenChange }: TopUpDialogProps) {
                           Оформляем…
                         </>
                       ) : (
-                        "Выбрать"
+                        "Пополнить баланс"
                       )}
                     </GlassButton>
                   </GlassCard>
@@ -214,22 +239,6 @@ function TopUpDialog({ open, onOpenChange }: TopUpDialogProps) {
             })}
           </ul>
         )}
-
-        <div className="flex flex-col gap-2 sm:flex-row sm:justify-between">
-          <Link
-            href="/pricing"
-            onClick={() => onOpenChange(false)}
-            className={cn(
-              buttonVariants({ variant: "outline" }),
-              "border-white/10 bg-transparent"
-            )}
-          >
-            Все тарифы
-          </Link>
-          <GlassButton type="button" onClick={() => onOpenChange(false)}>
-            Закрыть
-          </GlassButton>
-        </div>
       </DialogContent>
     </Dialog>
   )

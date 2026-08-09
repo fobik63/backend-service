@@ -164,10 +164,15 @@ type EditorState = {
   zoomMode: EditorZoomMode
   softbox: SoftboxSettings
   /**
-   * True while a softbox slider is dragged — canvas uses CSS / preview paint
-   * and skips objectCaching / full-res bitmap until commit.
+   * True while a softbox slider is dragged — Fabric softbox stays frozen;
+   * CSS overlay reads `softboxLivePreview` at 60fps until commit.
    */
   softboxScrubbing: boolean
+  /**
+   * Ephemeral softbox knobs while scrubbing — drives CSS preview only.
+   * Never written into history; cleared on scrub end / reset.
+   */
+  softboxLivePreview: SoftboxSettings | null
   /** Local product preview (blob / CDN URL) shown on canvas. */
   productPreviewUrl: string | null
   /** AI / studio background image under the product cutout (layer 1). */
@@ -210,6 +215,8 @@ type EditorState = {
   removeLayer: (id: string) => void
   setSoftbox: (patch: Partial<SoftboxSettings>) => void
   setSoftboxScrubbing: (scrubbing: boolean) => void
+  /** High-frequency slider draft for CSS overlay (no Fabric / no history). */
+  setSoftboxLivePreview: (preview: SoftboxSettings | null) => void
   setProductPreviewUrl: (url: string | null) => void
   setBackgroundPreviewUrl: (url: string | null) => void
   /** Patch layer geometry without pushing history (auto-fit, sync). */
@@ -237,7 +244,12 @@ type EditorState = {
   redo: () => void
   /** Flush active layers into `pages` (e.g. before multi-page export). */
   commitActivePage: () => void
-  reset: () => void
+  /**
+   * Reset editor to a clean slate.
+   * `blank: true` — empty layers/history (new card `/editor/new`).
+   * Default — starter pack templates.
+   */
+  reset: (options?: { blank?: boolean }) => void
 }
 
 let flashClearTimer: ReturnType<typeof setTimeout> | null = null
@@ -265,6 +277,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   zoomMode: "fit",
   softbox: DEFAULT_SOFTBOX,
   softboxScrubbing: false,
+  softboxLivePreview: null,
   productPreviewUrl: DEFAULT_PRODUCT_CUTOUT,
   backgroundPreviewUrl: null,
   generationEpoch: 0,
@@ -296,6 +309,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       flashLayerId: null,
       softbox: { ...project.softbox },
       softboxScrubbing: false,
+      softboxLivePreview: null,
       productPreviewUrl: project.productPreviewUrl,
       backgroundPreviewUrl: project.backgroundPreviewUrl ?? null,
       importGalleryUrls: [],
@@ -463,11 +477,28 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       }
     }),
   setSoftboxScrubbing: (scrubbing) =>
-    set((state) =>
-      state.softboxScrubbing === scrubbing
-        ? state
-        : { softboxScrubbing: scrubbing }
-    ),
+    set((state) => {
+      if (state.softboxScrubbing === scrubbing) {
+        if (scrubbing || state.softboxLivePreview == null) return state
+        return { softboxLivePreview: null }
+      }
+      return {
+        softboxScrubbing: scrubbing,
+        softboxLivePreview: scrubbing ? state.softboxLivePreview : null,
+      }
+    }),
+  setSoftboxLivePreview: (preview) =>
+    set((state) => {
+      if (preview == null) {
+        return state.softboxLivePreview == null
+          ? state
+          : { softboxLivePreview: null }
+      }
+      return {
+        softboxScrubbing: true,
+        softboxLivePreview: preview,
+      }
+    }),
   setProductPreviewUrl: (url) =>
     set((state) => {
       if (state.productPreviewUrl === url) return state
@@ -701,6 +732,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         flashLayerId: null,
         softbox: { ...previous.softbox },
         softboxScrubbing: false,
+        softboxLivePreview: null,
         productPreviewUrl: previous.productPreviewUrl,
         backgroundPreviewUrl: previous.backgroundPreviewUrl,
         packSize: previous.packSize,
@@ -733,6 +765,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         flashLayerId: null,
         softbox: { ...next.softbox },
         softboxScrubbing: false,
+        softboxLivePreview: null,
         productPreviewUrl: next.productPreviewUrl,
         backgroundPreviewUrl: next.backgroundPreviewUrl,
         packSize: next.packSize,
@@ -746,21 +779,26 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set((state) => ({
       pages: syncActivePage(state.pages, state.activePageIndex, state.layers),
     })),
-  reset: () => {
-    const pages = buildDefaultPackPages(INITIAL_PACK_SIZE)
+  reset: (options) => {
+    const blank = options?.blank === true
+    const pages = blank
+      ? Array.from({ length: INITIAL_PACK_SIZE }, () => [] as CanvasLayer[])
+      : buildDefaultPackPages(INITIAL_PACK_SIZE)
     const layers = pages[0] ?? []
-    set({
+    set((state) => ({
       pages,
       activePageIndex: 0,
       layers,
-      selectedLayerId: defaultSelectedLayerId(layers),
+      selectedLayerId: blank ? null : defaultSelectedLayerId(layers),
       flashLayerId: null,
       zoomMode: "fit",
       softbox: DEFAULT_SOFTBOX,
       softboxScrubbing: false,
-      productPreviewUrl: DEFAULT_PRODUCT_CUTOUT,
+      softboxLivePreview: null,
+      productPreviewUrl: blank ? null : DEFAULT_PRODUCT_CUTOUT,
       backgroundPreviewUrl: null,
-      generationEpoch: 0,
+      // Bump epoch on blank so Fabric rebuilds even when scene payload is empty.
+      generationEpoch: blank ? state.generationEpoch + 1 : 0,
       importGalleryUrls: [],
       productMeta: { ...EMPTY_PRODUCT_META },
       packSize: INITIAL_PACK_SIZE,
@@ -772,7 +810,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       historyTransaction: null,
       canUndo: false,
       canRedo: false,
-    })
+    }))
   },
 }))
 

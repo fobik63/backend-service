@@ -24,6 +24,16 @@ function resolveProductData(id: string): EditorProductData | null {
     }
   }
 
+  // Blank new card — no leftover product art from the sandbox shell.
+  if (trimmed === "new") {
+    return {
+      id: "new",
+      title: "Новый проект",
+      marketplace: null,
+      status: null,
+    }
+  }
+
   // Unknown id still opens a sandbox project shell (demo / deep-link).
   return {
     id: trimmed,

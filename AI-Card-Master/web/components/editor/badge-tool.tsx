@@ -298,6 +298,22 @@ function BadgeParamsSection() {
           />
         </div>
 
+        <div className="space-y-1.5">
+          <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+            {t("editor.badgeSubtitle")}
+          </span>
+          <Input
+            value={chip?.subtitle ?? ""}
+            disabled={disabled}
+            maxLength={64}
+            placeholder={t("editor.badgeSubtitlePlaceholder")}
+            onChange={(e) =>
+              patchChip({ subtitle: e.target.value || undefined })
+            }
+            className="h-8 border-white/10 bg-white/[0.04] text-xs"
+          />
+        </div>
+
         <ColorSwatchRow
           label={t("editor.badgeBgColor")}
           value={chip?.bgColor ?? "#0F1115"}

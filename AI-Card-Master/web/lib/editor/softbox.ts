@@ -246,7 +246,7 @@ export function softboxToDataUrl(
 
 /**
  * Lightweight CSS stand-in for the softbox wash while sliders are dragging.
- * Used as an overlay under/over the Fabric softbox bitmap (no canvas paint).
+ * Placed under the Fabric canvas (Fabric softbox opacity → 0) — no canvas paint.
  */
 export function softboxOverlayStyle(softbox: SoftboxSettings): CSSProperties {
   if (!softbox.enabled) {
@@ -276,5 +276,41 @@ export function softboxOverlayStyle(softbox: SoftboxSettings): CSSProperties {
       `radial-gradient(circle at 50% 100%, ${rgbCss(lightRgb, 0.18 * intensity)} 0%, ${rgbCss(lightRgb, 0)} 70%)`,
       `linear-gradient(160deg, ${rgbCss(cool)} 0%, ${rgbCss(mid)} 48%, ${rgbCss(warm)} 100%)`,
     ].join(", "),
+  }
+}
+
+/**
+ * Top-of-canvas CSS light wash (mix-blend) — 60fps scrub preview over product layers.
+ * Complements `softboxOverlayStyle` under the canvas; alone when an AI bg covers softbox.
+ */
+export function softboxLightBlendStyle(softbox: SoftboxSettings): CSSProperties {
+  if (!softbox.enabled) {
+    return {
+      opacity: 0,
+      mixBlendMode: "normal",
+      backgroundImage: "none",
+      boxShadow: "none",
+      filter: "none",
+    }
+  }
+
+  const warmth = warmthFromKelvin(softbox.colorTempK)
+  const lightRgb = mixRgb([244, 247, 251], [255, 179, 71], warmth)
+  const intensity = clamp(softbox.intensity / 100, 0, 2)
+  const diffusion = softbox.softboxDiffusion / 100
+  const { x, y } = softboxKeyPosition(softbox)
+  const panelSize = 70 + diffusion * 55
+  const coreSize = 22 + diffusion * 28
+  const shadowSpread = 40 + (1 - intensity / 2) * 50
+
+  return {
+    mixBlendMode: "soft-light",
+    opacity: clamp(0.35 + intensity * 0.35, 0.2, 0.95),
+    backgroundImage: [
+      `radial-gradient(circle at ${x}% ${y}%, ${rgbCss(mixRgb(lightRgb, [255, 255, 255], 0.4), 0.85)} 0%, ${rgbCss(lightRgb, 0)} ${coreSize}%)`,
+      `radial-gradient(circle at ${x}% ${y}%, ${rgbCss(lightRgb, 0.55)} 0%, transparent ${panelSize}%)`,
+    ].join(", "),
+    boxShadow: `inset ${((50 - x) / 50) * 28}px ${((y - 50) / 50) * 22}px ${shadowSpread}px rgba(0,0,0,${0.22 + (1 - intensity / 2) * 0.2})`,
+    filter: `saturate(${0.9 + warmth * 0.25}) brightness(${0.92 + intensity * 0.12})`,
   }
 }

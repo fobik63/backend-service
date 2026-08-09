@@ -167,4 +167,23 @@ describe("editor history", () => {
         .layers.find((layer) => layer.id === "p0_title")?.text
     ).toBe("Sage Mist Cream")
   })
+
+  it("blank reset clears layers and history", () => {
+    useEditorStore.getState().updateLayer("p0_product", { x: 40 })
+    expect(useEditorStore.getState().canUndo).toBe(true)
+    expect(useEditorStore.getState().layers.length).toBeGreaterThan(0)
+
+    useEditorStore.getState().reset({ blank: true })
+
+    const state = useEditorStore.getState()
+    expect(state.layers).toEqual([])
+    expect(state.pages.every((page) => page.length === 0)).toBe(true)
+    expect(state.selectedLayerId).toBeNull()
+    expect(state.productPreviewUrl).toBeNull()
+    expect(state.backgroundPreviewUrl).toBeNull()
+    expect(state.history.past).toHaveLength(0)
+    expect(state.history.future).toHaveLength(0)
+    expect(state.canUndo).toBe(false)
+    expect(state.canRedo).toBe(false)
+  })
 })

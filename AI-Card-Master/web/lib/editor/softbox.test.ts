@@ -5,6 +5,7 @@ import {
   paintSoftboxInPlace,
   paintSoftboxToCanvas,
   softboxKeyPosition,
+  softboxLightBlendStyle,
   softboxOverlayStyle,
 } from "@/lib/editor/softbox"
 import type { SoftboxSettings } from "@/lib/store/editor-store"
@@ -51,6 +52,18 @@ describe("softbox", () => {
   it("builds flat CSS overlay when softbox is disabled", () => {
     const style = softboxOverlayStyle({ ...BASE, enabled: false })
     expect(style.backgroundImage).toEqual(expect.stringContaining("linear-gradient"))
+  })
+
+  it("builds mix-blend light overlay for scrubbing", () => {
+    const style = softboxLightBlendStyle(BASE)
+    expect(style.mixBlendMode).toBe("soft-light")
+    expect(style.backgroundImage).toEqual(expect.stringContaining("radial-gradient"))
+    expect(style.boxShadow).toEqual(expect.stringContaining("inset"))
+  })
+
+  it("hides blend overlay when softbox is disabled", () => {
+    const style = softboxLightBlendStyle({ ...BASE, enabled: false })
+    expect(style.opacity).toBe(0)
   })
 
   it("paints softbox onto a canvas without throwing", () => {

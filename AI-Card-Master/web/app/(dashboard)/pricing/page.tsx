@@ -1,11 +1,10 @@
-"use client"
+import { redirect } from "next/navigation"
 
-import { PricingSection } from "@/components/landing/pricing"
-
+/**
+ * Tariffs live in a portal Dialog (TopUpDialog via AppHeader).
+ * Keep the route for bookmarks/deep links — bounce to workspace without
+ * replacing the modal entry point.
+ */
 export default function PricingPage() {
-  return (
-    <div className="-mx-4 -my-6 sm:-mx-6 lg:-mx-8">
-      <PricingSection />
-    </div>
-  )
+  redirect("/projects")
 }

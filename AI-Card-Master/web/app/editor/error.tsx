@@ -19,7 +19,7 @@ export default function EditorError({ error, reset }: EditorErrorProps) {
   }, [error])
 
   return (
-    <main className="flex min-h-svh flex-col items-center justify-center gap-4 bg-transparent px-6 text-center text-foreground">
+    <main className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 bg-transparent px-6 text-center text-foreground">
       <p className="font-mono text-xs tracking-wide text-muted-foreground uppercase">
         Редактор
       </p>
@@ -46,20 +46,6 @@ export default function EditorError({ error, reset }: EditorErrorProps) {
         <Link
           href="/projects"
           className={cn(buttonVariants({ size: "default", variant: "outline" }))}
-          onClick={(event) => {
-            if (
-              event.defaultPrevented ||
-              event.button !== 0 ||
-              event.metaKey ||
-              event.ctrlKey ||
-              event.shiftKey ||
-              event.altKey
-            ) {
-              return
-            }
-            event.preventDefault()
-            window.location.assign("/projects")
-          }}
         >
           Назад в проекты
         </Link>

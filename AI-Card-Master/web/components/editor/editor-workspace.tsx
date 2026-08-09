@@ -1,28 +1,17 @@
 "use client"
 
-import { ArrowLeft, Languages, Loader2, Save, Upload } from "lucide-react"
+import { ArrowLeft, Loader2, Save, Upload } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useEffect, useState, type MouseEvent } from "react"
 import { toast } from "sonner"
 
-import { BrandLogo } from "@/components/dashboard/brand-logo"
 import { EditorAiPanel } from "@/components/editor/ai-panel"
 import { EditorCanvasStage } from "@/components/editor/canvas-stage"
 import { ImportPublishDialog } from "@/components/editor/import-publish-dialog"
 import { EditorSettingsPanel } from "@/components/editor/settings-panel"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { Button, buttonVariants } from "@/components/ui/button"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
 import { GlassButton } from "@/components/ui/glass-button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { getApiErrorMessage, getDesign, saveDesign } from "@/lib/api"
@@ -32,7 +21,8 @@ import {
   editorDocumentToState,
   layersToCanvasState,
 } from "@/lib/editor/editor-document"
-import { useI18n, type Locale } from "@/lib/i18n"
+import { getActiveFabricCanvas } from "@/lib/editor/fabric-export"
+import { useI18n } from "@/lib/i18n"
 import { useEditorStore } from "@/lib/store/editor-store"
 import { cn } from "@/lib/utils"
 import type { EditorProductData } from "@/types/editor"
@@ -44,7 +34,7 @@ type EditorWorkspaceProps = {
 }
 
 function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
-  const { t, locale, setLocale } = useI18n()
+  const { t } = useI18n()
   const router = useRouter()
   const setProjectId = useEditorStore((s) => s.setProjectId)
   const loadProject = useEditorStore((s) => s.loadProject)
@@ -77,6 +67,21 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
   useEffect(() => {
     const controller = new AbortController()
     const cutout = productData?.productImage ?? productData?.previewImage ?? null
+    const isNewCard = projectId === "new"
+
+    // New card: wipe Zustand + Fabric so prior project layers/history cannot linger.
+    if (isNewCard) {
+      reset({ blank: true })
+      setProjectId(projectId)
+      setRemoteDesign(null)
+      const canvas = getActiveFabricCanvas()
+      if (canvas) {
+        canvas.clear()
+        canvas.backgroundColor = "transparent"
+        canvas.requestRenderAll()
+      }
+      return () => controller.abort()
+    }
 
     reset()
     setProjectId(projectId)
@@ -178,7 +183,6 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
   const canRenderEditorSurface =
     Boolean(productData?.id) &&
     Array.isArray(layers) &&
-    layers.length > 0 &&
     softbox != null
 
   const handleSave = async () => {
@@ -238,12 +242,12 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
     setBusyKind("idle")
     setBusyProgress(null)
     reset()
-    window.location.assign("/projects")
+    router.push("/projects")
   }
 
   return (
-    <div className="flex h-svh flex-col overflow-hidden bg-transparent text-foreground">
-      <header className="relative z-20 flex h-12 shrink-0 items-center justify-between gap-3 border-b border-zinc-800/80 bg-zinc-900/60 px-3 backdrop-blur-xl sm:px-4">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-transparent text-foreground">
+      <div className="relative z-20 flex h-12 shrink-0 items-center justify-between gap-3 border-b border-zinc-800/60 bg-zinc-900/40 px-3 sm:px-4">
         <div className="flex min-w-0 items-center gap-2 sm:gap-3">
           <Link
             href="/projects"
@@ -259,11 +263,6 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
               {t("editor.backToProjects")}
             </span>
           </Link>
-          <BrandLogo
-            href="/projects"
-            onClick={leaveToProjects}
-            className="hidden border-l border-white/10 pl-3 sm:flex"
-          />
           <div className="min-w-0 border-l border-white/10 pl-3">
             <p className="truncate font-heading text-sm font-semibold tracking-tight">
               {title}
@@ -275,36 +274,6 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              className={cn(
-                "inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-sm text-muted-foreground transition-colors",
-                "hover:bg-white/8 hover:text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-              )}
-              aria-label={t("topBar.languageSwitch")}
-            >
-              <Languages className="size-4" aria-hidden />
-              <span className="uppercase">{locale}</span>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="min-w-36">
-              <DropdownMenuGroup>
-                <DropdownMenuLabel>{t("common.language")}</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuRadioGroup
-                  value={locale}
-                  onValueChange={(value) => setLocale(value as Locale)}
-                >
-                  <DropdownMenuRadioItem value="ru">
-                    {t("topBar.russian")}
-                  </DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="en">
-                    {t("topBar.english")}
-                  </DropdownMenuRadioItem>
-                </DropdownMenuRadioGroup>
-              </DropdownMenuGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
-
           <Button
             type="button"
             variant="outline"
@@ -343,7 +312,7 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
             {isSaving ? t("editor.saving") : t("editor.save")}
           </GlassButton>
         </div>
-      </header>
+      </div>
 
       <ImportPublishDialog
         open={importOpen}

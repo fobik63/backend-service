@@ -1,11 +1,9 @@
+import axios from "axios"
+
 import { apiClient } from "@/lib/api/client"
-import {
-  delay,
-  IS_MOCK,
-  MOCK_COMPETITOR_PAINS,
-  MOCK_EYE_OF_GOD_DASHBOARD,
-  MOCK_EYE_OF_GOD_DELAY_MS,
-} from "@/lib/constants/mock"
+import { isNetworkError } from "@/lib/api/errors"
+import { fetchProductByArticle } from "@/lib/api/marketplace"
+import { delay } from "@/lib/constants/mock"
 
 export type EyeOfGodPlatform = "auto" | "wb" | "ozon"
 
@@ -112,67 +110,73 @@ function newIdempotencyKey(): string {
   return `eye-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
 
+function shouldUseParseStub(error: unknown): boolean {
+  if (isNetworkError(error)) return true
+  if (!axios.isAxiosError(error)) return false
+  const status = error.response?.status
+  return status !== undefined && status >= 500
+}
+
+/** Temporary: seed URL/article via Next `/api/parse` (cheerio) when FastAPI is down. */
+async function enqueueViaParseStub(
+  request: EyeOfGodEnqueueRequest,
+): Promise<EyeOfGodEnqueueResponse> {
+  const product = await fetchProductByArticle(
+    request.input,
+    request.platform === "ozon"
+      ? "ozon"
+      : request.platform === "wb"
+        ? "wb"
+        : "auto",
+  )
+  const hit: EyeOfGodDiscoveryHit = {
+    rank: 1,
+    article: product.sku,
+    url: product.product_url,
+    marketplace: product.marketplace,
+    title: product.name || product.title,
+    brand: product.brand ?? null,
+  }
+  const taskId = `parse-stub-${product.sku}`
+  return {
+    task_id: taskId,
+    status: "completed",
+    status_url: `/api/v1/analytics/eye-of-god/${taskId}`,
+    competitors_count: 1,
+    seed_title: hit.title,
+    discovery: [hit],
+  }
+}
+
 export async function enqueueEyeOfGodSpy(
   request: EyeOfGodEnqueueRequest,
 ): Promise<EyeOfGodEnqueueResponse> {
-  if (IS_MOCK) {
-    await delay(MOCK_EYE_OF_GOD_DELAY_MS)
-    return {
-      task_id: "mock-eye-of-god-task",
-      status: "queued",
-      status_url: "/api/v1/analytics/eye-of-god/mock-eye-of-god-task",
-      competitors_count: MOCK_EYE_OF_GOD_DASHBOARD.competitors_analyzed,
-      seed_title: MOCK_EYE_OF_GOD_DASHBOARD.seed_title,
-      discovery: MOCK_EYE_OF_GOD_DASHBOARD.competitors.map((c) => ({
-        rank: c.rank,
-        article: c.article,
-        url: c.url ?? `https://www.wildberries.ru/catalog/${c.article}/detail.aspx`,
-        marketplace: c.marketplace,
-        title: c.title,
-        brand: c.brand,
-        price_rub: c.price_rub,
-        feedbacks: c.feedbacks,
-      })),
+  try {
+    const { data } = await apiClient.post<EyeOfGodEnqueueResponse>(
+      "/analytics/eye-of-god",
+      {
+        input: request.input.trim(),
+        platform: request.platform ?? "auto",
+        limit: request.limit ?? 10,
+      },
+      {
+        headers: { "Idempotency-Key": newIdempotencyKey() },
+        timeout: 120_000,
+        skipErrorToast: true,
+      },
+    )
+    return data
+  } catch (error) {
+    if (shouldUseParseStub(error)) {
+      return enqueueViaParseStub(request)
     }
+    throw error
   }
-
-  const { data } = await apiClient.post<EyeOfGodEnqueueResponse>(
-    "/analytics/eye-of-god",
-    {
-      input: request.input.trim(),
-      platform: request.platform ?? "auto",
-      limit: request.limit ?? 10,
-    },
-    {
-      headers: { "Idempotency-Key": newIdempotencyKey() },
-      timeout: 120_000,
-      skipErrorToast: true,
-    },
-  )
-  return data
 }
 
 export async function getEyeOfGodSpyJob(
   taskId: string,
 ): Promise<EyeOfGodJobResponse> {
-  if (IS_MOCK) {
-    await delay(900)
-    return {
-      task_id: taskId,
-      status: "completed",
-      status_url: `/api/v1/analytics/eye-of-god/${taskId}`,
-      links: MOCK_EYE_OF_GOD_DASHBOARD.competitors.map(
-        (c) =>
-          c.url ??
-          `https://www.wildberries.ru/catalog/${c.article}/detail.aspx`,
-      ),
-      dashboard: MOCK_EYE_OF_GOD_DASHBOARD,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      completed_at: new Date().toISOString(),
-    }
-  }
-
   const { data } = await apiClient.get<EyeOfGodJobResponse>(
     `/analytics/eye-of-god/${taskId}`,
     { skipErrorToast: true, timeout: 60_000 },
@@ -268,31 +272,6 @@ export async function searchCompetitors(options: {
   query: string
   limit?: number
 }): Promise<CompetitorsSearchResponse> {
-  if (IS_MOCK) {
-    await delay(MOCK_EYE_OF_GOD_DELAY_MS)
-    const limit = options.limit ?? 5
-    const competitors = MOCK_EYE_OF_GOD_DASHBOARD.competitors
-      .slice(0, limit)
-      .map((c) => ({
-        rank: c.rank,
-        article: c.article,
-        title: c.title,
-        brand: c.brand,
-        price_rub: c.price_rub,
-        feedbacks: c.feedbacks,
-        url:
-          c.url ??
-          `https://www.wildberries.ru/catalog/${c.article}/detail.aspx`,
-        estimated_purchases: c.estimated_purchases,
-        estimated_revenue_rub: c.estimated_revenue_rub,
-      }))
-    return {
-      query: options.query.trim(),
-      count: competitors.length,
-      competitors,
-    }
-  }
-
   const { data } = await apiClient.post<CompetitorsSearchResponse>(
     "/analytics/competitors",
     {
@@ -308,50 +287,43 @@ export async function collectCompetitorReviews(options: {
   articles: string[]
   maxReviewsPerArticle?: number
 }): Promise<CompetitorReviewsCollectionResponse> {
-  if (IS_MOCK) {
-    await delay(800)
+  try {
+    const { data } = await apiClient.post<CompetitorReviewsCollectionResponse>(
+      "/analytics/competitors/reviews",
+      {
+        articles: options.articles,
+        max_reviews_per_article: options.maxReviewsPerArticle ?? 40,
+      },
+      { skipErrorToast: true, timeout: 120_000 },
+    )
+    return data
+  } catch (error) {
+    if (!shouldUseParseStub(error)) throw error
+
+    // Temporary stub: no fabricated cream complaints — empty corpus + clear warning.
     const articles = options.articles.slice(0, 10)
-    const complaint_texts = [
-      "жидкий, стекает с рук",
-      "плохо пахнет химией",
-      "не увлажняет, кожа снова сухая через час",
-      "маленький объём за такие деньги",
-      "вызывает раздражение",
-    ]
     return {
       articles,
       competitors_processed: articles.length,
-      reviews_fetched: complaint_texts.length * Math.max(articles.length, 1),
-      complaint_texts,
+      reviews_fetched: 0,
+      complaint_texts: [],
       by_article: articles.map((article) => ({
         article,
-        reviews_fetched: complaint_texts.length,
-        complaint_texts,
+        reviews_fetched: 0,
+        complaint_texts: [],
+        warning: "Сбор отзывов временно недоступен (бэкенд offline).",
       })),
-      warnings: [],
+      warnings: [
+        "Сбор отзывов временно недоступен — запустите FastAPI analytics или повторите позже.",
+      ],
     }
   }
-
-  const { data } = await apiClient.post<CompetitorReviewsCollectionResponse>(
-    "/analytics/competitors/reviews",
-    {
-      articles: options.articles,
-      max_reviews_per_article: options.maxReviewsPerArticle ?? 40,
-    },
-    { skipErrorToast: true, timeout: 120_000 },
-  )
-  return data
 }
 
 export async function analyzeCompetitorPains(options: {
   complaintTexts: string[]
   productContext?: string
 }): Promise<CompetitorPainsAnalysisResponse> {
-  if (IS_MOCK) {
-    await delay(1000)
-    return { ...MOCK_COMPETITOR_PAINS }
-  }
-
   const { data } = await apiClient.post<CompetitorPainsAnalysisResponse>(
     "/analytics/competitors/reviews/analyze",
     {

@@ -36,3 +36,8 @@ export {
   buildParsedProduct,
   normalizeProductFields,
 } from "@/lib/parser/normalize"
+export {
+  extractHtmlMeta,
+  parsedProductFromHtmlMeta,
+  scrapeHtmlMeta,
+} from "@/lib/parser/html-meta"

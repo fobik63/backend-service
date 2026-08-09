@@ -1,11 +1,11 @@
 import type { ReactNode } from "react"
 
-import { DashboardShell } from "@/components/dashboard/dashboard-shell"
+import { AppShell } from "@/components/layout/app-shell"
 
 type DashboardLayoutProps = {
   children: ReactNode
 }
 
 export default function DashboardLayout({ children }: DashboardLayoutProps) {
-  return <DashboardShell>{children}</DashboardShell>
+  return <AppShell variant="workspace">{children}</AppShell>
 }

@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server"
 
+import {
+  parsedProductFromHtmlMeta,
+  scrapeHtmlMeta,
+} from "@/lib/parser/html-meta"
 import { MarketplaceHttpClient } from "@/lib/parser/http-client"
 import { ProxyPool } from "@/lib/parser/proxy-pool"
 import {
@@ -16,6 +20,9 @@ export const runtime = "nodejs"
 
 /**
  * Local BFF for WB/Ozon product parsing (avoids browser CORS).
+ *
+ * Temporary stub path: when marketplace scrapers are unavailable, falls back
+ * to cheerio (`<title>` + `<meta name="description">` / Open Graph).
  *
  * POST /api/parse
  * Body: `{ input | url | article, platform?: "auto"|"wb"|"ozon" }`
@@ -46,14 +53,9 @@ export async function POST(request: Request) {
   const { input, platform } = parsed.data
 
   try {
-    const target = resolveParserInput(input, platform)
-    const http = new MarketplaceHttpClient({
-      proxyPool: ProxyPool.fromEnv(),
+    return NextResponse.json(await parseProduct(input, platform), {
+      status: 200,
     })
-    const router = createScraperRouter({ http })
-    const product = await router.scrape(target)
-
-    return NextResponse.json(product, { status: 200 })
   } catch (error) {
     if (error instanceof ParserValidationError) {
       return NextResponse.json(
@@ -75,13 +77,90 @@ export async function POST(request: Request) {
       )
     }
 
+    const message =
+      error instanceof Error && error.message.trim()
+        ? error.message.trim()
+        : "Failed to parse marketplace product."
+
     console.error("[api/parse] unexpected error", error)
     return NextResponse.json(
-      {
-        error: "Failed to parse marketplace product.",
-        code: "INTERNAL_ERROR",
-      },
+      { error: message, code: "INTERNAL_ERROR" },
       { status: 500 },
     )
+  }
+}
+
+async function parseProduct(
+  input: string,
+  platform: "auto" | "wb" | "ozon",
+) {
+  const httpUrl = asHttpUrl(input)
+
+  // Generic (or blocked marketplace) URL → cheerio meta stub.
+  if (httpUrl && !looksLikeMarketplaceUrl(httpUrl)) {
+    const meta = await scrapeHtmlMeta(httpUrl)
+    return parsedProductFromHtmlMeta({ url: httpUrl, meta })
+  }
+
+  try {
+    const target = resolveParserInput(input, platform)
+    try {
+      const http = new MarketplaceHttpClient({
+        proxyPool: ProxyPool.fromEnv(),
+      })
+      const router = createScraperRouter({ http })
+      return await router.scrape(target)
+    } catch (scrapeError) {
+      // Temporary fallback while FastAPI / MP APIs are unstable.
+      console.warn(
+        "[api/parse] marketplace scraper failed, falling back to cheerio",
+        scrapeError,
+      )
+      const meta = await scrapeHtmlMeta(target.productUrl)
+      return parsedProductFromHtmlMeta({
+        url: target.productUrl,
+        meta,
+        marketplace: target.marketplace,
+        sku: target.sku,
+      })
+    }
+  } catch (resolveError) {
+    if (httpUrl) {
+      const meta = await scrapeHtmlMeta(httpUrl)
+      return parsedProductFromHtmlMeta({ url: httpUrl, meta })
+    }
+    throw resolveError
+  }
+}
+
+function asHttpUrl(raw: string): string | null {
+  const trimmed = raw.trim()
+  if (!trimmed) return null
+  const withScheme = /^https?:\/\//i.test(trimmed)
+    ? trimmed
+    : trimmed.includes(".") && !/^\d{5,15}$/.test(trimmed)
+      ? `https://${trimmed}`
+      : null
+  if (!withScheme) return null
+  try {
+    const url = new URL(withScheme)
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null
+    return url.toString()
+  } catch {
+    return null
+  }
+}
+
+function looksLikeMarketplaceUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase()
+    return (
+      host.includes("wildberries.") ||
+      host === "wb.ru" ||
+      host.endsWith(".wb.ru") ||
+      host.includes("ozon.")
+    )
+  } catch {
+    return false
   }
 }

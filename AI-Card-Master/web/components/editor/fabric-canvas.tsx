@@ -9,6 +9,9 @@ import {
   Line,
   Rect,
   Shadow,
+  config as fabricConfig,
+  initFilterBackend,
+  util,
   type FabricObjectProps,
 } from "fabric"
 import {
@@ -45,6 +48,7 @@ import {
   createSoftboxSourceCanvas,
   paintSoftboxInPlace,
   SOFTBOX_UPDATE_MS,
+  softboxLightBlendStyle,
   softboxOverlayStyle,
 } from "@/lib/editor/softbox"
 import {
@@ -56,19 +60,52 @@ import { DEFAULT_TEXT_STYLE } from "@/types/canvas"
 import { cn } from "@/lib/utils"
 
 type LayerRole = "background" | "product" | "infographic"
+type ChipPart = "bg" | "icon" | "label" | "subtitle"
 
 type EngineObject = FabricObject & {
   layerId?: string
   layerRole?: LayerRole
   isSmartGuide?: boolean
   isSoftbox?: boolean
+  /** Marks a child inside a chip Group (label is the editable part). */
+  chipPart?: ChipPart
+  /** Temporary top-level IText used while editing a chip label. */
+  isChipInlineEditor?: boolean
 }
 
 const GUIDE_STROKE = "rgba(94, 184, 255, 0.92)"
 const GUIDE_STROKE_WIDTH = 1
 
+/**
+ * Fabric v6: enableGLFiltering ≈ classic `EnableWebGL`.
+ * Cap textureSize at 2048 to avoid OOM on weaker GPUs while accelerating filters.
+ */
+let fabricWebGlReady = false
+function ensureFabricWebGL(): void {
+  if (fabricWebGlReady || typeof window === "undefined") return
+  fabricWebGlReady = true
+  try {
+    fabricConfig.configure({
+      enableGLFiltering: true,
+      textureSize: 2048,
+    })
+    initFilterBackend()
+  } catch (err) {
+    if (process.env.NODE_ENV !== "production") {
+      console.warn("[fabric-canvas] WebGL filter backend unavailable", err)
+    }
+  }
+}
+
 function ensureCustomProps(): void {
-  const keys = ["layerId", "layerRole", "isSmartGuide", "isSoftbox"]
+  const keys = [
+    "layerId",
+    "layerRole",
+    "isSmartGuide",
+    "isSoftbox",
+    "chipPart",
+    "isChipInlineEditor",
+  ]
   const existing = FabricObject.customProperties ?? []
   FabricObject.customProperties = Array.from(new Set([...existing, ...keys]))
 }
@@ -434,26 +471,45 @@ function applySoftboxToFabric(
 
 /** Cheap CSS softbox preview — re-renders alone; does not remount Fabric. */
 function SoftboxScrubOverlay() {
-  const softbox = useEditorStore((s) => s.softbox)
   const softboxScrubbing = useEditorStore((s) => s.softboxScrubbing)
+  const softboxLivePreview = useEditorStore((s) => s.softboxLivePreview)
+  const softbox = useEditorStore((s) => s.softbox)
   const backgroundPreviewUrl = useEditorStore((s) => s.backgroundPreviewUrl)
 
-  if (!softboxScrubbing || backgroundPreviewUrl) return null
+  if (!softboxScrubbing) return null
 
-  let style: CSSProperties
+  const preview = softboxLivePreview ?? softbox
+  let washStyle: CSSProperties | null = null
+  let blendStyle: CSSProperties | null = null
   try {
-    style = softboxOverlayStyle(softbox)
+    // Full wash under canvas only when Fabric softbox is the visible bg.
+    if (!backgroundPreviewUrl) {
+      washStyle = softboxOverlayStyle(preview)
+    }
+    blendStyle = softboxLightBlendStyle(preview)
   } catch {
     return null
   }
 
   return (
-    <div
-      aria-hidden
-      data-export-chrome="true"
-      className="pointer-events-none absolute inset-0"
-      style={style}
-    />
+    <>
+      {washStyle ? (
+        <div
+          aria-hidden
+          data-export-chrome="true"
+          className="pointer-events-none absolute inset-0 z-0"
+          style={washStyle}
+        />
+      ) : null}
+      {blendStyle ? (
+        <div
+          aria-hidden
+          data-export-chrome="true"
+          className="pointer-events-none absolute inset-0 z-[2]"
+          style={blendStyle}
+        />
+      ) : null}
+    </>
   )
 }
 
@@ -657,6 +713,7 @@ async function buildChipObject(layer: CanvasLayer): Promise<Group> {
     evented: false,
   })
   icon.scaleToWidth(iconSize)
+  ;(icon as EngineObject).chipPart = "icon"
 
   const chipFont = resolveFabricFontFamily("Inter")
   const label = new IText(chip.label, {
@@ -670,8 +727,11 @@ async function buildChipObject(layer: CanvasLayer): Promise<Group> {
     fill: fg,
     selectable: false,
     evented: false,
+    // Never enterEditing inside a Group — Fabric miscomputes the text
+    // transform matrix (origin/scale). Inline edit uses a detached IText.
     editable: false,
   })
+  ;(label as EngineObject).chipPart = "label"
 
   const subtitle = chip.subtitle
     ? new IText(chip.subtitle, {
@@ -689,6 +749,7 @@ async function buildChipObject(layer: CanvasLayer): Promise<Group> {
         editable: false,
       })
     : null
+  if (subtitle) (subtitle as EngineObject).chipPart = "subtitle"
 
   await Promise.resolve()
   const contentW = Math.max(label.width ?? 80, subtitle?.width ?? 0)
@@ -708,6 +769,7 @@ async function buildChipObject(layer: CanvasLayer): Promise<Group> {
     selectable: false,
     evented: false,
   })
+  ;(bg as EngineObject).chipPart = "bg"
 
   const children: FabricObject[] = [bg, icon, label]
   if (subtitle) children.push(subtitle)
@@ -729,6 +791,49 @@ async function buildChipObject(layer: CanvasLayer): Promise<Group> {
     objectCaching: true,
   })
   return markObject(group, layer.id, "infographic") as Group
+}
+
+/** Locate the editable chip label IText inside a badge Group. */
+function findChipLabel(group: Group): IText | null {
+  const tagged = group
+    .getObjects()
+    .find((o) => (o as EngineObject).chipPart === "label")
+  if (tagged && tagged.type === "i-text") return tagged as IText
+
+  // Fallback: first IText child is the label (subtitle is second).
+  const texts = group.getObjects().filter((o) => o.type === "i-text")
+  return (texts[0] as IText | undefined) ?? null
+}
+
+/**
+ * World-space pose of an object (including parent Group scale/angle/origin).
+ * Used to spawn a detached IText that lines up with the in-group glyph.
+ */
+function worldPoseFromObject(obj: FabricObject) {
+  const decomposed = util.qrDecompose(obj.calcTransformMatrix())
+  return {
+    left: decomposed.translateX,
+    top: decomposed.translateY,
+    scaleX: decomposed.scaleX,
+    scaleY: decomposed.scaleY,
+    angle: decomposed.angle,
+    skewX: decomposed.skewX,
+    skewY: decomposed.skewY,
+  }
+}
+
+function clearChipInlineEditors(canvas: FabricCanvas) {
+  for (const obj of [...canvas.getObjects()]) {
+    const engine = obj as EngineObject
+    if (!engine.isChipInlineEditor) continue
+    if (obj.type === "i-text" && (obj as IText).isEditing) {
+      // Fires editing:exited → finish() persists label + removes editor.
+      ;(obj as IText).exitEditing()
+    }
+    if (canvas.getObjects().includes(obj)) {
+      canvas.remove(obj)
+    }
+  }
 }
 
 function objectToLayerPatch(obj: EngineObject): Partial<CanvasLayer> | null {
@@ -890,6 +995,7 @@ function EditorFabricCanvas({ scale }: { scale: number }) {
 
   useLayoutEffect(() => {
     ensureCustomProps()
+    ensureFabricWebGL()
     const el = canvasElRef.current
     if (!el) return
 
@@ -943,39 +1049,99 @@ function EditorFabricCanvas({ scale }: { scale: number }) {
       canvas.requestRenderAll()
     }
 
+    /**
+     * Chip badges stay as Groups (bg + icon + label [+ subtitle]). Fabric's
+     * enterEditing on a nested IText miscomputes the transform when the group
+     * has scale/origin changes — caret and selection drift. Instead: hide the
+     * in-group label, spawn a top-level IText at the label's world matrix
+     * (calcTransformMatrix → qrDecompose), sync text on editing:exited.
+     */
     const startChipInlineEdit = (target: EngineObject, layer: CanvasLayer) => {
       if (!layer.chip) return
-      const bound = target.getBoundingRect()
-      const editor = new IText(layer.chip.label, {
-        left: bound.left + 48,
-        top: bound.top + bound.height / 2,
-        originX: "left",
-        originY: "center",
-        fontFamily: resolveFabricFontFamily("Inter"),
-        fontSize: 18,
-        fontWeight: "600",
-        fill: layer.chip.textColor ?? "#FFFFFF",
+      const group =
+        target instanceof Group || target.type === "group"
+          ? (target as Group)
+          : null
+      if (!group) return
+
+      clearChipInlineEditors(canvas)
+
+      const label = findChipLabel(group)
+      if (!label) return
+
+      const pose = worldPoseFromObject(label)
+      const prevVisible = label.visible !== false
+      const prevCaching = group.objectCaching !== false
+
+      // Hide nested glyphs so they don't stack under the floating editor.
+      label.set({ visible: false })
+      group.set({ objectCaching: false })
+      group.dirty = true
+
+      const editor = new IText(label.text ?? layer.chip.label, {
+        left: pose.left,
+        top: pose.top,
+        originX: label.originX,
+        originY: label.originY,
+        scaleX: pose.scaleX,
+        scaleY: pose.scaleY,
+        angle: pose.angle,
+        skewX: pose.skewX,
+        skewY: pose.skewY,
+        fontFamily: label.fontFamily,
+        fontSize: label.fontSize,
+        fontWeight: label.fontWeight,
+        fill: label.fill,
         editable: true,
+        selectable: true,
+        evented: true,
         excludeFromExport: true,
+        objectCaching: false,
       })
+      ;(editor as EngineObject).isChipInlineEditor = true
+
       canvas.add(editor)
+      canvas.bringObjectToFront(editor)
       canvas.setActiveObject(editor)
       editor.enterEditing()
       editor.selectAll()
       canvas.requestRenderAll()
 
+      let settled = false
       const finish = () => {
+        if (settled) return
+        settled = true
+
         const next = editor.text?.trim() || layer.chip!.label
+
+        // Restore nested label immediately (scene rebuild follows via store).
+        try {
+          label.set({ text: next, visible: prevVisible })
+          group.set({ objectCaching: prevCaching })
+          group.dirty = true
+        } catch {
+          // Group may already be disposed by a concurrent rebuild.
+        }
+
         writingStoreRef.current = true
         beginHistoryTransaction()
         updateLayer(layer.id, { chip: { ...layer.chip!, label: next } })
         commitHistoryTransaction()
-        canvas.remove(editor)
+
+        editor.off("editing:exited", finish)
+        try {
+          canvas.remove(editor)
+        } catch {
+          // already removed
+        }
+
+        const restored = findByLayerId(canvas, layer.id)
+        if (restored) canvas.setActiveObject(restored)
+
         canvas.requestRenderAll()
         queueMicrotask(() => {
           writingStoreRef.current = false
         })
-        editor.off("editing:exited", finish)
       }
       editor.on("editing:exited", finish)
     }
@@ -1211,7 +1377,12 @@ function EditorFabricCanvas({ scale }: { scale: number }) {
     const canvas = fabricRef.current
     if (!canvas || !ready) return
     const buildKey = `${sceneKey}#${rebuildNonce}`
-    if (sceneKeyRef.current === buildKey && canvas.getObjects().length > 0) {
+    // Empty layer stack must still clear leftover Fabric objects.
+    if (
+      sceneKeyRef.current === buildKey &&
+      canvas.getObjects().length > 0 &&
+      layers.length > 0
+    ) {
       return
     }
     sceneKeyRef.current = buildKey
@@ -1220,6 +1391,33 @@ function EditorFabricCanvas({ scale }: { scale: number }) {
 
     const rebuild = async () => {
       try {
+        if (layers.length === 0) {
+          if (cancelled) return
+          clearChipInlineEditors(canvas)
+          canvas.renderOnAddRemove = false
+          canvas.clear()
+          canvas.backgroundColor = "transparent"
+          canvas.discardActiveObject()
+          canvas.requestRenderAll()
+          const z = scaleRef.current
+          canvas.setDimensions(
+            {
+              width: `${CANVAS_WIDTH * z}px`,
+              height: `${CANVAS_HEIGHT * z}px`,
+            },
+            { cssOnly: true }
+          )
+          canvas.calcOffset()
+          sceneEpochRef.current += 1
+          sceneRecoveriesRef.current = 0
+          setSceneError(null)
+          const busy = useEditorStore.getState().busyKind
+          if (busy === "generating" || busy === "loading-image") {
+            setBusyKind("idle")
+          }
+          return
+        }
+
         const bg = await buildBackgroundLayer({
           softbox: useEditorStore.getState().softbox,
           backgroundPreviewUrl,
@@ -1302,6 +1500,9 @@ function EditorFabricCanvas({ scale }: { scale: number }) {
 
         if (cancelled) return
 
+        // Flush any in-progress chip overlay editor before wiping the scene.
+        clearChipInlineEditors(canvas)
+
         const prevSelected = useEditorStore.getState().selectedLayerId
         canvas.renderOnAddRemove = false
         canvas.clear()
@@ -1373,7 +1574,7 @@ function EditorFabricCanvas({ scale }: { scale: number }) {
   ])
 
   // Softbox updates: imperative store.subscribe — does not re-render this Fabric host.
-  // Debounce + rAF coalesce paints; scrubbing uses CSS overlay (sibling) instead of heavy paint.
+  // During scrub: CSS overlay only (softboxLivePreview). Fabric paints on scrub end / idle.
   useEffect(() => {
     if (!ready) return
 
@@ -1406,8 +1607,7 @@ function EditorFabricCanvas({ scale }: { scale: number }) {
       const scrubbingChanged = lastScrubbing !== scrubbing
       lastScrubbing = scrubbing
 
-      // Mid-scrub value ticks: CSS overlay (SoftboxScrubOverlay) is the preview —
-      // do not touch Fabric at all after the initial hide on scrub start.
+      // Mid-scrub value ticks: CSS overlay is the preview — do not touch Fabric.
       if (scrubbing && !scrubbingChanged && !immediate) {
         return
       }
@@ -1419,6 +1619,12 @@ function EditorFabricCanvas({ scale }: { scale: number }) {
       }
 
       if (immediate || scrubbingChanged) {
+        // Scrub end must restore Fabric softbox before React paints without CSS overlay
+        // (rAF would flash one empty frame).
+        if (immediate && !scrubbing) {
+          runApply()
+          return
+        }
         raf = requestAnimationFrame(runApply)
         return
       }
@@ -1432,6 +1638,7 @@ function EditorFabricCanvas({ scale }: { scale: number }) {
     schedule(true)
 
     const unsub = useEditorStore.subscribe((state, prev) => {
+      // Ignore softboxLivePreview — CSS overlay owns that channel.
       if (
         state.softbox === prev.softbox &&
         state.softboxScrubbing === prev.softboxScrubbing &&
@@ -1439,7 +1646,7 @@ function EditorFabricCanvas({ scale }: { scale: number }) {
       ) {
         return
       }
-      // Flush final paint as soon as scrub ends.
+      // Flush final Fabric paint as soon as scrub ends (onChangeCommitted).
       const scrubEnded = prev.softboxScrubbing && !state.softboxScrubbing
       schedule(scrubEnded)
     })
@@ -1527,7 +1734,7 @@ function EditorFabricCanvas({ scale }: { scale: number }) {
         }}
       >
         <SoftboxScrubOverlay />
-        <canvas ref={canvasElRef} className="relative" />
+        <canvas ref={canvasElRef} className="relative z-[1]" />
       </div>
 
       {sceneError ? (

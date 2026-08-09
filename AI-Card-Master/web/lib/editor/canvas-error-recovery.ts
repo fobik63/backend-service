@@ -55,6 +55,7 @@ export function recoverCanvasAfterRenderError(layerId?: string | null): void {
   const store = useEditorStore.getState()
 
   if (store.softboxScrubbing) {
+    store.setSoftboxLivePreview(null)
     store.setSoftboxScrubbing(false)
   }
   store.setSoftbox({ ...DEFAULT_SOFTBOX })

@@ -63,7 +63,7 @@ export default function OnboardingStep2Page() {
     setIsFinishing(true)
 
     window.setTimeout(() => {
-      router.push("/dashboard")
+      router.push("/projects")
     }, FINISH_DELAY_MS)
   }
 

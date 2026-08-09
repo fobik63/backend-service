@@ -1,5 +1,4 @@
 import {
-  Coins,
   FolderKanban,
   ImagePlus,
   Settings,
@@ -20,24 +19,19 @@ export type DashboardNavItem = {
   icon: LucideIcon
 }
 
+/** Primary destinations (header profile menu). Sidebar kept for legacy callers. */
 export const DASHBOARD_NAV: DashboardNavItem[] = [
+  {
+    href: "/editor/new",
+    id: "editor",
+    label: "Создать новый проект",
+    icon: ImagePlus,
+  },
   {
     href: "/projects",
     id: "projects",
     label: "Мои проекты",
     icon: FolderKanban,
-  },
-  {
-    href: "/editor",
-    id: "editor",
-    label: "Создать карточку",
-    icon: ImagePlus,
-  },
-  {
-    href: "/pricing",
-    id: "pricing",
-    label: "Тарифы и баланс",
-    icon: Coins,
   },
   {
     href: "/settings",

@@ -36,6 +36,8 @@ type ProfileSheetProps = {
   user?: ProfileSheetUser
   balance?: { current: number; limit: number }
   onLogout?: () => void
+  /** Opens tariffs/balance dialog without leaving the current screen. */
+  onTopUp?: () => void
 }
 
 const DEFAULT_USER: ProfileSheetUser = {
@@ -52,11 +54,6 @@ const QUICK_LINKS = [
     icon: FolderKanban,
   },
   {
-    href: "/pricing",
-    label: "Тарифы и баланс",
-    icon: Coins,
-  },
-  {
     href: "/settings",
     label: "Настройки",
     icon: Settings,
@@ -69,6 +66,7 @@ function ProfileSheet({
   user = DEFAULT_USER,
   balance = { current: 0, limit: 50 },
   onLogout,
+  onTopUp,
 }: ProfileSheetProps) {
   const router = useRouter()
   const initials = user.name
@@ -77,6 +75,11 @@ function ProfileSheet({
     .join("")
     .slice(0, 2)
     .toUpperCase()
+
+  const openPricing = () => {
+    onOpenChange(false)
+    onTopUp?.()
+  }
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -124,20 +127,34 @@ function ProfileSheet({
                 / {balance.limit} монет
               </span>
             </p>
-            <Link
-              href="/pricing"
-              onClick={() => onOpenChange(false)}
-              className={cn(
-                buttonVariants({ size: "sm" }),
-                "mt-3 w-full gap-1.5"
-              )}
-            >
-              Пополнить баланс
-            </Link>
+            {onTopUp ? (
+              <button
+                type="button"
+                onClick={openPricing}
+                className={cn(
+                  buttonVariants({ size: "sm" }),
+                  "mt-3 w-full gap-1.5"
+                )}
+              >
+                Пополнить баланс
+              </button>
+            ) : null}
           </div>
 
           <nav aria-label="Быстрые действия профиля">
             <ul className="flex flex-col gap-0.5">
+              {onTopUp ? (
+                <li>
+                  <button
+                    type="button"
+                    onClick={openPricing}
+                    className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm text-text-muted transition-colors hover:bg-white/[0.04] hover:text-foreground"
+                  >
+                    <Coins className="size-4 shrink-0 text-copper/80" aria-hidden />
+                    Тарифы и баланс
+                  </button>
+                </li>
+              ) : null}
               {QUICK_LINKS.map((item) => {
                 const Icon = item.icon
                 return (

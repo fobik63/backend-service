@@ -116,7 +116,7 @@ function AuthForm({
     setSession(MOCK_AUTH_TOKENS, MOCK_AUTH_USER)
     onSuccess?.()
     startTransition(() => {
-      router.replace("/dashboard")
+      router.replace("/projects")
       router.refresh()
     })
     // Auto-login once on mount when mock mode is enabled.
@@ -135,7 +135,7 @@ function AuthForm({
     toast.success(message)
     onSuccess?.()
     startTransition(() => {
-      router.push("/dashboard")
+      router.push("/projects")
       router.refresh()
     })
   }

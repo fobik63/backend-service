@@ -41,7 +41,6 @@ type SpyPhase =
   | "collecting"
   | "analyzing"
   | "ready"
-  | "error"
 
 const TOP_N = 5
 const REVIEWS_TO_PURCHASES = 12.5
@@ -237,7 +236,6 @@ function EyeOfGodSection() {
   const [recommendations, setRecommendations] = useState<InfographicOffer[]>(
     [],
   )
-  const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const requestIdRef = useRef(0)
 
@@ -315,7 +313,6 @@ function EyeOfGodSection() {
 
     setPhase("discovering")
     setStatusLabel(t("editor.eyeDiscovering"))
-    setErrorMessage(null)
     setCompetitors([])
     setPains([])
     setRecommendations([])
@@ -400,8 +397,7 @@ function EyeOfGodSection() {
         return
       }
       const message = getApiErrorMessage(error, t("editor.eyeError"))
-      setErrorMessage(message)
-      setPhase("error")
+      setPhase("idle")
       setStatusLabel(null)
       toast.error(message)
     } finally {
@@ -487,12 +483,6 @@ function EyeOfGodSection() {
           />
         ) : null}
       </AnimatePresence>
-
-      {errorMessage && phase === "error" ? (
-        <p role="alert" className="text-[11px] leading-relaxed text-destructive">
-          {errorMessage}
-        </p>
-      ) : null}
 
       <AnimatePresence mode="wait">
         {showCompetitorSkeleton ? (

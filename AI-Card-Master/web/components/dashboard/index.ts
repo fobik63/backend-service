@@ -20,3 +20,6 @@ export type { SidebarBalance, SidebarProps, SidebarUser } from "./sidebar"
 export { TopBar } from "./top-bar"
 export type { TopBarProps, TopBarUser } from "./top-bar"
 export { TopUpDialog } from "./top-up-dialog"
+
+// Preferred entry points (header-first navigation)
+export { AppHeader, AppShell } from "@/components/layout"
