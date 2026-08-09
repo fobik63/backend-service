@@ -40,7 +40,8 @@ import {
   type SmartGuideLine,
 } from "@/lib/editor/smart-guides"
 import {
-  paintSoftboxBitmap,
+  createSoftboxSourceCanvas,
+  paintSoftboxInPlace,
   softboxOverlayStyle,
 } from "@/lib/editor/softbox"
 import {
@@ -341,52 +342,75 @@ function findSoftboxImage(canvas: FabricCanvas): FabricImage | null {
   return hit instanceof FabricImage ? hit : null
 }
 
+function isFabricCanvasAlive(canvas: FabricCanvas | null | undefined): boolean {
+  if (!canvas || canvas.disposed || canvas.destroyed) return false
+  try {
+    const ctx = canvas.getContext()
+    return Boolean(ctx)
+  } catch {
+    return false
+  }
+}
+
 /**
- * Paint softbox into a reusable bitmap and swap it onto the existing Fabric.Image
- * (no scene rebuild, no toDataURL / fromURL).
+ * Update softbox wash in-place on the existing Fabric.Image element.
+ * Never recreates layers / never setElement on slider ticks (avoids canvas resize races).
  */
 function applySoftboxToFabric(
   canvas: FabricCanvas,
   softbox: SoftboxSettings,
   options: { preview: boolean; hideSoftboxForCssOverlay: boolean }
 ): void {
-  const img = findSoftboxImage(canvas)
-  const bg = findBackgroundGroup(canvas)
-  if (!img) return
+  try {
+    if (!isFabricCanvasAlive(canvas)) return
 
-  const caching = !options.preview && !options.hideSoftboxForCssOverlay
-  img.set({
-    objectCaching: caching,
-    opacity: options.hideSoftboxForCssOverlay ? 0 : 1,
-  })
-  bg?.set({ objectCaching: caching })
+    const img = findSoftboxImage(canvas)
+    const bg = findBackgroundGroup(canvas)
+    if (!img) return
 
-  if (options.hideSoftboxForCssOverlay) {
-    canvas.backgroundColor = "rgba(0,0,0,0)"
+    const caching = !options.preview && !options.hideSoftboxForCssOverlay
+    img.set({
+      objectCaching: caching,
+      opacity: options.hideSoftboxForCssOverlay ? 0 : 1,
+    })
+    bg?.set({ objectCaching: caching })
+
+    if (options.hideSoftboxForCssOverlay) {
+      canvas.backgroundColor = "rgba(0,0,0,0)"
+      img.setCoords()
+      bg?.setCoords()
+      if (isFabricCanvasAlive(canvas)) canvas.requestRenderAll()
+      return
+    }
+
+    const el = img.getElement()
+    if (!(el instanceof HTMLCanvasElement)) return
+    // Keep Fabric-bound size stable — do not resize for preview (clears buffer mid-render).
+    if (el.width !== CANVAS_WIDTH || el.height !== CANVAS_HEIGHT) {
+      el.width = CANVAS_WIDTH
+      el.height = CANVAS_HEIGHT
+    }
+    if (!paintSoftboxInPlace(el, softbox)) return
+
+    img.set({ dirty: true })
     img.setCoords()
+    bg?.set({ dirty: true })
     bg?.setCoords()
-    canvas.requestRenderAll()
-    return
+    canvas.backgroundColor = "#0d0f12"
+    if (isFabricCanvasAlive(canvas)) canvas.requestRenderAll()
+  } catch (err) {
+    if (process.env.NODE_ENV !== "production") {
+      console.error("[fabric-canvas] softbox redraw failed", err)
+    }
   }
-
-  const bitmap = paintSoftboxBitmap(softbox, CANVAS_WIDTH, CANVAS_HEIGHT, {
-    preview: options.preview,
-  })
-  img.setElement(bitmap)
-  img.scaleToWidth(CANVAS_WIDTH)
-  img.set({ dirty: true })
-  img.setCoords()
-  bg?.set({ dirty: true })
-  bg?.setCoords()
-  canvas.backgroundColor = "#0d0f12"
-  canvas.requestRenderAll()
 }
 
 async function buildBackgroundLayer(args: {
   softbox: SoftboxSettings
   backgroundPreviewUrl: string | null
 }): Promise<Group> {
-  const paint = paintSoftboxBitmap(
+  // Per-layer canvas — never reuse the export scratch buffer as a Fabric element.
+  const paint = createSoftboxSourceCanvas(
     args.softbox,
     CANVAS_WIDTH,
     CANVAS_HEIGHT
@@ -1053,7 +1077,11 @@ function EditorFabricCanvas({
     return () => {
       if (guideRaf) cancelAnimationFrame(guideRaf)
       registerFabricExporter(null)
-      canvas.dispose()
+      try {
+        canvas.dispose()
+      } catch {
+        // Ignore dispose races during hard navigation away from the editor.
+      }
       fabricRef.current = null
       sceneEpochRef.current = 0
       setReady(false)
@@ -1227,41 +1255,33 @@ function EditorFabricCanvas({
     setBusyKind,
   ])
 
-  // Softbox-only updates: in-place Fabric.Image.setElement / CSS overlay (no scene rebuild).
+  // Softbox-only updates: CSS overlay while scrubbing + in-place paint via rAF (no layer rebuild).
   useEffect(() => {
     const canvas = fabricRef.current
-    if (!canvas || !ready) return
+    if (!canvas || !ready || !isFabricCanvasAlive(canvas)) return
 
     const useCssOverlay = softboxScrubbing && !backgroundPreviewUrl
     let raf = 0
-    let timer: ReturnType<typeof setTimeout> | null = null
 
     const run = () => {
       raf = 0
-      applySoftboxToFabric(canvas, softbox, {
-        preview: softboxScrubbing,
-        hideSoftboxForCssOverlay: useCssOverlay,
-      })
+      try {
+        if (!isFabricCanvasAlive(fabricRef.current)) return
+        applySoftboxToFabric(fabricRef.current!, softbox, {
+          preview: softboxScrubbing,
+          hideSoftboxForCssOverlay: useCssOverlay,
+        })
+      } catch (err) {
+        if (process.env.NODE_ENV !== "production") {
+          console.error("[fabric-canvas] softbox rAF failed", err)
+        }
+      }
     }
 
-    if (useCssOverlay) {
-      // Instant CSS path — skip bitmap paint while scrubbing studio wash.
-      run()
-      return
-    }
-
-    // Coalesce rapid store updates onto one rAF (+ light debounce while scrubbing).
-    if (softboxScrubbing) {
-      timer = setTimeout(() => {
-        timer = null
-        raf = requestAnimationFrame(run)
-      }, 16)
-    } else {
-      raf = requestAnimationFrame(run)
-    }
+    // Always coalesce onto one animation frame — never mutate layer structure here.
+    raf = requestAnimationFrame(run)
 
     return () => {
-      if (timer) clearTimeout(timer)
       if (raf) cancelAnimationFrame(raf)
     }
   }, [ready, softbox, softboxScrubbing, backgroundPreviewUrl])

@@ -1,12 +1,13 @@
 "use client"
 
-import { ArrowLeft, Languages, Loader2, Redo2, Save, Undo2, Upload } from "lucide-react"
+import { ArrowLeft, Languages, Loader2, Save, Upload } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { useEffect, useState } from "react"
+import { useEffect, useState, type MouseEvent } from "react"
 import { toast } from "sonner"
 
 import { BrandLogo } from "@/components/dashboard/brand-logo"
+import { EditorAiPanel } from "@/components/editor/ai-panel"
 import { EditorCanvasStage } from "@/components/editor/canvas-stage"
 import { ImportPublishDialog } from "@/components/editor/import-publish-dialog"
 import { EditorSettingsPanel } from "@/components/editor/settings-panel"
@@ -49,10 +50,9 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
   const loadProject = useEditorStore((s) => s.loadProject)
   const reset = useEditorStore((s) => s.reset)
   const setBusyKind = useEditorStore((s) => s.setBusyKind)
+  const setBusyProgress = useEditorStore((s) => s.setBusyProgress)
   const setProductPreviewUrl = useEditorStore((s) => s.setProductPreviewUrl)
   const busyKind = useEditorStore((s) => s.busyKind)
-  const canUndo = useEditorStore((s) => s.canUndo)
-  const canRedo = useEditorStore((s) => s.canRedo)
   const undo = useEditorStore((s) => s.undo)
   const redo = useEditorStore((s) => s.redo)
   const layers = useEditorStore((s) => s.layers)
@@ -221,21 +221,49 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
     }
   }
 
+  /** Hard exit: clear editor work so Soft nav / Fabric teardown cannot freeze the UI. */
+  const leaveToProjects = (event: MouseEvent<HTMLAnchorElement>) => {
+    if (
+      event.defaultPrevented ||
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey
+    ) {
+      return
+    }
+    event.preventDefault()
+    setImportOpen(false)
+    setBusyKind("idle")
+    setBusyProgress(null)
+    reset()
+    window.location.assign("/projects")
+  }
+
   return (
     <div className="flex h-svh flex-col overflow-hidden bg-transparent text-foreground">
-      <header className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-zinc-800/80 bg-zinc-900/60 px-3 backdrop-blur-xl sm:px-4">
-        <div className="flex min-w-0 items-center gap-3">
+      <header className="relative z-20 flex h-12 shrink-0 items-center justify-between gap-3 border-b border-zinc-800/80 bg-zinc-900/60 px-3 backdrop-blur-xl sm:px-4">
+        <div className="flex min-w-0 items-center gap-2 sm:gap-3">
           <Link
             href="/projects"
+            onClick={leaveToProjects}
             className={cn(
-              buttonVariants({ size: "icon-sm", variant: "ghost" }),
-              "shrink-0 text-muted-foreground"
+              buttonVariants({ size: "sm", variant: "ghost" }),
+              "shrink-0 gap-1.5 px-2 text-muted-foreground hover:text-foreground"
             )}
             aria-label={t("editor.backToProjects")}
           >
-            <ArrowLeft className="size-4" aria-hidden />
+            <ArrowLeft className="size-4 shrink-0" aria-hidden />
+            <span className="max-w-[11rem] truncate sm:max-w-none">
+              {t("editor.backToProjects")}
+            </span>
           </Link>
-          <BrandLogo href="/projects" className="hidden sm:flex" />
+          <BrandLogo
+            href="/projects"
+            onClick={leaveToProjects}
+            className="hidden border-l border-white/10 pl-3 sm:flex"
+          />
           <div className="min-w-0 border-l border-white/10 pl-3">
             <p className="truncate font-heading text-sm font-semibold tracking-tight">
               {title}
@@ -247,30 +275,6 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
-          <div className="hidden items-center gap-1 sm:flex">
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              disabled={!canUndo}
-              onClick={undo}
-              aria-label="Отменить изменение"
-              title="Отменить (Ctrl+Z)"
-            >
-              <Undo2 className="size-4" aria-hidden />
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              disabled={!canRedo}
-              onClick={redo}
-              aria-label="Повторить изменение"
-              title="Повторить (Ctrl+Y)"
-            >
-              <Redo2 className="size-4" aria-hidden />
-            </Button>
-          </div>
           <DropdownMenu>
             <DropdownMenuTrigger
               className={cn(
@@ -349,7 +353,8 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
 
       {canRenderEditorSurface && !loadingProject ? (
         <div className="relative flex min-h-0 flex-1 overflow-hidden">
-          <div className="mx-auto flex h-full w-full max-w-7xl min-w-0 flex-col lg:flex-row lg:items-stretch lg:justify-center">
+          <div className="flex h-full w-full min-w-0 flex-col gap-3 p-3 lg:flex-row lg:items-stretch">
+            <EditorAiPanel projectTitle={title} />
             <ErrorBoundary
               title="Ошибка холста"
               description="Рендер редактора прерван. Состояние проекта сохранено в памяти — попробуйте снова."
@@ -375,11 +380,20 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
           {!productData ? (
             <Link
               href="/projects"
+              onClick={leaveToProjects}
               className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
             >
               {t("editor.returnToProjects")}
             </Link>
-          ) : null}
+          ) : (
+            <Link
+              href="/projects"
+              onClick={leaveToProjects}
+              className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
+            >
+              {t("editor.backToProjects")}
+            </Link>
+          )}
         </div>
       )}
     </div>

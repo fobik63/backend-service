@@ -46,8 +46,22 @@ export default function EditorError({ error, reset }: EditorErrorProps) {
         <Link
           href="/projects"
           className={cn(buttonVariants({ size: "default", variant: "outline" }))}
+          onClick={(event) => {
+            if (
+              event.defaultPrevented ||
+              event.button !== 0 ||
+              event.metaKey ||
+              event.ctrlKey ||
+              event.shiftKey ||
+              event.altKey
+            ) {
+              return
+            }
+            event.preventDefault()
+            window.location.assign("/projects")
+          }}
         >
-          К проектам
+          Назад в проекты
         </Link>
       </div>
     </main>

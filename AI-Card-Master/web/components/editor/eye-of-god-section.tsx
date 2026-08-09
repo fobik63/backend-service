@@ -23,6 +23,7 @@ import {
   type EyeOfGodFrequencyItem,
   type EyeOfGodPlatform,
 } from "@/lib/api"
+import { applyEyeInsightsToProject } from "@/lib/editor/canvas-actions"
 import { useI18n } from "@/lib/i18n"
 import { cn } from "@/lib/utils"
 
@@ -141,9 +142,21 @@ function EyeOfGodSection() {
       setDashboard(job.dashboard)
       setPhase("ready")
       setStatusLabel(null)
+
+      const badgeLabels = [
+        ...job.dashboard.badge_patterns.map((item) => item.text),
+        ...job.dashboard.strong_triggers.map((item) => item.text),
+      ]
+      const { badgesCreated } = applyEyeInsightsToProject({
+        generatorPrompt: job.dashboard.generator_prompt,
+        badgeLabels,
+        description: job.dashboard.ai_recommendation,
+        title: job.dashboard.seed_title,
+      })
+
       toast.success(
-        t("editor.eyeSuccess", {
-          count: String(job.dashboard.competitors_analyzed),
+        t("editor.eyeAppliedToProject", {
+          count: String(badgesCreated),
         }),
       )
     } catch (error) {
@@ -164,11 +177,16 @@ function EyeOfGodSection() {
     if (!dashboard?.generator_prompt) return
     try {
       await navigator.clipboard.writeText(dashboard.generator_prompt)
-      window.dispatchEvent(
-        new CustomEvent("editor:seed-prompt", {
-          detail: dashboard.generator_prompt,
-        }),
-      )
+      applyEyeInsightsToProject({
+        generatorPrompt: dashboard.generator_prompt,
+        badgeLabels: [
+          ...dashboard.badge_patterns.map((item) => item.text),
+          ...dashboard.strong_triggers.map((item) => item.text),
+        ],
+        description: dashboard.ai_recommendation,
+        title: dashboard.seed_title,
+      })
+      window.dispatchEvent(new CustomEvent("editor:focus-generate-tab"))
       toast.success(t("editor.eyePromptApplied"))
     } catch {
       toast.error(t("editor.eyeCopyFailed"))

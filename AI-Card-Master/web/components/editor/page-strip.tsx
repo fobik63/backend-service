@@ -26,7 +26,7 @@ function EditorPageStrip({ className }: { className?: string }) {
   return (
     <div
       className={cn(
-        "shrink-0 border-t border-zinc-800/80 bg-zinc-900/60 px-3 py-2.5 backdrop-blur-xl",
+        "shrink-0 border-t border-zinc-800/80 bg-zinc-900/40 px-3 py-2.5",
         className
       )}
       role="tablist"

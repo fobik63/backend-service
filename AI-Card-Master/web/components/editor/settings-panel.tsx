@@ -2,27 +2,28 @@
 
 import {
   ChevronDown,
-  Eye,
-  Images,
+  EyeOff,
   Lamp,
+  Layers,
+  Lock,
+  RotateCw,
   SlidersHorizontal,
   Type,
-  Wrench,
 } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 
 import { BadgeParamsSection } from "@/components/editor/badge-tool"
-import { EyeOfGodSection } from "@/components/editor/eye-of-god-section"
-import { ProductParserSection } from "@/components/editor/product-parser-section"
-import { PromptBar } from "@/components/editor/prompt-bar"
 import { SliderControl } from "@/components/editor/slider-control"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import {
@@ -32,13 +33,9 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet"
+import { TEXT_PRESETS } from "@/lib/constants/mock-editor"
+import { addTextPresetToCanvas } from "@/lib/editor/canvas-actions"
 import { useI18n } from "@/lib/i18n"
-import {
-  MAX_PACK_SIZE,
-  MIN_PACK_SIZE,
-  PRESET_PACK_SIZES,
-  clampPackSize,
-} from "@/lib/export/card-pack"
 import {
   useEditorStore,
   type SoftboxSettings,
@@ -50,6 +47,7 @@ import {
   type TextLayerStyle,
 } from "@/types/canvas"
 import { cn } from "@/lib/utils"
+import { toast } from "sonner"
 
 const FONT_CSS: Record<EditorFontFamily, string> = {
   Inter: "var(--font-inter), Inter, sans-serif",
@@ -89,11 +87,47 @@ function TextParamsSection() {
 
   return (
     <section className="space-y-2.5">
-      <div className="flex items-center gap-2">
-        <Type className="size-4 text-copper" aria-hidden />
-        <h3 className="font-heading text-sm font-semibold tracking-tight">
-          {t("editor.text")}
-        </h3>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Type className="size-4 text-copper" aria-hidden />
+          <h3 className="font-heading text-sm font-semibold tracking-tight">
+            {t("editor.text")}
+          </h3>
+        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            className={cn(
+              "inline-flex h-7 items-center gap-1 rounded-md border border-white/10 bg-white/[0.04] px-2 text-[11px]",
+              "text-muted-foreground outline-none transition-colors hover:text-foreground",
+              "focus-visible:ring-2 focus-visible:ring-ring/50",
+            )}
+          >
+            <Type className="size-3" aria-hidden />
+            {t("editor.addText")}
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-48">
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>{t("editor.addText")}</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {TEXT_PRESETS.map((preset) => (
+                <DropdownMenuItem
+                  key={preset.id}
+                  onClick={() => {
+                    const label = addTextPresetToCanvas(preset)
+                    toast.success(`Текст «${label}» добавлен`)
+                  }}
+                >
+                  <div className="flex flex-col gap-0.5">
+                    <span>{preset.label}</span>
+                    <span className="text-[11px] text-muted-foreground">
+                      {preset.sample}
+                    </span>
+                  </div>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       {!isText ? (
@@ -113,7 +147,7 @@ function TextParamsSection() {
               className={cn(
                 "inline-flex h-8 w-full items-center justify-between rounded-lg border border-white/10 bg-white/[0.04] px-2.5 text-xs outline-none",
                 "focus-visible:ring-2 focus-visible:ring-ring/50",
-                "disabled:pointer-events-none disabled:opacity-50"
+                "disabled:pointer-events-none disabled:opacity-50",
               )}
             >
               <span style={{ fontFamily: FONT_CSS[style.fontFamily] }}>
@@ -167,13 +201,12 @@ function SoftboxParamsSection() {
   const setSoftbox = useEditorStore((s) => s.setSoftbox)
   const setSoftboxScrubbing = useEditorStore((s) => s.setSoftboxScrubbing)
   const beginHistoryTransaction = useEditorStore(
-    (s) => s.beginHistoryTransaction
+    (s) => s.beginHistoryTransaction,
   )
   const commitHistoryTransaction = useEditorStore(
-    (s) => s.commitHistoryTransaction
+    (s) => s.commitHistoryTransaction,
   )
 
-  /** Local UI draft — slider labels update immediately without waiting on canvas. */
   const [draft, setDraft] = useState<SoftboxSettings>(softbox)
   const draftRef = useRef(draft)
   const scrubbingRef = useRef(false)
@@ -209,7 +242,6 @@ function SoftboxParamsSection() {
   }
 
   const scheduleStoreCommit = () => {
-    // Coalesce to one store write per animation frame (16–30ms).
     if (rafRef.current) return
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = 0
@@ -276,13 +308,13 @@ function SoftboxParamsSection() {
           }}
           className={cn(
             "relative h-5 w-9 rounded-full transition-colors",
-            draft.enabled ? "bg-foreground" : "bg-white/15"
+            draft.enabled ? "bg-foreground" : "bg-white/15",
           )}
         >
           <span
             className={cn(
               "absolute top-0.5 left-0.5 size-4 rounded-full bg-white transition-transform",
-              draft.enabled && "translate-x-4"
+              draft.enabled && "translate-x-4",
             )}
           />
           <span className="sr-only">{t("editor.softbox")}</span>
@@ -361,137 +393,120 @@ function SoftboxParamsSection() {
   )
 }
 
-function PackParamsSection() {
+function LayerParamsSection() {
   const { t } = useI18n()
-  const packSize = useEditorStore((s) => s.packSize)
-  const setPackSize = useEditorStore((s) => s.setPackSize)
-  const isPreset = PRESET_PACK_SIZES.includes(packSize)
-  const [customMode, setCustomMode] = useState(!isPreset)
-  const [customDraft, setCustomDraft] = useState(String(packSize))
-  const customSelected = customMode || !isPreset
+  const layers = useEditorStore((s) => s.layers)
+  const selectedLayerId = useEditorStore((s) => s.selectedLayerId)
+  const updateLayer = useEditorStore((s) => s.updateLayer)
 
-  const applySize = (size: number): boolean => {
-    const next = clampPackSize(size)
-    if (
-      next < packSize &&
-      !window.confirm(
-        `Уменьшить набор с ${packSize} до ${next}? Страницы после ${next}-й будут удалены.`
-      )
-    ) {
-      return false
-    }
-    setPackSize(next)
-    return true
-  }
-
-  const selectPreset = (size: number) => {
-    if (!applySize(size)) return
-    setCustomMode(false)
-    setCustomDraft(String(size))
-  }
-
-  const applyCustom = (raw: string) => {
-    setCustomDraft(raw)
-    const parsed = Number.parseInt(raw, 10)
-    if (!Number.isFinite(parsed)) return
-    const next = clampPackSize(parsed)
-    if (next >= packSize) {
-      setPackSize(next)
-    }
-  }
+  const layer = layers.find((l) => l.id === selectedLayerId)
+  const hasSelection = Boolean(layer)
+  const disabled = !hasSelection || Boolean(layer?.locked)
+  const opacityPct = Math.round((layer?.opacity ?? 1) * 100)
+  const rotation = Math.round(layer?.rotation ?? 0)
 
   return (
     <section className="space-y-2.5">
       <div className="flex items-center gap-2">
-        <Images className="size-4 text-emerald" aria-hidden />
+        <Layers className="size-4 text-copper" aria-hidden />
         <h3 className="font-heading text-sm font-semibold tracking-tight">
-          {t("editor.packGeneration")}
+          {t("editor.layerProps")}
         </h3>
       </div>
 
-      <div className="space-y-1.5">
-        <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-          {t("export.packSize")}
-        </span>
-        <div
-          className="flex flex-wrap gap-1"
-          role="group"
-          aria-label={t("export.packSize")}
-        >
-          {PRESET_PACK_SIZES.map((size) => (
-            <button
-              key={size}
-              type="button"
-              onClick={() => selectPreset(size)}
-              className={cn(
-                "inline-flex h-8 min-w-8 flex-1 items-center justify-center rounded-md border text-xs font-medium transition-colors",
-                !customSelected && packSize === size
-                  ? "border-white/25 bg-white/10 text-foreground"
-                  : "border-white/10 bg-white/[0.04] text-muted-foreground hover:text-foreground"
-              )}
-              aria-pressed={!customSelected && packSize === size}
-            >
-              {size}
-            </button>
-          ))}
-          <button
-            type="button"
-            onClick={() => {
-              setCustomMode(true)
-              if (PRESET_PACK_SIZES.includes(packSize)) {
-                setCustomDraft("6")
-                setPackSize(6)
-              }
-            }}
-            className={cn(
-              "inline-flex h-8 min-w-10 flex-[1.2] items-center justify-center rounded-md border px-2 text-[11px] font-medium transition-colors",
-              customSelected
-                ? "border-white/25 bg-white/10 text-foreground"
-                : "border-white/10 bg-white/[0.04] text-muted-foreground hover:text-foreground"
-            )}
-            aria-pressed={customSelected}
-          >
-            {t("export.packCustom")}
-          </button>
-        </div>
-
-        {customSelected ? (
-          <div className="flex items-center gap-2 pt-0.5">
-            <Input
-              type="number"
-              min={MIN_PACK_SIZE}
-              max={MAX_PACK_SIZE}
-              value={customDraft}
-              placeholder={t("export.packCustomPlaceholder")}
-              aria-label={t("export.packCustom")}
-              onChange={(e) => applyCustom(e.target.value)}
-              onBlur={() => {
-                const next = clampPackSize(Number.parseInt(customDraft, 10) || 1)
-                if (applySize(next)) {
-                  setCustomDraft(String(next))
-                } else {
-                  setCustomDraft(String(packSize))
-                }
-              }}
-              className="h-8 border-white/10 bg-white/[0.04] text-xs"
-            />
-            <span className="shrink-0 text-[11px] text-muted-foreground">
-              {MIN_PACK_SIZE}–{MAX_PACK_SIZE}
-            </span>
-          </div>
-        ) : null}
-
-        <p className="text-[10px] text-muted-foreground">
-          {t("export.packPhotos", { count: String(packSize) })}
+      {!hasSelection ? (
+        <p className="text-[11px] text-muted-foreground">
+          {t("editor.layerSelectHint")}
         </p>
+      ) : (
+        <p className="truncate text-[11px] text-muted-foreground">
+          {layer?.name}
+        </p>
+      )}
+
+      <div className={cn("space-y-2.5", !hasSelection && "opacity-45")}>
+        <SliderControl
+          label={t("editor.opacity")}
+          value={opacityPct}
+          min={0}
+          max={100}
+          unit="%"
+          disabled={!hasSelection || Boolean(layer?.locked)}
+          onChange={(pct) => {
+            if (!layer) return
+            updateLayer(layer.id, { opacity: clamp(pct, 0, 100) / 100 })
+          }}
+        />
+
+        <SliderControl
+          label={t("editor.rotation")}
+          value={rotation}
+          min={0}
+          max={360}
+          unit="°"
+          disabled={disabled}
+          onChange={(deg) => {
+            if (!layer) return
+            updateLayer(layer.id, {
+              rotation: ((Math.round(deg) % 360) + 360) % 360,
+            })
+          }}
+        />
+
+        <div className="flex flex-wrap gap-1.5">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={!hasSelection}
+            className="h-8 flex-1 gap-1.5 border-white/10 bg-white/[0.04] text-xs"
+            onClick={() => {
+              if (!layer) return
+              updateLayer(layer.id, { visible: !layer.visible })
+            }}
+          >
+            <EyeOff className="size-3.5" aria-hidden />
+            {layer?.visible === false
+              ? t("editor.layerShow")
+              : t("editor.layerHide")}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={!hasSelection}
+            className="h-8 flex-1 gap-1.5 border-white/10 bg-white/[0.04] text-xs"
+            onClick={() => {
+              if (!layer) return
+              updateLayer(layer.id, { locked: !layer.locked })
+            }}
+          >
+            <Lock className="size-3.5" aria-hidden />
+            {layer?.locked ? t("editor.layerUnlock") : t("editor.layerLock")}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={disabled}
+            className="h-8 flex-1 gap-1.5 border-white/10 bg-white/[0.04] text-xs"
+            onClick={() => {
+              if (!layer) return
+              const next = (((layer.rotation ?? 0) + 90) % 360 + 360) % 360
+              updateLayer(layer.id, { rotation: next })
+            }}
+          >
+            <RotateCw className="size-3.5" aria-hidden />
+            {t("editor.rotate90")}
+          </Button>
+        </div>
       </div>
     </section>
   )
 }
 
-function EditorSettingsBody({ projectTitle }: EditorSettingsPanelProps) {
+function EditorSettingsBody() {
   const { t } = useI18n()
-  const [tab, setTab] = useState<"tools" | "eye">("tools")
 
   return (
     <>
@@ -502,88 +517,45 @@ function EditorSettingsBody({ projectTitle }: EditorSettingsPanelProps) {
         <p className="text-[11px] text-muted-foreground">
           {t("editor.toolsHint")}
         </p>
-        <div
-          role="tablist"
-          aria-label={t("editor.toolsTabs")}
-          className="mt-2.5 grid grid-cols-2 gap-1 rounded-lg border border-white/10 bg-white/[0.03] p-1"
-        >
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === "tools"}
-            onClick={() => setTab("tools")}
-            className={cn(
-              "inline-flex h-8 items-center justify-center gap-1.5 rounded-md text-[11px] font-medium transition-colors",
-              tab === "tools"
-                ? "bg-loft-surface text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            <Wrench className="size-3.5" aria-hidden />
-            {t("editor.toolsTab")}
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === "eye"}
-            onClick={() => setTab("eye")}
-            className={cn(
-              "inline-flex h-8 items-center justify-center gap-1.5 rounded-md text-[11px] font-medium transition-colors",
-              tab === "eye"
-                ? "bg-loft-surface text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            <Eye className="size-3.5 text-amber" aria-hidden />
-            {t("editor.eyeTab")}
-          </button>
-        </div>
       </div>
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-3 py-3">
-        {tab === "tools" ? (
-          <>
-            <ProductParserSection />
-            <div className="border-t border-white/8 pt-3">
-              <TextParamsSection />
-            </div>
-            <div className="border-t border-white/8 pt-3">
-              <BadgeParamsSection />
-            </div>
-            <div className="border-t border-white/8 pt-3">
-              <SoftboxParamsSection />
-            </div>
-            <div className="border-t border-white/8 pt-3">
-              <PackParamsSection />
-            </div>
-          </>
-        ) : (
-          <EyeOfGodSection />
-        )}
-      </div>
-
-      <div className="shrink-0 border-t border-white/8 bg-[#12151a] px-3 py-3">
-        <PromptBar variant="panel" projectTitle={projectTitle} />
+        <TextParamsSection />
+        <div className="border-t border-white/8 pt-3">
+          <BadgeParamsSection />
+        </div>
+        <div className="border-t border-white/8 pt-3">
+          <LayerParamsSection />
+        </div>
+        <div className="border-t border-white/8 pt-3">
+          <SoftboxParamsSection />
+        </div>
       </div>
     </>
   )
 }
 
-function EditorSettingsPanel({ projectTitle }: EditorSettingsPanelProps) {
+const PANEL_SHELL =
+  "flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900/80 backdrop-blur-xl"
+
+function EditorSettingsPanel(_props: EditorSettingsPanelProps) {
   const { t } = useI18n()
   const [mobileOpen, setMobileOpen] = useState(false)
 
   return (
     <>
       <aside
-        className="hidden h-full w-[min(100%,340px)] shrink-0 flex-col self-stretch overflow-hidden border-l border-zinc-800/80 bg-zinc-900/60 backdrop-blur-xl lg:flex"
+        className={cn(
+          "hidden w-[min(100%,360px)] shrink-0 self-stretch lg:flex",
+          "lg:w-[clamp(20rem,22vw,22.5rem)]",
+          PANEL_SHELL,
+        )}
         aria-label={t("editor.tools")}
       >
-        <EditorSettingsBody projectTitle={projectTitle} />
+        <EditorSettingsBody />
       </aside>
 
-      {/* Keep FAB above EditorPageStrip on phones. */}
-      <div className="pointer-events-none absolute inset-x-0 bottom-[9.75rem] z-20 flex justify-center px-3 sm:bottom-[10.25rem] lg:hidden">
+      <div className="pointer-events-none absolute right-3 bottom-[9.75rem] z-20 sm:bottom-[10.25rem] lg:hidden">
         <Button
           type="button"
           size="sm"
@@ -596,14 +568,14 @@ function EditorSettingsPanel({ projectTitle }: EditorSettingsPanelProps) {
         <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
           <SheetContent
             side="right"
-            className="flex h-full min-h-0 w-full max-w-[min(100%,24rem)] flex-col border-l border-zinc-800/80 bg-zinc-900/60 p-0 backdrop-blur-xl"
+            className="flex h-full min-h-0 w-full max-w-[min(100%,24rem)] flex-col border-l border-zinc-800 bg-zinc-900/90 p-0 backdrop-blur-xl"
           >
             <SheetHeader className="sr-only">
               <SheetTitle>{t("editor.tools")}</SheetTitle>
               <SheetDescription>{t("editor.toolsHint")}</SheetDescription>
             </SheetHeader>
             <div className="flex h-full min-h-0 flex-col">
-              <EditorSettingsBody projectTitle={projectTitle} />
+              <EditorSettingsBody />
             </div>
           </SheetContent>
         </Sheet>

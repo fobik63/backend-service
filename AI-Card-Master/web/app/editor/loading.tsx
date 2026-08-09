@@ -1,11 +1,25 @@
+import Link from "next/link"
+import { ArrowLeft } from "lucide-react"
+
+import { buttonVariants } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
+import { cn } from "@/lib/utils"
 
 export default function EditorLoading() {
   return (
     <div className="flex h-svh flex-col overflow-hidden">
-      <div className="flex h-12 shrink-0 items-center gap-3 border-b border-white/8 px-4">
-        <Skeleton className="size-8 rounded-lg" />
-        <Skeleton className="h-4 w-40" />
+      <div className="relative z-20 flex h-12 shrink-0 items-center gap-3 border-b border-white/8 px-3 sm:px-4">
+        <Link
+          href="/projects"
+          className={cn(
+            buttonVariants({ size: "sm", variant: "ghost" }),
+            "shrink-0 gap-1.5 px-2 text-muted-foreground hover:text-foreground"
+          )}
+        >
+          <ArrowLeft className="size-4 shrink-0" aria-hidden />
+          <span>Назад в проекты</span>
+        </Link>
+        <Skeleton className="ml-1 h-4 w-40" />
         <div className="ml-auto flex gap-2">
           <Skeleton className="h-8 w-20 rounded-lg" />
           <Skeleton className="h-8 w-24 rounded-lg" />

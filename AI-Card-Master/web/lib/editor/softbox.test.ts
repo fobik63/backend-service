@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 import {
+  createSoftboxSourceCanvas,
+  paintSoftboxInPlace,
   paintSoftboxToCanvas,
   softboxKeyPosition,
   softboxOverlayStyle,
@@ -14,6 +16,22 @@ const BASE: SoftboxSettings = {
   colorTempK: 5500,
   intensity: 100,
   softboxDiffusion: 65,
+}
+
+function mock2dContext(canvas: HTMLCanvasElement) {
+  const ctx = {
+    clearRect: vi.fn(),
+    fillRect: vi.fn(),
+    createLinearGradient: vi.fn(() => ({
+      addColorStop: vi.fn(),
+    })),
+    createRadialGradient: vi.fn(() => ({
+      addColorStop: vi.fn(),
+    })),
+    fillStyle: "",
+  }
+  vi.spyOn(canvas, "getContext").mockReturnValue(ctx as unknown as CanvasRenderingContext2D)
+  return ctx
 }
 
 describe("softbox", () => {
@@ -39,9 +57,36 @@ describe("softbox", () => {
     const canvas = document.createElement("canvas")
     canvas.width = 64
     canvas.height = 64
-    expect(() => paintSoftboxToCanvas(canvas, BASE)).not.toThrow()
-    expect(() =>
+    mock2dContext(canvas)
+    expect(paintSoftboxToCanvas(canvas, BASE)).toBe(true)
+    expect(
       paintSoftboxToCanvas(canvas, { ...BASE, enabled: false })
-    ).not.toThrow()
+    ).toBe(true)
+  })
+
+  it("returns false when canvas context is unavailable", () => {
+    const canvas = document.createElement("canvas")
+    canvas.width = 0
+    canvas.height = 0
+    expect(paintSoftboxToCanvas(canvas, BASE)).toBe(false)
+    expect(paintSoftboxInPlace(canvas, BASE)).toBe(false)
+
+    const sized = document.createElement("canvas")
+    sized.width = 16
+    sized.height = 16
+    vi.spyOn(sized, "getContext").mockReturnValue(null)
+    expect(paintSoftboxToCanvas(sized, BASE)).toBe(false)
+  })
+
+  it("creates a dedicated source canvas and paints in place without reallocating", () => {
+    const created = createSoftboxSourceCanvas(BASE, 32, 48)
+    expect(created).toBeInstanceOf(HTMLCanvasElement)
+    expect(created.width).toBe(32)
+    expect(created.height).toBe(48)
+
+    mock2dContext(created)
+    expect(paintSoftboxInPlace(created, { ...BASE, intensity: 40 })).toBe(true)
+    expect(created.width).toBe(32)
+    expect(created.height).toBe(48)
   })
 })

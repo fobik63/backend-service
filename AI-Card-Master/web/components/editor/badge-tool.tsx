@@ -267,11 +267,14 @@ function BadgeParamsSection() {
 
   return (
     <section className="space-y-2.5">
-      <div className="flex items-center gap-2">
-        <SquareStack className="size-4 text-emerald" aria-hidden />
-        <h3 className="font-heading text-sm font-semibold tracking-tight">
-          {t("editor.badge")}
-        </h3>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <SquareStack className="size-4 text-emerald" aria-hidden />
+          <h3 className="font-heading text-sm font-semibold tracking-tight">
+            {t("editor.badge")}
+          </h3>
+        </div>
+        <BadgeToolbarMenu />
       </div>
 
       {!isBadge ? (

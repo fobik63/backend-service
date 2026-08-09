@@ -142,3 +142,52 @@ export function addCustomBadge(label: string): {
     borderRadius: 14,
   })
 }
+
+/** Seed AI prompt + push top badge/trigger suggestions onto the canvas. */
+export function applyEyeInsightsToProject(opts: {
+  generatorPrompt?: string | null
+  badgeLabels?: string[]
+  description?: string | null
+  title?: string | null
+}): { badgesCreated: number } {
+  const prompt = opts.generatorPrompt?.trim()
+  if (prompt) {
+    window.dispatchEvent(
+      new CustomEvent("editor:seed-prompt", { detail: prompt }),
+    )
+  }
+
+  const labels = (opts.badgeLabels ?? [])
+    .map((label) => label.trim())
+    .filter(Boolean)
+  const seen = new Set<string>()
+  let badgesCreated = 0
+
+  for (const label of labels) {
+    const key = normalizeBadgeLabel(label)
+    if (seen.has(key)) continue
+    seen.add(key)
+    const result = addBadgeToCanvas({
+      label: label.slice(0, 48),
+      bgColor: "rgba(15,17,21,0.55)",
+      iconId: "icon_spark",
+      variant: "glass",
+      blur: 12,
+      textColor: "#FFFFFF",
+      borderRadius: 14,
+    })
+    if (result.created) badgesCreated += 1
+    if (seen.size >= 6) break
+  }
+
+  const metaPatch: { description?: string; title?: string } = {}
+  const description = opts.description?.trim()
+  if (description) metaPatch.description = description
+  const title = opts.title?.trim()
+  if (title) metaPatch.title = title
+  if (Object.keys(metaPatch).length > 0) {
+    useEditorStore.getState().setProductMeta(metaPatch)
+  }
+
+  return { badgesCreated }
+}

@@ -1,4 +1,5 @@
 import Link from "next/link"
+import type { MouseEventHandler } from "react"
 
 import { cn } from "@/lib/utils"
 
@@ -47,13 +48,16 @@ function CardLogoIcon({ className }: { className?: string }) {
 type BrandLogoProps = {
   href?: string
   className?: string
+  onClick?: MouseEventHandler<HTMLAnchorElement>
 }
 
-function BrandLogo({ href = "/projects", className }: BrandLogoProps) {
+function BrandLogo({ href = "/projects", className, onClick }: BrandLogoProps) {
   return (
     <Link
       href={href}
+      onClick={onClick}
       className={cn("group flex shrink-0 items-center gap-2.5", className)}
+      aria-label="CARD AI"
     >
       <CardLogoIcon className="size-7 transition-opacity duration-200 group-hover:opacity-80" />
       <span className="font-heading text-lg font-semibold tracking-tight text-sidebar-foreground">

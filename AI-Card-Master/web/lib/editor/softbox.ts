@@ -50,18 +50,26 @@ function rgbCss([r, g, b]: [number, number, number], alpha = 1): string {
 
 /**
  * Paint softbox studio wash onto a 2D canvas (used as Fabric layer-1 bitmap).
+ * Returns false when the 2D context is missing / canvas has no size (caller must skip redraw).
  */
 export function paintSoftboxToCanvas(
   target: HTMLCanvasElement | OffscreenCanvas,
   softbox: SoftboxSettings
-): void {
+): boolean {
   const width = target.width
   const height = target.height
-  const ctx = target.getContext("2d") as
-    | CanvasRenderingContext2D
-    | OffscreenCanvasRenderingContext2D
-    | null
-  if (!ctx || width <= 0 || height <= 0) return
+  if (width <= 0 || height <= 0) return false
+
+  let ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null
+  try {
+    ctx = target.getContext("2d") as
+      | CanvasRenderingContext2D
+      | OffscreenCanvasRenderingContext2D
+      | null
+  } catch {
+    return false
+  }
+  if (!ctx) return false
 
   ctx.clearRect(0, 0, width, height)
 
@@ -71,7 +79,7 @@ export function paintSoftboxToCanvas(
     g.addColorStop(1, "#0d0f12")
     ctx.fillStyle = g
     ctx.fillRect(0, 0, width, height)
-    return
+    return true
   }
 
   const warmth = warmthFromKelvin(softbox.colorTempK)
@@ -132,9 +140,42 @@ export function paintSoftboxToCanvas(
   floor.addColorStop(0.7, rgbCss(lightRgb, 0))
   ctx.fillStyle = floor
   ctx.fillRect(0, height * 0.55, width, height * 0.45)
+  return true
 }
 
-/** Reused paint surface — avoids allocating a new canvas per slider tick. */
+/**
+ * Dedicated canvas owned by a Fabric.Image — never share with module-level buffers
+ * (Fabric dispose / setElement / preview resize would corrupt a shared surface).
+ */
+export function createSoftboxSourceCanvas(
+  softbox: SoftboxSettings,
+  width: number,
+  height: number
+): HTMLCanvasElement {
+  const canvas = document.createElement("canvas")
+  canvas.width = Math.max(1, Math.round(width))
+  canvas.height = Math.max(1, Math.round(height))
+  paintSoftboxToCanvas(canvas, softbox)
+  return canvas
+}
+
+/**
+ * Paint into an existing Fabric-bound canvas without reallocating or resizing
+ * (resizing clears the buffer and races with Fabric's render pass).
+ */
+export function paintSoftboxInPlace(
+  target: HTMLCanvasElement,
+  softbox: SoftboxSettings
+): boolean {
+  try {
+    if (!target || target.width <= 0 || target.height <= 0) return false
+    return paintSoftboxToCanvas(target, softbox)
+  } catch {
+    return false
+  }
+}
+
+/** Scratch surface for export / data-URL only — must NOT be passed to FabricImage. */
 let softboxPaintCanvas: HTMLCanvasElement | null = null
 
 export function getSoftboxPaintCanvas(
@@ -154,7 +195,7 @@ export function getSoftboxPaintCanvas(
 }
 
 /**
- * Paint softbox into the shared canvas and return it (ready for FabricImage.setElement).
+ * Paint softbox into the export scratch canvas (never bind this to Fabric.Image).
  */
 export function paintSoftboxBitmap(
   softbox: SoftboxSettings,

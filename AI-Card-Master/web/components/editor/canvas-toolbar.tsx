@@ -129,7 +129,14 @@ function FileInput({
   )
 }
 
-function CanvasToolbar({ className }: { className?: string }) {
+function CanvasToolbar({
+  className,
+  compact = false,
+}: {
+  className?: string
+  /** Photo + cutout only — text/badge/export live in side panels / quick bar. */
+  compact?: boolean
+}) {
   const {
     inputRef,
     productPreviewUrl,
@@ -204,82 +211,86 @@ function CanvasToolbar({ className }: { className?: string }) {
         Фон
       </Button>
 
-      <DropdownMenu>
-        <DropdownMenuTrigger
-          className={cn(
-            "inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/12 bg-loft-surface px-2.5 text-sm",
-            "text-secondary-foreground outline-none transition-colors hover:bg-secondary/80",
-            "focus-visible:ring-2 focus-visible:ring-ring/50"
-          )}
-        >
-          <Type className="size-3.5" aria-hidden />
-          Текст
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="min-w-48">
-          <DropdownMenuGroup>
-            <DropdownMenuLabel>Добавить текст</DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            {TEXT_PRESETS.map((preset) => (
-              <DropdownMenuItem
-                key={preset.id}
-                onClick={() => {
-                  const label = addTextPresetToCanvas(preset)
-                  toast.success(`Текст «${label}» добавлен`)
-                }}
-              >
-                <div className="flex flex-col gap-0.5">
-                  <span>{preset.label}</span>
-                  <span className="text-[11px] text-muted-foreground">
-                    {preset.sample}
-                  </span>
-                </div>
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuGroup>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      {compact ? null : (
+        <>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              className={cn(
+                "inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/12 bg-loft-surface px-2.5 text-sm",
+                "text-secondary-foreground outline-none transition-colors hover:bg-secondary/80",
+                "focus-visible:ring-2 focus-visible:ring-ring/50"
+              )}
+            >
+              <Type className="size-3.5" aria-hidden />
+              Текст
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="min-w-48">
+              <DropdownMenuGroup>
+                <DropdownMenuLabel>Добавить текст</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {TEXT_PRESETS.map((preset) => (
+                  <DropdownMenuItem
+                    key={preset.id}
+                    onClick={() => {
+                      const label = addTextPresetToCanvas(preset)
+                      toast.success(`Текст «${label}» добавлен`)
+                    }}
+                  >
+                    <div className="flex flex-col gap-0.5">
+                      <span>{preset.label}</span>
+                      <span className="text-[11px] text-muted-foreground">
+                        {preset.sample}
+                      </span>
+                    </div>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
 
-      <BadgeToolbarMenu />
+          <BadgeToolbarMenu />
 
-      <DropdownMenu>
-        <DropdownMenuTrigger
-          disabled={exporting}
-          className={cn(
-            "inline-flex h-8 items-center gap-1.5 rounded-lg border border-emerald/30 bg-emerald/10 px-2.5 text-sm",
-            "text-emerald outline-none transition-colors hover:bg-emerald/15",
-            "focus-visible:ring-2 focus-visible:ring-ring/50",
-            "disabled:pointer-events-none disabled:opacity-50"
-          )}
-          aria-label="Экспорт PNG"
-        >
-          {exporting ? (
-            <Loader2 className="size-3.5 animate-spin" aria-hidden />
-          ) : (
-            <Download className="size-3.5" aria-hidden />
-          )}
-          Экспорт
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-52">
-          <DropdownMenuGroup>
-            <DropdownMenuLabel>PNG высокого разрешения</DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            {FABRIC_EXPORT_PRESETS.map((preset, index) => (
-              <DropdownMenuItem
-                key={preset.label}
-                disabled={exporting}
-                onClick={() => void handleExportPng(index)}
-              >
-                <div className="flex flex-col gap-0.5">
-                  <span>Экспорт {preset.label}</span>
-                  <span className="text-[11px] text-muted-foreground">
-                    Слои 1–3 склеены в браузере
-                  </span>
-                </div>
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuGroup>
-        </DropdownMenuContent>
-      </DropdownMenu>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              disabled={exporting}
+              className={cn(
+                "inline-flex h-8 items-center gap-1.5 rounded-lg border border-emerald/30 bg-emerald/10 px-2.5 text-sm",
+                "text-emerald outline-none transition-colors hover:bg-emerald/15",
+                "focus-visible:ring-2 focus-visible:ring-ring/50",
+                "disabled:pointer-events-none disabled:opacity-50"
+              )}
+              aria-label="Экспорт PNG"
+            >
+              {exporting ? (
+                <Loader2 className="size-3.5 animate-spin" aria-hidden />
+              ) : (
+                <Download className="size-3.5" aria-hidden />
+              )}
+              Экспорт
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-52">
+              <DropdownMenuGroup>
+                <DropdownMenuLabel>PNG высокого разрешения</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {FABRIC_EXPORT_PRESETS.map((preset, index) => (
+                  <DropdownMenuItem
+                    key={preset.label}
+                    disabled={exporting}
+                    onClick={() => void handleExportPng(index)}
+                  >
+                    <div className="flex flex-col gap-0.5">
+                      <span>Экспорт {preset.label}</span>
+                      <span className="text-[11px] text-muted-foreground">
+                        Слои 1–3 склеены в браузере
+                      </span>
+                    </div>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </>
+      )}
     </div>
   )
 }
