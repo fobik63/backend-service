@@ -15,7 +15,7 @@ function LegalPageShell({ title, updatedAt, children }: LegalPageShellProps) {
     <div className="relative min-h-dvh overflow-x-hidden text-foreground">
       <header className="mx-auto flex max-w-3xl items-center px-5 pt-8 pb-4">
         <Link
-          href="/landing"
+          href="/"
           className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-loft-surface px-3 py-2 text-sm text-foreground/90 transition-colors hover:border-white/20"
         >
           <ArrowLeft className="size-4 text-muted-foreground" aria-hidden />

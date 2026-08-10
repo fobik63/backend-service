@@ -76,7 +76,16 @@ function AppShell({ children, variant = "workspace" }: AppShellProps) {
   const handleLogout = () => {
     clearAuth()
     if (IS_MOCK) {
-      router.push("/projects")
+      // Hard load when leaving editor — Soft Router can hang on Fabric teardown.
+      if (typeof window !== "undefined" && window.location.pathname.startsWith("/editor")) {
+        window.location.assign("/")
+        return
+      }
+      router.push("/")
+      return
+    }
+    if (typeof window !== "undefined" && window.location.pathname.startsWith("/editor")) {
+      window.location.assign("/login")
       return
     }
     router.push("/login")
@@ -94,7 +103,7 @@ function AppShell({ children, variant = "workspace" }: AppShellProps) {
     <div
       className={cn(
         "flex min-h-dvh flex-col bg-transparent",
-        variant === "editor" && "h-dvh overflow-hidden"
+        variant === "editor" && "h-dvh max-h-dvh overflow-hidden"
       )}
     >
       <AppHeader
@@ -104,8 +113,9 @@ function AppShell({ children, variant = "workspace" }: AppShellProps) {
       />
       <main
         className={cn(
-          "flex min-h-0 flex-1 flex-col",
-          variant === "workspace" && "px-4 py-6 sm:px-6 lg:px-8"
+          "flex min-h-0 min-w-0 flex-1 flex-col",
+          variant === "workspace" && "overflow-x-hidden px-4 py-6 sm:px-6 lg:px-8",
+          variant === "editor" && "overflow-hidden"
         )}
       >
         {children}

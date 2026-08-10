@@ -33,6 +33,14 @@ export {
   ParserScrapeError,
 } from "@/lib/parser/scrapers"
 export {
+  ANTIBOT_ERROR_CODE,
+  ANTIBOT_USER_MESSAGE,
+  antibotScrapeError,
+  isAntibotChallengeText,
+  isAntibotHtml,
+  isAntibotScrapeError,
+} from "@/lib/parser/antibot"
+export {
   buildParsedProduct,
   normalizeProductFields,
 } from "@/lib/parser/normalize"

@@ -180,8 +180,22 @@ export async function fabricCanvasToPngDataUrl(
 ): Promise<string> {
   const prepared = prepareCanvasForExport(canvas)
   const multiplier = size.width / CANVAS_WIDTH
+  // Editor may use setZoom/absolutePan for Fit — export always at identity VPT
+  // so left/top/width/height map to the native 1080×1440 artboard.
+  const transform = canvas.viewportTransform
+  const prevVpt: [number, number, number, number, number, number] = transform
+    ? [
+        transform[0] ?? 1,
+        transform[1] ?? 0,
+        transform[2] ?? 0,
+        transform[3] ?? 1,
+        transform[4] ?? 0,
+        transform[5] ?? 0,
+      ]
+    : [1, 0, 0, 1, 0, 0]
 
   try {
+    canvas.setViewportTransform([1, 0, 0, 1, 0, 0])
     // Fabric toCanvasElement already sets skipControlsDrawing=true (no handles).
     // filter is belt-and-suspenders for guides / excludeFromExport objects.
     return canvas.toDataURL({
@@ -195,6 +209,7 @@ export async function fabricCanvasToPngDataUrl(
       filter: (obj) => !isExportChrome(obj as FabricObject),
     })
   } finally {
+    canvas.setViewportTransform(prevVpt)
     restoreCanvasAfterExport(canvas, prepared)
   }
 }

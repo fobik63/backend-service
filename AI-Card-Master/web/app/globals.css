@@ -251,6 +251,17 @@
   }
 }
 
+/*
+ * Softbox CSS preview layers — must never inherit transition:all.
+ * Animating top/left/opacity on mount looks like the artboard respawns and slides.
+ */
+.softbox-light-overlay {
+  pointer-events: none !important;
+  transition: none !important;
+  transition-property: none !important;
+  animation: none !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-marquee-left,
   .animate-marquee-right {

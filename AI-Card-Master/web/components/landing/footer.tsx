@@ -9,10 +9,10 @@ const DOC_LINKS = [
 ] as const
 
 const PRODUCT_LINKS = [
-  { href: "/landing#features", label: "Возможности" },
-  { href: "/landing#testimonials", label: "Отзывы" },
-  { href: "/landing#pricing", label: "Цены" },
-  { href: "/landing#faq", label: "FAQ" },
+  { href: "/#features", label: "Возможности" },
+  { href: "/#testimonials", label: "Отзывы" },
+  { href: "/#pricing", label: "Цены" },
+  { href: "/#faq", label: "FAQ" },
 ] as const
 
 const TELEGRAM_SUPPORT_URL = "https://t.me/cardai_support"
@@ -26,7 +26,7 @@ function Footer() {
         <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-4 lg:gap-8">
           {/* Brand */}
           <div className="sm:col-span-2 lg:col-span-1">
-            <Link href="/landing" className="inline-flex items-center gap-2">
+            <Link href="/" className="inline-flex items-center gap-2">
               <span className="font-heading text-lg font-semibold tracking-tight text-foreground">
                 CARD AI
                 <span

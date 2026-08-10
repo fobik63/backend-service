@@ -7,17 +7,24 @@ export type ProjectStatus = "ready" | "processing"
 export type Project = {
   id: string
   title: string
-  marketplace: ProjectMarketplace
+  /** Short line under the title on the projects grid (optional). */
+  subtitle?: string | null
+  /** Null when API design has no marketplace metadata yet. */
+  marketplace: ProjectMarketplace | null
   status: ProjectStatus
   createdAt: string
-  /** Marketplace-style card preview (local Unsplash-quality photo) */
-  previewImage: string
+  /** Marketplace-style card preview; null → card shows empty surface. */
+  previewImage: string | null
   /**
    * Isolated transparent product cutout for the editor canvas.
    * Falls back to `previewImage` when omitted.
    */
   productImage?: string
   accentLabel: string
+  /** Current price shown on the preview plaque (rubles). */
+  priceRub?: number | null
+  /** Struck-through old price on the preview plaque (rubles). */
+  oldPriceRub?: number | null
   editorDocument?: EditorDocumentDTO | null
 }
 
@@ -25,12 +32,15 @@ export const MOCK_PROJECTS: Project[] = [
   {
     id: "prj_01",
     title: "Крем для рук «Sage Mist»",
+    subtitle: "Увлажнение и защита для вашей кожи",
     marketplace: "ozon",
     status: "ready",
     createdAt: "2026-08-02T10:24:00.000Z",
     previewImage: "/projects/cream-sage-mist.png",
     productImage: "/projects/cream-sage-mist-product.png",
     accentLabel: "Уход",
+    priceRub: 690,
+    oldPriceRub: 890,
   },
   {
     id: "prj_02",

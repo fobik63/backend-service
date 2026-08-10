@@ -57,7 +57,7 @@ function AuthModal({
 
         <div className="mb-2 flex items-center justify-between px-1">
           <Link
-            href="/landing"
+            href="/"
             onClick={() => onOpenChange(false)}
             className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground"
           >

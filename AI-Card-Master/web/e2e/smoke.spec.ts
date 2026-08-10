@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test"
 
 test.describe("AI Card Master smoke", () => {
   test("landing loads and exposes primary CTAs", async ({ page }) => {
-    await page.goto("/landing")
+    await page.goto("/")
     await expect(page.locator("body")).toBeVisible()
     const editorCta = page
       .getByRole("button", { name: /сгенерировать|editor|бесплатно/i })

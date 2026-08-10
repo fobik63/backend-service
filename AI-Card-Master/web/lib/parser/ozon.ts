@@ -1,3 +1,10 @@
+import {
+  antibotScrapeError,
+  isAntibotChallengeText,
+  isAntibotHtml,
+  isAntibotHttpStatus,
+  isAntibotResponseHeaders,
+} from "@/lib/parser/antibot"
 import type { MarketplaceHttpClient } from "@/lib/parser/http-client"
 import {
   brandFromCharacteristics,
@@ -35,6 +42,8 @@ export async function scrapeOzonProduct(
   let nuxtState: unknown | null = null
   let html = ""
 
+  let sawAntibot = false
+
   try {
     const response = await http.get<string>(target.productUrl, {
       headers: OZON_HEADERS,
@@ -43,17 +52,47 @@ export async function scrapeOzonProduct(
       userAgentProfile: "desktop",
     })
     html = typeof response.data === "string" ? response.data : ""
-    nuxtState = extractNuxtState(html)
+    if (
+      isAntibotHttpStatus(response.status) ||
+      isAntibotResponseHeaders(response.headers as Record<string, unknown>) ||
+      isAntibotHtml(html)
+    ) {
+      sawAntibot = true
+    } else {
+      nuxtState = extractNuxtState(html)
+    }
   } catch (error) {
-    // Continue to Puppeteer fallback below.
-    void error
+    // Axios rejects 403 (validateStatus); treat as antibot when status/body match.
+    const status = axiosStatus(error)
+    if (status != null && isAntibotHttpStatus(status)) {
+      sawAntibot = true
+    }
+    const errHeaders = axiosResponseHeaders(error)
+    if (isAntibotResponseHeaders(errHeaders)) {
+      sawAntibot = true
+    }
+    const errHtml = axiosResponseText(error)
+    if (errHtml) {
+      html = errHtml
+      if (isAntibotHtml(errHtml)) {
+        sawAntibot = true
+      }
+    }
+    // Otherwise continue to Puppeteer fallback below.
   }
 
-  if (!nuxtState || !hasUsableProductSignals(nuxtState)) {
+  if (sawAntibot || !nuxtState || !hasUsableProductSignals(nuxtState)) {
     try {
       const puppeteerResult = await scrapeOzonWithPuppeteer(target.productUrl)
+      if (
+        isAntibotChallengeText(puppeteerResult.title) ||
+        isAntibotHtml(puppeteerResult.html)
+      ) {
+        throw antibotScrapeError("puppeteer")
+      }
       if (puppeteerResult.nuxtState) {
         nuxtState = puppeteerResult.nuxtState
+        sawAntibot = false
       }
       if (puppeteerResult.html) {
         html = puppeteerResult.html
@@ -62,6 +101,9 @@ export async function scrapeOzonProduct(
         }
       }
       if (!nuxtState && puppeteerResult.title) {
+        if (isAntibotChallengeText(puppeteerResult.title)) {
+          throw antibotScrapeError("puppeteer title")
+        }
         return buildParsedProduct({
           marketplace: "ozon",
           sku: target.sku,
@@ -79,6 +121,12 @@ export async function scrapeOzonProduct(
         })
       }
     } catch (error) {
+      if (error instanceof ParserScrapeError && error.code === "ANTIBOT") {
+        throw error
+      }
+      if (sawAntibot && !nuxtState) {
+        throw antibotScrapeError("HTTP/HTML")
+      }
       if (!nuxtState) {
         throw new ParserScrapeError(
           `Ozon scrape failed: ${errorMessage(error)}`,
@@ -88,10 +136,20 @@ export async function scrapeOzonProduct(
     }
   }
 
+  if (sawAntibot && !nuxtState) {
+    throw antibotScrapeError("HTTP/HTML")
+  }
+
   if (!nuxtState) {
+    if (isAntibotHtml(html)) {
+      throw antibotScrapeError("HTML title/body")
+    }
     // Last resort: meta tags from raw HTML (if any).
     const meta = extractFromHtmlMeta(html)
     if (meta.name) {
+      if (isAntibotChallengeText(meta.name)) {
+        throw antibotScrapeError("meta title")
+      }
       return buildParsedProduct({
         marketplace: "ozon",
         sku: target.sku,
@@ -133,6 +191,10 @@ export async function scrapeOzonProduct(
       `Ozon product sku=${target.sku} has no title.`,
       "NOT_FOUND",
     )
+  }
+
+  if (isAntibotChallengeText(name)) {
+    throw antibotScrapeError("product title")
   }
 
   if (!category) category = "Товары"
@@ -509,4 +571,27 @@ function errorMessage(error: unknown): string {
     return String((error as { message: unknown }).message)
   }
   return String(error)
+}
+
+function axiosStatus(error: unknown): number | null {
+  if (!error || typeof error !== "object") return null
+  const response = (error as { response?: { status?: unknown } }).response
+  const status = response?.status
+  return typeof status === "number" ? status : null
+}
+
+function axiosResponseText(error: unknown): string {
+  if (!error || typeof error !== "object") return ""
+  const data = (error as { response?: { data?: unknown } }).response?.data
+  return typeof data === "string" ? data : ""
+}
+
+function axiosResponseHeaders(
+  error: unknown,
+): Record<string, unknown> | null {
+  if (!error || typeof error !== "object") return null
+  const headers = (error as { response?: { headers?: unknown } }).response
+    ?.headers
+  if (!headers || typeof headers !== "object") return null
+  return headers as Record<string, unknown>
 }

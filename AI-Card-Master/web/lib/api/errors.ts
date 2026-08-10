@@ -1,5 +1,7 @@
 import axios, { type AxiosError } from "axios";
 
+import { ANTIBOT_ERROR_CODE } from "@/lib/parser/antibot";
+
 /** User-facing Russian messages for common network / HTTP failures. */
 export const NETWORK_ERROR_MESSAGES = {
   offline: "Нет соединения с сервером",
@@ -21,6 +23,15 @@ type ApiErrorBody = {
 function detailFromBody(data: unknown): string | null {
   if (!data || typeof data !== "object") return null;
   const body = data as ApiErrorBody;
+  // Parser antibot contract: `{ error: "antibot_detected", message: "…" }`.
+  if (
+    typeof body.error === "string" &&
+    body.error.trim() === ANTIBOT_ERROR_CODE &&
+    typeof body.message === "string" &&
+    body.message.trim()
+  ) {
+    return body.message.trim();
+  }
   if (typeof body.error === "string" && body.error.trim()) {
     return body.error.trim();
   }
@@ -71,4 +82,12 @@ export function getApiErrorMessage(
 export function isNetworkError(error: unknown): boolean {
   if (!axios.isAxiosError(error)) return false;
   return !error.response || error.code === "ECONNABORTED";
+}
+
+/** True when POST /api/parse returned Cloudflare / marketplace antibot block. */
+export function isAntibotDetectedError(error: unknown): boolean {
+  if (!axios.isAxiosError(error)) return false;
+  const data = error.response?.data;
+  if (!data || typeof data !== "object") return false;
+  return (data as ApiErrorBody).error === ANTIBOT_ERROR_CODE;
 }

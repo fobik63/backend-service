@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server"
 
 import {
+  ANTIBOT_ERROR_CODE,
+  ANTIBOT_USER_MESSAGE,
+  isAntibotScrapeError,
+} from "@/lib/parser/antibot"
+import {
   parsedProductFromHtmlMeta,
   scrapeHtmlMeta,
 } from "@/lib/parser/html-meta"
@@ -23,6 +28,7 @@ export const runtime = "nodejs"
  *
  * Temporary stub path: when marketplace scrapers are unavailable, falls back
  * to cheerio (`<title>` + `<meta name="description">` / Open Graph).
+ * Antibot / Cloudflare challenge pages are never treated as product data.
  *
  * POST /api/parse
  * Body: `{ input | url | article, platform?: "auto"|"wb"|"ozon" }`
@@ -57,6 +63,10 @@ export async function POST(request: Request) {
       status: 200,
     })
   } catch (error) {
+    if (isAntibotScrapeError(error)) {
+      return antibotJsonResponse()
+    }
+
     if (error instanceof ParserValidationError) {
       return NextResponse.json(
         { error: error.message, code: error.code },
@@ -90,6 +100,16 @@ export async function POST(request: Request) {
   }
 }
 
+function antibotJsonResponse() {
+  return NextResponse.json(
+    {
+      error: ANTIBOT_ERROR_CODE,
+      message: ANTIBOT_USER_MESSAGE,
+    },
+    { status: 403 },
+  )
+}
+
 async function parseProduct(
   input: string,
   platform: "auto" | "wb" | "ozon",
@@ -111,20 +131,35 @@ async function parseProduct(
       const router = createScraperRouter({ http })
       return await router.scrape(target)
     } catch (scrapeError) {
+      // Antibot: do not parse empty / challenge HTML as a product card.
+      if (isAntibotScrapeError(scrapeError)) {
+        throw scrapeError
+      }
+
       // Temporary fallback while FastAPI / MP APIs are unstable.
       console.warn(
         "[api/parse] marketplace scraper failed, falling back to cheerio",
         scrapeError,
       )
-      const meta = await scrapeHtmlMeta(target.productUrl)
-      return parsedProductFromHtmlMeta({
-        url: target.productUrl,
-        meta,
-        marketplace: target.marketplace,
-        sku: target.sku,
-      })
+      try {
+        const meta = await scrapeHtmlMeta(target.productUrl)
+        return parsedProductFromHtmlMeta({
+          url: target.productUrl,
+          meta,
+          marketplace: target.marketplace,
+          sku: target.sku,
+        })
+      } catch (fallbackError) {
+        if (isAntibotScrapeError(fallbackError)) {
+          throw fallbackError
+        }
+        throw scrapeError
+      }
     }
   } catch (resolveError) {
+    if (isAntibotScrapeError(resolveError)) {
+      throw resolveError
+    }
     if (httpUrl) {
       const meta = await scrapeHtmlMeta(httpUrl)
       return parsedProductFromHtmlMeta({ url: httpUrl, meta })

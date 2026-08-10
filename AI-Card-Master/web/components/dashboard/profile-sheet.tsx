@@ -8,7 +8,8 @@ import {
   UserRound,
 } from "lucide-react"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
+import { usePathname, useRouter } from "next/navigation"
+import type { MouseEvent } from "react"
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
@@ -69,16 +70,36 @@ function ProfileSheet({
   onTopUp,
 }: ProfileSheetProps) {
   const router = useRouter()
-  const initials = user.name
-    .split(" ")
+  const pathname = usePathname()
+  const initials = (user.name || "Г")
+    .split(/\s+/)
+    .filter(Boolean)
     .map((part) => part[0])
     .join("")
     .slice(0, 2)
-    .toUpperCase()
+    .toUpperCase() || "Г"
 
   const openPricing = () => {
     onOpenChange(false)
     onTopUp?.()
+  }
+
+  const goHome = (event: MouseEvent<HTMLAnchorElement>) => {
+    if (
+      event.defaultPrevented ||
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey
+    ) {
+      return
+    }
+    onOpenChange(false)
+    if (pathname.startsWith("/editor")) {
+      event.preventDefault()
+      window.location.assign("/projects")
+    }
   }
 
   return (
@@ -157,15 +178,16 @@ function ProfileSheet({
               ) : null}
               {QUICK_LINKS.map((item) => {
                 const Icon = item.icon
+                const isHome = item.href === "/"
                 return (
                   <li key={item.href}>
                     <Link
                       href={item.href}
-                      onClick={() => onOpenChange(false)}
+                      onClick={isHome ? goHome : () => onOpenChange(false)}
                       className="flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm text-text-muted transition-colors hover:bg-white/[0.04] hover:text-foreground"
                     >
                       <Icon className="size-4 shrink-0 text-copper/80" aria-hidden />
-                      <span>{item.label}</span>
+                      <span className="truncate">{item.label}</span>
                     </Link>
                   </li>
                 )

@@ -15,6 +15,7 @@ import {
   type FabricObjectProps,
 } from "fabric"
 import {
+  memo,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -39,6 +40,12 @@ import {
 import { resolveFabricFontFamily } from "@/lib/editor/fabric-fonts"
 import { chipIconDataUrl, chipTextColor } from "@/lib/editor/fabric-icons"
 import {
+  applyFabricZoomView,
+  computeFitZoom,
+  FABRIC_FIT_PADDING,
+  type FabricViewportFrame,
+} from "@/lib/editor/fabric-viewport"
+import {
   boundsFromRect,
   canvasBounds,
   snapMoveToTargets,
@@ -50,6 +57,7 @@ import {
   SOFTBOX_UPDATE_MS,
   softboxLightBlendStyle,
   softboxOverlayStyle,
+  clearSoftboxCaches,
 } from "@/lib/editor/softbox"
 import {
   useEditorStore,
@@ -325,6 +333,28 @@ function pxToPct(px: number, dim: number) {
   return (px / dim) * 100
 }
 
+/**
+ * Photo-add placement: scale to 80% of artboard height and center.
+ * Artboard coords (CANVAS_HEIGHT) are the design space; DOM canvas height is the viewport.
+ */
+function fitProductPhotoToArtboard(
+  naturalW: number,
+  naturalH: number
+): { width: number; height: number; x: number; y: number; scale: number } {
+  const nw = Math.max(1, naturalW)
+  const nh = Math.max(1, naturalH)
+  const scale = (CANVAS_HEIGHT * 0.8) / nh
+  const widthPct = pxToPct(nw * scale, CANVAS_WIDTH)
+  const heightPct = pxToPct(nh * scale, CANVAS_HEIGHT)
+  return {
+    width: Math.round(widthPct * 100) / 100,
+    height: Math.round(heightPct * 100) / 100,
+    x: Math.round(((100 - widthPct) / 2) * 100) / 100,
+    y: Math.round(((100 - heightPct) / 2) * 100) / 100,
+    scale,
+  }
+}
+
 function markObject(
   obj: FabricObject,
   layerId: string,
@@ -349,13 +379,14 @@ async function loadImage(url: string): Promise<FabricImage> {
     url.startsWith("data:") ||
     url.startsWith("blob:") ||
     url.startsWith("/")
+  // Fabric v6: fromURL returns a Promise (callback form is legacy).
   if (isLocal) {
-    return FabricImage.fromURL(url)
+    return await FabricImage.fromURL(url)
   }
   try {
     return await FabricImage.fromURL(url, { crossOrigin: "anonymous" })
   } catch {
-    return FabricImage.fromURL(url)
+    return await FabricImage.fromURL(url)
   }
 }
 
@@ -398,7 +429,20 @@ function findSoftboxImage(canvas: FabricCanvas): FabricImage | null {
   return hit instanceof FabricImage ? hit : null
 }
 
-function isFabricCanvasAlive(canvas: FabricCanvas | null | undefined): boolean {
+function disposeBuiltObjects(objects: FabricObject[]): void {
+  for (const obj of objects) {
+    try {
+      void obj.dispose()
+    } catch {
+      // Concurrent dispose / already detached from canvas.
+    }
+  }
+  objects.length = 0
+}
+
+function isFabricCanvasAlive(
+  canvas: FabricCanvas | null | undefined
+): canvas is FabricCanvas {
   if (!canvas || canvas.disposed || canvas.destroyed) return false
   try {
     const ctx = canvas.getContext()
@@ -469,46 +513,161 @@ function applySoftboxToFabric(
   }
 }
 
-/** Cheap CSS softbox preview — re-renders alone; does not remount Fabric. */
-function SoftboxScrubOverlay() {
-  const softboxScrubbing = useEditorStore((s) => s.softboxScrubbing)
-  const softboxLivePreview = useEditorStore((s) => s.softboxLivePreview)
-  const softbox = useEditorStore((s) => s.softbox)
-  const backgroundPreviewUrl = useEditorStore((s) => s.backgroundPreviewUrl)
+/**
+ * CSS softbox preview — stable DOM (never mount/unmount on scrub).
+ * Styles update imperatively via store.subscribe so Fabric host does not re-render
+ * and left/top/opacity never animate from zero (transition: none).
+ */
+function SoftboxScrubOverlay({
+  frame,
+}: {
+  frame: FabricViewportFrame | null
+}) {
+  const washRef = useRef<HTMLDivElement>(null)
+  const blendRef = useRef<HTMLDivElement>(null)
+  const frameRef = useRef(frame)
+  const hideRafRef = useRef(0)
+  const paintOverlayRef = useRef<() => void>(() => {})
 
-  if (!softboxScrubbing) return null
+  useLayoutEffect(() => {
+    frameRef.current = frame
+    paintOverlayRef.current()
+  }, [frame])
 
-  const preview = softboxLivePreview ?? softbox
-  let washStyle: CSSProperties | null = null
-  let blendStyle: CSSProperties | null = null
-  try {
-    // Full wash under canvas only when Fabric softbox is the visible bg.
-    if (!backgroundPreviewUrl) {
-      washStyle = softboxOverlayStyle(preview)
+  useLayoutEffect(() => {
+    const paintOverlay = () => {
+      const wash = washRef.current
+      const blend = blendRef.current
+      if (!wash || !blend) return
+
+      const state = useEditorStore.getState()
+      const f = frameRef.current
+      const scrubbing = state.softboxScrubbing && f != null
+      const preview = state.softboxLivePreview ?? state.softbox
+
+      const applyBox = (el: HTMLDivElement) => {
+        if (!f) return
+        el.style.left = `${f.left}px`
+        el.style.top = `${f.top}px`
+        el.style.width = `${f.width}px`
+        el.style.height = `${f.height}px`
+      }
+
+      applyBox(wash)
+      applyBox(blend)
+
+      if (!scrubbing) {
+        // Defer hide: Fabric softbox restore may still run in later store subscribers
+        // this tick — hiding CSS first would flash an empty artboard.
+        if (hideRafRef.current) cancelAnimationFrame(hideRafRef.current)
+        hideRafRef.current = requestAnimationFrame(() => {
+          hideRafRef.current = 0
+          if (useEditorStore.getState().softboxScrubbing) return
+          const w = washRef.current
+          const b = blendRef.current
+          if (!w || !b) return
+          w.hidden = true
+          b.hidden = true
+          w.style.visibility = "hidden"
+          b.style.visibility = "hidden"
+        })
+        return
+      }
+
+      if (hideRafRef.current) {
+        cancelAnimationFrame(hideRafRef.current)
+        hideRafRef.current = 0
+      }
+
+      let washStyle: CSSProperties | null = null
+      let blendStyle: CSSProperties | null = null
+      try {
+        // Full wash under canvas only when Fabric softbox is the visible bg.
+        if (!state.backgroundPreviewUrl) {
+          washStyle = softboxOverlayStyle(preview)
+        }
+        blendStyle = softboxLightBlendStyle(preview)
+      } catch {
+        wash.hidden = true
+        blend.hidden = true
+        return
+      }
+
+      const assignStyle = (el: HTMLDivElement, style: CSSProperties | null) => {
+        if (!style) {
+          el.hidden = true
+          el.style.visibility = "hidden"
+          return
+        }
+        el.hidden = false
+        el.style.visibility = "visible"
+        // Geometry already set — only light look props.
+        el.style.transition = "none"
+        el.style.transitionProperty = "none"
+        el.style.animation = "none"
+        el.style.pointerEvents = "none"
+        if (style.backgroundColor != null) {
+          el.style.backgroundColor = String(style.backgroundColor)
+        } else {
+          el.style.backgroundColor = ""
+        }
+        el.style.backgroundImage =
+          style.backgroundImage != null ? String(style.backgroundImage) : ""
+        el.style.opacity = style.opacity != null ? String(style.opacity) : ""
+        el.style.mixBlendMode =
+          style.mixBlendMode != null ? String(style.mixBlendMode) : "normal"
+        el.style.boxShadow =
+          style.boxShadow != null ? String(style.boxShadow) : "none"
+        el.style.filter = style.filter != null ? String(style.filter) : "none"
+      }
+
+      assignStyle(wash, washStyle)
+      assignStyle(blend, blendStyle)
     }
-    blendStyle = softboxLightBlendStyle(preview)
-  } catch {
-    return null
-  }
+
+    paintOverlayRef.current = paintOverlay
+    paintOverlay()
+    const unsub = useEditorStore.subscribe((state, prev) => {
+      if (
+        state.softboxLivePreview === prev.softboxLivePreview &&
+        state.softboxScrubbing === prev.softboxScrubbing &&
+        state.softbox === prev.softbox &&
+        state.backgroundPreviewUrl === prev.backgroundPreviewUrl
+      ) {
+        return
+      }
+      paintOverlayRef.current()
+    })
+    return () => {
+      unsub()
+      if (hideRafRef.current) cancelAnimationFrame(hideRafRef.current)
+    }
+  }, [])
 
   return (
     <>
-      {washStyle ? (
-        <div
-          aria-hidden
-          data-export-chrome="true"
-          className="pointer-events-none absolute inset-0 z-0"
-          style={washStyle}
-        />
-      ) : null}
-      {blendStyle ? (
-        <div
-          aria-hidden
-          data-export-chrome="true"
-          className="pointer-events-none absolute inset-0 z-[2]"
-          style={blendStyle}
-        />
-      ) : null}
+      <div
+        ref={washRef}
+        aria-hidden
+        hidden
+        data-export-chrome="true"
+        data-softbox-overlay="wash"
+        className="softbox-light-overlay pointer-events-none absolute z-0"
+        style={{ transition: "none", transitionProperty: "none" }}
+      />
+      <div
+        ref={blendRef}
+        aria-hidden
+        hidden
+        data-export-chrome="true"
+        data-softbox-overlay="blend"
+        className="softbox-light-overlay pointer-events-none absolute z-[2]"
+        style={{
+          transition: "none",
+          transitionProperty: "none",
+          mixBlendMode: "soft-light",
+        }}
+      />
     </>
   )
 }
@@ -581,8 +740,9 @@ async function buildProductObject(
   productPreviewUrl: string | null
 ): Promise<EngineObject> {
   const defs = layerDefaults(layer)
-  const boxW = pctToPx(defs.width ?? 36.68, CANVAS_WIDTH)
-  const boxH = pctToPx(defs.height ?? 64, CANVAS_HEIGHT)
+  // Never allow a 0×0 box — that paints a black void after fromURL.
+  const boxW = Math.max(1, pctToPx(defs.width ?? 36.68, CANVAS_WIDTH))
+  const boxH = Math.max(1, pctToPx(defs.height ?? 80, CANVAS_HEIGHT))
   const centerX = pctToPx(defs.x, CANVAS_WIDTH) + (boxW * defs.scale) / 2
   const centerY = pctToPx(defs.y, CANVAS_HEIGHT) + (boxH * defs.scale) / 2
 
@@ -617,14 +777,33 @@ async function buildProductObject(
   }
 
   try {
+    // Fabric v6: fromURL is Promise-based (legacy callback form removed).
     const img = await loadImage(productPreviewUrl)
-    const nw = Math.max(1, img.width ?? 1)
-    const nh = Math.max(1, img.height ?? 1)
-    img.set({
-      ...common,
-      scaleX: (boxW / nw) * defs.scale,
-      scaleY: (boxH / nh) * defs.scale,
-    })
+    const nw = Math.max(1, img.width || 1)
+    const nh = Math.max(1, img.height || 1)
+
+    // Photo-add algorithm: scale to 80% of artboard height, then apply store box if present.
+    const photoScale = (CANVAS_HEIGHT * 0.8) / nh
+    const useStoreBox = layer.width != null && layer.height != null
+    if (useStoreBox) {
+      img.set({
+        ...common,
+        width: nw,
+        height: nh,
+        scaleX: Math.max(0.001, (boxW / nw) * defs.scale),
+        scaleY: Math.max(0.001, (boxH / nh) * defs.scale),
+      })
+    } else {
+      img.set({
+        ...common,
+        left: CANVAS_WIDTH / 2,
+        top: CANVAS_HEIGHT / 2,
+        width: nw,
+        height: nh,
+      })
+      img.scale(Math.max(0.001, photoScale * defs.scale))
+    }
+    img.setCoords()
     return markObject(img, layer.id, "product")
   } catch {
     const placeholder = new Rect({
@@ -931,7 +1110,7 @@ function applyTransformFromLayer(obj: EngineObject, layer: CanvasLayer) {
   })
 }
 
-function EditorFabricCanvas({ scale }: { scale: number }) {
+function EditorFabricCanvasImpl({ scale }: { scale: number }) {
   const layers = useEditorStore((s) => s.layers)
   const selectedLayerId = useEditorStore((s) => s.selectedLayerId)
   const flashLayerId = useEditorStore((s) => s.flashLayerId)
@@ -950,9 +1129,15 @@ function EditorFabricCanvas({ scale }: { scale: number }) {
   const busyKind = useEditorStore((s) => s.busyKind)
   const busyProgress = useEditorStore((s) => s.busyProgress)
   const setBusyKind = useEditorStore((s) => s.setBusyKind)
+  const zoomMode = useEditorStore((s) => s.zoomMode)
 
-  const canvasElRef = useRef<HTMLCanvasElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
   const fabricRef = useRef<FabricCanvas | null>(null)
+  const syncViewportRef = useRef<() => FabricViewportFrame | null>(() => null)
+  const [artboardFrame, setArtboardFrame] = useState<FabricViewportFrame | null>(
+    null
+  )
   /** True while Fabric is writing into Zustand (skip store→Fabric echo). */
   const writingStoreRef = useRef(false)
   /** True for the whole pointer gesture — Fabric is source of truth mid-drag. */
@@ -970,12 +1155,49 @@ function EditorFabricCanvas({ scale }: { scale: number }) {
   /** Bumped after each successful scene rebuild — ZIP waits on this. */
   const sceneEpochRef = useRef(0)
   const scaleRef = useRef(scale)
+  const zoomModeRef = useRef(zoomMode)
   useLayoutEffect(() => {
     scaleRef.current = scale
   }, [scale])
+  useLayoutEffect(() => {
+    zoomModeRef.current = zoomMode
+  }, [zoomMode])
   const [ready, setReady] = useState(false)
   const [sceneError, setSceneError] = useState<string | null>(null)
   const [rebuildNonce, setRebuildNonce] = useState(0)
+
+  const syncViewport = (): FabricViewportFrame | null => {
+    const canvas = fabricRef.current
+    const host = containerRef.current
+    if (!isFabricCanvasAlive(canvas) || !host) return null
+    const rect = host.getBoundingClientRect()
+    const w = Math.floor(rect.width) || host.clientWidth
+    const h = Math.floor(rect.height) || host.clientHeight
+    if (w < 2 || h < 2) return null
+
+    // Keep Fabric backstore in sync with the parent box (never 0×0).
+    canvas.setWidth(w)
+    canvas.setHeight(h)
+
+    const mode = zoomModeRef.current
+    const zoom =
+      mode === "fit"
+        ? computeFitZoom(w, h, FABRIC_FIT_PADDING)
+        : scaleRef.current
+
+    const frame = applyFabricZoomView(canvas, {
+      containerWidth: w,
+      containerHeight: h,
+      zoom,
+      padding: FABRIC_FIT_PADDING,
+    })
+    setArtboardFrame(frame)
+    return frame
+  }
+
+  useLayoutEffect(() => {
+    syncViewportRef.current = syncViewport
+  })
 
   const sceneKey = useMemo(
     () =>
@@ -996,28 +1218,79 @@ function EditorFabricCanvas({ scale }: { scale: number }) {
   useLayoutEffect(() => {
     ensureCustomProps()
     ensureFabricWebGL()
-    const el = canvasElRef.current
+    const el = canvasRef.current
     if (!el) return
 
-    const canvas = new FabricCanvas(el, {
-      width: CANVAS_WIDTH,
-      height: CANVAS_HEIGHT,
-      preserveObjectStacking: true,
-      selection: true,
-      backgroundColor: "#0d0f12",
-      stopContextMenu: true,
-      controlsAboveOverlay: true,
-      // Batch adds during rebuild; interactive frames call requestRenderAll.
-      renderOnAddRemove: false,
-      // 1080×1440 @dpr2 ≈ 6M px — skip retina buffer for 60 FPS editing.
-      enableRetinaScaling: false,
-      targetFindTolerance: 6,
-      perPixelTargetFind: false,
-    })
-    fabricRef.current = canvas
+    // Reuse a live instance across React Strict Mode effect re-runs.
+    // Never call canvas.dispose() here — async destroy() frees the drawing
+    // context and races remounts (black void). Soft teardown uses clear().
+    let canvas = fabricRef.current
+    if (!isFabricCanvasAlive(canvas)) {
+      const host = containerRef.current
+      const rect = host?.getBoundingClientRect()
+      const initW = Math.max(
+        1,
+        Math.floor(rect?.width ?? 0) || host?.clientWidth || CANVAS_WIDTH
+      )
+      const initH = Math.max(
+        1,
+        Math.floor(rect?.height ?? 0) || host?.clientHeight || CANVAS_HEIGHT
+      )
+      canvas = new FabricCanvas(el, {
+        width: initW,
+        height: initH,
+        preserveObjectStacking: true,
+        selection: true,
+        backgroundColor: "#0d0f12",
+        stopContextMenu: true,
+        controlsAboveOverlay: true,
+        // Batch adds during rebuild; interactive frames call requestRenderAll.
+        renderOnAddRemove: false,
+        // 1080×1440 @dpr2 ≈ 6M px — skip retina buffer for 60 FPS editing.
+        enableRetinaScaling: false,
+        targetFindTolerance: 6,
+        perPixelTargetFind: false,
+      })
+      // Explicit size from parent box — avoids 0×0 black screen on first paint.
+      canvas.setWidth(initW)
+      canvas.setHeight(initH)
+      fabricRef.current = canvas
+    } else {
+      const host = containerRef.current
+      const rect = host?.getBoundingClientRect()
+      if (rect && rect.width >= 2 && rect.height >= 2) {
+        canvas.setWidth(Math.floor(rect.width))
+        canvas.setHeight(Math.floor(rect.height))
+      }
+    }
     sceneEpochRef.current = 0
+    sceneKeyRef.current = ""
+    fittedProductUrlRef.current = null
     setReady(true)
     setSceneError(null)
+
+    // Initial Fit: size to wrapper, zoom so 1080×1440 fits with ~40px padding, center.
+    // Host can be 0×0 for a frame (flex layout) — retry until real metrics exist.
+    let fitRetries = 0
+    let fitRaf = 0
+    const applyInitialFit = () => {
+      fitRaf = 0
+      const frame = syncViewportRef.current()
+      if (frame || fitRetries >= 60) return
+      fitRetries += 1
+      fitRaf = requestAnimationFrame(applyInitialFit)
+    }
+    applyInitialFit()
+    const ro =
+      typeof ResizeObserver !== "undefined"
+        ? new ResizeObserver(() => {
+            syncViewportRef.current()
+          })
+        : null
+    if (ro && containerRef.current) {
+      ro.observe(containerRef.current)
+    }
+
     const lastGuideSigRef = { current: "" }
     let guideRaf = 0
 
@@ -1151,32 +1424,29 @@ function EditorFabricCanvas({ scale }: { scale: number }) {
       if (obj && isSmartGuideObject(obj)) return
       selectLayer(obj?.layerId ?? null)
     }
-
-    canvas.on("selection:created", onSelect)
-    canvas.on("selection:updated", onSelect)
-    canvas.on("selection:cleared", () => selectLayer(null))
+    const onSelectionCleared = () => selectLayer(null)
 
     // Mid-gesture: keep transforms in Fabric only — no Zustand / React updates.
-    canvas.on("object:moving", (e) => {
+    const onObjectMoving = (e: { target?: FabricObject }) => {
       clickEditRef.current.moved = true
       const target = e.target as EngineObject | undefined
       if (!target || isSmartGuideObject(target)) return
       scheduleGuides(target)
-    })
-    canvas.on("object:scaling", () => {
+    }
+    const onObjectScaling = () => {
       clickEditRef.current.moved = true
       lastGuideSigRef.current = ""
       clearSmartGuides(canvas)
       canvas.requestRenderAll()
-    })
-    canvas.on("object:rotating", () => {
+    }
+    const onObjectRotating = () => {
       clickEditRef.current.moved = true
       lastGuideSigRef.current = ""
       clearSmartGuides(canvas)
       canvas.requestRenderAll()
-    })
+    }
 
-    canvas.on("mouse:down", (opt) => {
+    const onMouseDown = (opt: { target?: FabricObject }) => {
       const target = opt.target as EngineObject | undefined
       if (!target?.layerId || isSmartGuideObject(target)) {
         clickEditRef.current = {
@@ -1194,9 +1464,9 @@ function EditorFabricCanvas({ scale }: { scale: number }) {
       }
       interactingRef.current = true
       beginHistoryTransaction()
-    })
+    }
 
-    canvas.on("object:modified", (e) => {
+    const onObjectModified = (e: { target?: FabricObject }) => {
       const target = e.target as EngineObject | undefined
       lastGuideSigRef.current = ""
       clearSmartGuides(canvas)
@@ -1204,9 +1474,9 @@ function EditorFabricCanvas({ scale }: { scale: number }) {
       commitHistoryTransaction()
       interactingRef.current = false
       canvas.requestRenderAll()
-    })
+    }
 
-    canvas.on("mouse:up", (opt) => {
+    const onMouseUp = (opt: { target?: FabricObject }) => {
       lastGuideSigRef.current = ""
       clearSmartGuides(canvas)
 
@@ -1245,9 +1515,9 @@ function EditorFabricCanvas({ scale }: { scale: number }) {
         commitHistoryTransaction()
       })
       canvas.requestRenderAll()
-    })
+    }
 
-    canvas.on("text:changed", (e) => {
+    const onTextChanged = (e: { target?: FabricObject }) => {
       const obj = e.target as EngineObject | undefined
       if (!obj?.layerId || obj.type !== "i-text") return
       const text = (obj as IText).text ?? ""
@@ -1256,10 +1526,10 @@ function EditorFabricCanvas({ scale }: { scale: number }) {
       queueMicrotask(() => {
         writingStoreRef.current = false
       })
-    })
+    }
 
     // Keep dblclick as a fast path for first-time edit.
-    canvas.on("mouse:dblclick", (opt) => {
+    const onMouseDblClick = (opt: { target?: FabricObject }) => {
       const target = opt.target as EngineObject | undefined
       if (!target?.layerId || target.layerRole !== "infographic") return
       const layer = useEditorStore
@@ -1272,7 +1542,19 @@ function EditorFabricCanvas({ scale }: { scale: number }) {
         return
       }
       if (layer.chip) startChipInlineEdit(target, layer)
-    })
+    }
+
+    canvas.on("selection:created", onSelect)
+    canvas.on("selection:updated", onSelect)
+    canvas.on("selection:cleared", onSelectionCleared)
+    canvas.on("object:moving", onObjectMoving)
+    canvas.on("object:scaling", onObjectScaling)
+    canvas.on("object:rotating", onObjectRotating)
+    canvas.on("mouse:down", onMouseDown)
+    canvas.on("object:modified", onObjectModified)
+    canvas.on("mouse:up", onMouseUp)
+    canvas.on("text:changed", onTextChanged)
+    canvas.on("mouse:dblclick", onMouseDblClick)
 
     /** Delete/Backspace removes the selection unless IText is actively editing. */
     const onCanvasKeyDown = (event: KeyboardEvent) => {
@@ -1344,33 +1626,45 @@ function EditorFabricCanvas({ scale }: { scale: number }) {
     return () => {
       window.removeEventListener("keydown", onCanvasKeyDown)
       if (guideRaf) cancelAnimationFrame(guideRaf)
+      if (fitRaf) cancelAnimationFrame(fitRaf)
+      ro?.disconnect()
       registerFabricExporter(null)
-      try {
-        canvas.dispose()
-      } catch {
-        // Ignore dispose races during hard navigation away from the editor.
-      }
-      fabricRef.current = null
+      clearSoftboxCaches()
       sceneEpochRef.current = 0
-      setReady(false)
+      try {
+        clearChipInlineEditors(canvas)
+        canvas.off("selection:created", onSelect)
+        canvas.off("selection:updated", onSelect)
+        canvas.off("selection:cleared", onSelectionCleared)
+        canvas.off("object:moving", onObjectMoving)
+        canvas.off("object:scaling", onObjectScaling)
+        canvas.off("object:rotating", onObjectRotating)
+        canvas.off("mouse:down", onMouseDown)
+        canvas.off("object:modified", onObjectModified)
+        canvas.off("mouse:up", onMouseUp)
+        canvas.off("text:changed", onTextChanged)
+        canvas.off("mouse:dblclick", onMouseDblClick)
+        // Soft teardown only — keep the DOM <canvas> + Fabric instance intact.
+        // Never dispose(): it destroys the 2d context on fast React remounts.
+        canvas.clear()
+        canvas.backgroundColor = "#0d0f12"
+        canvas.discardActiveObject()
+        canvas.requestRenderAll()
+        sceneKeyRef.current = ""
+        fittedProductUrlRef.current = null
+      } catch {
+        // Ignore teardown races during navigation away from the editor.
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Display zoom via Fabric cssOnly — preserves hit-testing (CSS transform breaks it).
+  // Display zoom via Fabric viewport (setZoom + absolutePan). Replaces cssOnly
+  // sizing so hit-testing and transform handles stay aligned with the artboard.
   useLayoutEffect(() => {
-    const canvas = fabricRef.current
-    if (!canvas || !ready) return
-    canvas.setDimensions(
-      {
-        width: `${CANVAS_WIDTH * scale}px`,
-        height: `${CANVAS_HEIGHT * scale}px`,
-      },
-      { cssOnly: true }
-    )
-    canvas.calcOffset()
-    canvas.requestRenderAll()
-  }, [scale, ready])
+    if (!ready) return
+    syncViewportRef.current()
+  }, [scale, zoomMode, ready])
 
   // Rebuild 3-layer scene when structure changes (not on pure transforms)
   useEffect(() => {
@@ -1388,6 +1682,7 @@ function EditorFabricCanvas({ scale }: { scale: number }) {
     sceneKeyRef.current = buildKey
 
     let cancelled = false
+    const built: EngineObject[] = []
 
     const rebuild = async () => {
       try {
@@ -1396,18 +1691,11 @@ function EditorFabricCanvas({ scale }: { scale: number }) {
           clearChipInlineEditors(canvas)
           canvas.renderOnAddRemove = false
           canvas.clear()
-          canvas.backgroundColor = "transparent"
+          // Keep artboard fill — transparent + dark host reads as a "black void".
+          canvas.backgroundColor = "#0d0f12"
           canvas.discardActiveObject()
           canvas.requestRenderAll()
-          const z = scaleRef.current
-          canvas.setDimensions(
-            {
-              width: `${CANVAS_WIDTH * z}px`,
-              height: `${CANVAS_HEIGHT * z}px`,
-            },
-            { cssOnly: true }
-          )
-          canvas.calcOffset()
+          syncViewportRef.current()
           sceneEpochRef.current += 1
           sceneRecoveriesRef.current = 0
           setSceneError(null)
@@ -1422,16 +1710,21 @@ function EditorFabricCanvas({ scale }: { scale: number }) {
           softbox: useEditorStore.getState().softbox,
           backgroundPreviewUrl,
         })
-        if (cancelled) return
+        if (cancelled) {
+          disposeBuiltObjects([bg])
+          return
+        }
+        built.push(bg)
 
         const interactive = layers
           .filter((l) => l.visible && l.type !== "background")
           .sort((a, b) => a.zIndex - b.zIndex)
 
-        const built: EngineObject[] = [bg]
-
         for (const layer of interactive) {
-          if (cancelled) return
+          if (cancelled) {
+            disposeBuiltObjects(built)
+            return
+          }
 
           if (layer.type === "image" || layer.id === "layer_product") {
             if (
@@ -1440,28 +1733,22 @@ function EditorFabricCanvas({ scale }: { scale: number }) {
             ) {
               try {
                 const probe = await loadImage(productPreviewUrl)
-                const fitted = fitImageLayerBox(
+                if (cancelled) {
+                  disposeBuiltObjects(built)
+                  return
+                }
+                // Toast photo-add: 80% of artboard height, centered.
+                const fitted = fitProductPhotoToArtboard(
                   probe.width || 1,
-                  probe.height || 1,
-                  52,
-                  64
-                )
-                const d = layerDefaults(layer)
-                const cx = d.x + (d.width ?? fitted.width) / 2
-                const cy = d.y + (d.height ?? fitted.height) / 2
-                const next = clampLayerPosition(
-                  cx - fitted.width / 2,
-                  cy - fitted.height / 2,
-                  fitted.width * d.scale,
-                  fitted.height * d.scale
+                  probe.height || 1
                 )
                 fittedProductUrlRef.current = productPreviewUrl
                 writingStoreRef.current = true
                 syncLayerGeometry(layer.id, {
                   width: fitted.width,
                   height: fitted.height,
-                  x: next.x,
-                  y: next.y,
+                  x: fitted.x,
+                  y: fitted.y,
                 })
                 queueMicrotask(() => {
                   writingStoreRef.current = false
@@ -1482,23 +1769,41 @@ function EditorFabricCanvas({ scale }: { scale: number }) {
             const product = await safeBuildLayer(latest, (l) =>
               buildProductObject(l, productPreviewUrl)
             )
+            if (cancelled) {
+              if (product) disposeBuiltObjects([product])
+              disposeBuiltObjects(built)
+              return
+            }
             if (product) built.push(product)
             continue
           }
 
           if (layer.type === "text") {
             const text = await safeBuildLayer(layer, (l) => buildTextObject(l))
+            if (cancelled) {
+              if (text) disposeBuiltObjects([text])
+              disposeBuiltObjects(built)
+              return
+            }
             if (text) built.push(text)
             continue
           }
 
           if (layer.type === "shape" && layer.chip) {
             const chip = await safeBuildLayer(layer, (l) => buildChipObject(l))
+            if (cancelled) {
+              if (chip) disposeBuiltObjects([chip])
+              disposeBuiltObjects(built)
+              return
+            }
             if (chip) built.push(chip)
           }
         }
 
-        if (cancelled) return
+        if (cancelled) {
+          disposeBuiltObjects(built)
+          return
+        }
 
         // Flush any in-progress chip overlay editor before wiping the scene.
         clearChipInlineEditors(canvas)
@@ -1507,24 +1812,34 @@ function EditorFabricCanvas({ scale }: { scale: number }) {
         canvas.renderOnAddRemove = false
         canvas.clear()
         canvas.backgroundColor = "#0d0f12"
-        for (const obj of built) canvas.add(obj)
+        for (const obj of built) {
+          canvas.add(obj)
+        }
         // Keep false — interactive frames call requestRenderAll explicitly.
+        built.length = 0
+
+        const productObj =
+          findByLayerId(canvas, "layer_product") ??
+          canvas
+            .getObjects()
+            .find((o) => (o as EngineObject).layerRole === "product")
+
+        if (productObj instanceof FabricImage || productObj?.type === "image") {
+          productObj.setCoords()
+        }
 
         if (prevSelected) {
           const match = findByLayerId(canvas, prevSelected)
           if (match?.selectable) canvas.setActiveObject(match)
+          else if (productObj?.selectable) canvas.setActiveObject(productObj)
+        } else if (productObj?.selectable) {
+          canvas.setActiveObject(productObj)
         }
-        canvas.requestRenderAll()
-        // Re-apply display zoom after clear/rebuild (Fabric may reset CSS size).
-        const z = scaleRef.current
-        canvas.setDimensions(
-          {
-            width: `${CANVAS_WIDTH * z}px`,
-            height: `${CANVAS_HEIGHT * z}px`,
-          },
-          { cssOnly: true }
-        )
-        canvas.calcOffset()
+        // Immediate paint after fromURL builds (product / bg / chips).
+        canvas.renderAll()
+        // Re-apply Fit / zoom after clear/rebuild (Fabric may reset viewport).
+        syncViewportRef.current()
+        canvas.renderAll()
         sceneEpochRef.current += 1
         sceneRecoveriesRef.current = 0
         setSceneError(null)
@@ -1533,6 +1848,7 @@ function EditorFabricCanvas({ scale }: { scale: number }) {
           setBusyKind("idle")
         }
       } catch (err) {
+        disposeBuiltObjects(built)
         if (cancelled) return
         if (process.env.NODE_ENV !== "production") {
           console.error("[fabric-canvas] scene rebuild failed", err)
@@ -1560,6 +1876,8 @@ function EditorFabricCanvas({ scale }: { scale: number }) {
     void rebuild()
     return () => {
       cancelled = true
+      // Do not dispose `built` here — rebuild may be mid-commit onto the live
+      // canvas. Orphan pre-commit objects are disposed on cancelled checks above.
     }
   }, [
     ready,
@@ -1590,7 +1908,7 @@ function EditorFabricCanvas({ scale }: { scale: number }) {
         const state = useEditorStore.getState()
         const useCssOverlay =
           state.softboxScrubbing && !state.backgroundPreviewUrl
-        applySoftboxToFabric(canvas!, state.softbox, {
+        applySoftboxToFabric(canvas, state.softbox, {
           preview: state.softboxScrubbing,
           hideSoftboxForCssOverlay: useCssOverlay,
         })
@@ -1704,37 +2022,43 @@ function EditorFabricCanvas({ scale }: { scale: number }) {
     match.set("opacity", Math.min(1, prev * 0.55 + 0.45))
     canvas.requestRenderAll()
     const t = window.setTimeout(() => {
+      if (!isFabricCanvasAlive(fabricRef.current)) return
       match.set("opacity", prev)
-      canvas.requestRenderAll()
+      fabricRef.current?.requestRenderAll()
     }, 450)
     return () => window.clearTimeout(t)
   }, [flashLayerId])
 
   return (
     <div
+      ref={containerRef}
       id="editor-export-canvas"
       data-export-canvas="true"
       data-fabric-engine="true"
       className={cn(
-        "relative overflow-hidden bg-loft shadow-[0_24px_80px_rgba(0,0,0,0.55)] ring-1 ring-white/10"
+        "relative flex h-[calc(100vh-120px)] min-h-[500px] w-full items-center justify-center overflow-hidden bg-zinc-900"
       )}
-      style={{
-        width: CANVAS_WIDTH * scale,
-        height: CANVAS_HEIGHT * scale,
-      }}
       role="img"
       aria-label={`Холст ${CANVAS_WIDTH}×${CANVAS_HEIGHT}`}
       aria-busy={showBusyOverlay}
     >
-      <div
-        className="relative"
-        style={{
-          width: CANVAS_WIDTH * scale,
-          height: CANVAS_HEIGHT * scale,
-        }}
-      >
-        <SoftboxScrubOverlay />
-        <canvas ref={canvasElRef} className="relative z-[1]" />
+      {artboardFrame ? (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute z-0 bg-loft shadow-[0_24px_80px_rgba(0,0,0,0.55)] ring-1 ring-white/10"
+          style={{
+            left: artboardFrame.left,
+            top: artboardFrame.top,
+            width: artboardFrame.width,
+            height: artboardFrame.height,
+          }}
+        />
+      ) : null}
+
+      <div className="absolute inset-0">
+        {/* Softbox overlays are always mounted (hidden when idle) — never remount next to Fabric. */}
+        <SoftboxScrubOverlay frame={artboardFrame} />
+        <canvas ref={canvasRef} className="relative z-[1]" />
       </div>
 
       {sceneError ? (
@@ -1767,5 +2091,8 @@ function EditorFabricCanvas({ scale }: { scale: number }) {
     </div>
   )
 }
+
+/** Stable host — parent softbox saves must not remount Fabric / canvas DOM. */
+const EditorFabricCanvas = memo(EditorFabricCanvasImpl)
 
 export { EditorFabricCanvas }

@@ -1,9 +1,17 @@
 export class ParserScrapeError extends Error {
-  readonly code: "NOT_FOUND" | "TRANSPORT" | "NOT_IMPLEMENTED"
+  readonly code:
+    | "NOT_FOUND"
+    | "TRANSPORT"
+    | "NOT_IMPLEMENTED"
+    | "ANTIBOT"
 
   constructor(
     message: string,
-    code: "NOT_FOUND" | "TRANSPORT" | "NOT_IMPLEMENTED" = "TRANSPORT",
+    code:
+      | "NOT_FOUND"
+      | "TRANSPORT"
+      | "NOT_IMPLEMENTED"
+      | "ANTIBOT" = "TRANSPORT",
   ) {
     super(message)
     this.name = "ParserScrapeError"

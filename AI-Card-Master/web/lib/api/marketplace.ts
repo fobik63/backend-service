@@ -6,6 +6,7 @@ import {
   MOCK_GENERATE_DELAY_MS,
   MOCK_SEO_RESULT,
 } from "@/lib/constants/mock"
+import type { ParsedProduct } from "@/lib/parser/types"
 
 function apiOrigin(): string {
   const base = (apiClient.defaults.baseURL || DEFAULT_API_BASE_URL).replace(
@@ -35,21 +36,8 @@ export type SeoGenerateResponse = {
   targetPlatform: SeoTargetPlatform
 }
 
-export type FetchProductResponse = {
-  marketplace: "wildberries" | "ozon"
-  sku: string
-  product_url: string
-  /** Normalized name from marketplace parsers. */
-  name?: string
-  title: string
-  brand?: string | null
-  category?: string | null
-  description?: string | null
-  characteristics?: { name: string; value: string }[]
-  source_image_urls?: string[]
-  image_urls?: string[]
-  cached?: boolean
-}
+/** Mirrors POST /api/parse success payload (`ParsedProduct`). */
+export type FetchProductResponse = ParsedProduct
 
 export type SellerProductDTO = {
   platform: "wb" | "ozon"

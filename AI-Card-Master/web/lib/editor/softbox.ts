@@ -178,6 +178,14 @@ export function paintSoftboxInPlace(
 /** Scratch surface for export / data-URL only — must NOT be passed to FabricImage. */
 let softboxPaintCanvas: HTMLCanvasElement | null = null
 
+const softboxDataUrlCache = new Map<string, string>()
+
+/** Drop module-level softbox buffers (call on Fabric host unmount). */
+export function clearSoftboxCaches(): void {
+  softboxPaintCanvas = null
+  softboxDataUrlCache.clear()
+}
+
 export function getSoftboxPaintCanvas(
   width: number,
   height: number
@@ -208,8 +216,6 @@ export function paintSoftboxBitmap(
   paintSoftboxToCanvas(canvas, softbox)
   return canvas
 }
-
-const softboxDataUrlCache = new Map<string, string>()
 
 export function softboxToDataUrl(
   softbox: SoftboxSettings,
@@ -247,10 +253,18 @@ export function softboxToDataUrl(
 /**
  * Lightweight CSS stand-in for the softbox wash while sliders are dragging.
  * Placed under the Fabric canvas (Fabric softbox opacity → 0) — no canvas paint.
+ * Never animate geometry/opacity — mount + transition:all looks like the artboard "spawns and slides".
  */
+const SOFTBOX_NO_TRANSITION: CSSProperties = {
+  transition: "none",
+  transitionProperty: "none",
+  animation: "none",
+}
+
 export function softboxOverlayStyle(softbox: SoftboxSettings): CSSProperties {
   if (!softbox.enabled) {
     return {
+      ...SOFTBOX_NO_TRANSITION,
       backgroundImage: "linear-gradient(160deg, #14171d 0%, #0d0f12 100%)",
     }
   }
@@ -268,6 +282,7 @@ export function softboxOverlayStyle(softbox: SoftboxSettings): CSSProperties {
   const ambientSize = 90 + diffusion * 40
 
   return {
+    ...SOFTBOX_NO_TRANSITION,
     backgroundColor: rgbCss(mid),
     backgroundImage: [
       `radial-gradient(circle at ${x}% ${y}%, ${rgbCss(mixRgb(lightRgb, [255, 255, 255], 0.35), 0.28 * intensity)} 0%, ${rgbCss(lightRgb, 0)} ${coreSize}%)`,
@@ -286,6 +301,7 @@ export function softboxOverlayStyle(softbox: SoftboxSettings): CSSProperties {
 export function softboxLightBlendStyle(softbox: SoftboxSettings): CSSProperties {
   if (!softbox.enabled) {
     return {
+      ...SOFTBOX_NO_TRANSITION,
       opacity: 0,
       mixBlendMode: "normal",
       backgroundImage: "none",
@@ -304,6 +320,7 @@ export function softboxLightBlendStyle(softbox: SoftboxSettings): CSSProperties 
   const shadowSpread = 40 + (1 - intensity / 2) * 50
 
   return {
+    ...SOFTBOX_NO_TRANSITION,
     mixBlendMode: "soft-light",
     opacity: clamp(0.35 + intensity * 0.35, 0.2, 0.95),
     backgroundImage: [

@@ -51,4 +51,15 @@ describe("extractHtmlMeta", () => {
     expect(product.sku).toBe("99900111")
     expect(product.marketplace).toBe("wildberries")
   })
+
+  it("throws on Antibot Challenge title instead of returning garbage", () => {
+    const html = `
+      <html><head>
+        <title>Antibot Challenge Page</title>
+      </head><body></body></html>
+    `
+    expect(() =>
+      extractHtmlMeta(html, "https://www.wildberries.ru/catalog/1/detail.aspx"),
+    ).toThrow()
+  })
 })

@@ -4,6 +4,8 @@ import {
   createEditorDocument,
   editorDocumentToState,
   layersToCanvasState,
+  tryEditorDocumentToState,
+  tryParseEditorDocument,
 } from "@/lib/editor/editor-document"
 import { useEditorStore } from "@/lib/store/editor-store"
 
@@ -48,5 +50,10 @@ describe("editor document adapters", () => {
     expect(canvas.height).toBe(1440)
     expect(product?.x).toBeCloseTo(341.928, 2)
     expect(product?.y).toBeCloseTo(158.4, 2)
+  })
+
+  it("tryParse / tryEditorDocumentToState return null on garbage", () => {
+    expect(tryParseEditorDocument({ version: 99 })).toBeNull()
+    expect(tryEditorDocumentToState({ broken: true })).toBeNull()
   })
 })

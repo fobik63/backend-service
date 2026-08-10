@@ -10,7 +10,7 @@ export default function AuthLayout({ children }: AuthLayoutProps) {
   return (
     <div className="relative flex min-h-dvh items-center justify-center overflow-hidden px-4 py-10">
       <Link
-        href="/landing"
+        href="/"
         className="absolute top-5 left-5 z-20 inline-flex items-center gap-2 rounded-lg border border-white/10 bg-loft-surface px-3 py-2 text-sm text-foreground/90 transition-colors hover:border-white/20 hover:bg-muted"
       >
         <ArrowLeft className="size-4 text-muted-foreground" aria-hidden />

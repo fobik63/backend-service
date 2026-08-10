@@ -17,9 +17,11 @@ import {
   categoryFromCharacteristics,
   fetchProductByArticle,
   getApiErrorMessage,
+  isAntibotDetectedError,
 } from "@/lib/api"
 import { seedAiPromptFromProduct } from "@/lib/editor/canvas-actions"
 import { useI18n } from "@/lib/i18n"
+import { ANTIBOT_USER_MESSAGE } from "@/lib/parser/antibot"
 import { useEditorStore } from "@/lib/store/editor-store"
 
 const PARSER_STATUS_KEYS = [
@@ -40,6 +42,7 @@ function ProductParserSection() {
   const [parsing, setParsing] = useState(false)
   const [statusStep, setStatusStep] = useState(0)
   const parsingRef = useRef(false)
+  const requestIdRef = useRef(0)
 
   const locked = parsing || generating
 
@@ -49,17 +52,15 @@ function ProductParserSection() {
 
   useEffect(() => {
     return () => {
+      // Invalidate in-flight parse so late responses skip setState.
+      requestIdRef.current += 1
       if (parsingRef.current) setAiStudioBusy(false)
     }
   }, [setAiStudioBusy])
 
   useEffect(() => {
-    if (!parsing) {
-      setStatusStep(0)
-      return
-    }
+    if (!parsing) return
 
-    setStatusStep(0)
     const timers = [
       window.setTimeout(() => setStatusStep(1), 4500),
       window.setTimeout(() => setStatusStep(2), 10000),
@@ -77,10 +78,14 @@ function ProductParserSection() {
     }
     if (parsing) return
 
+    const requestId = ++requestIdRef.current
+    setStatusStep(0)
     setParsing(true)
     setAiStudioBusy(true)
     try {
       const product = await fetchProductByArticle(value, "auto")
+      if (requestId !== requestIdRef.current) return
+
       const images = [
         ...(product.image_urls ?? []),
         ...(product.source_image_urls ?? []),
@@ -119,10 +124,20 @@ function ProductParserSection() {
         )
       }
     } catch (error) {
+      if (requestId !== requestIdRef.current) return
+      // Antibot: keep form fields untouched for manual entry (no garbage title).
+      if (isAntibotDetectedError(error)) {
+        toast.error(
+          getApiErrorMessage(error, ANTIBOT_USER_MESSAGE),
+          { description: t("editor.parserAntibotHint") },
+        )
+        return
+      }
       toast.error(getApiErrorMessage(error, t("editor.parserError")), {
         description: t("editor.parserErrorHint"),
       })
     } finally {
+      if (requestId !== requestIdRef.current) return
       setParsing(false)
       setAiStudioBusy(false)
     }

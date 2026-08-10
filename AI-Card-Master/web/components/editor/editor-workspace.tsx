@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation"
 import { useEffect, useState, type MouseEvent } from "react"
 import { toast } from "sonner"
 
+import { BrandLogo } from "@/components/dashboard/brand-logo"
 import { EditorAiPanel } from "@/components/editor/ai-panel"
 import { EditorCanvasStage } from "@/components/editor/canvas-stage"
 import { ImportPublishDialog } from "@/components/editor/import-publish-dialog"
@@ -18,8 +19,8 @@ import { getApiErrorMessage, getDesign, saveDesign } from "@/lib/api"
 import {
   canvasStateToLayers,
   createEditorDocument,
-  editorDocumentToState,
   layersToCanvasState,
+  tryEditorDocumentToState,
 } from "@/lib/editor/editor-document"
 import { getActiveFabricCanvas } from "@/lib/editor/fabric-export"
 import { useI18n } from "@/lib/i18n"
@@ -33,6 +34,22 @@ type EditorWorkspaceProps = {
   productData: EditorProductData | null
 }
 
+/** Exit editor via full page load — Soft Router + Fabric dispose can freeze the UI. */
+function leaveEditorToHome(event: MouseEvent<HTMLAnchorElement>) {
+  if (
+    event.defaultPrevented ||
+    event.button !== 0 ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.shiftKey ||
+    event.altKey
+  ) {
+    return
+  }
+  event.preventDefault()
+  window.location.assign("/projects")
+}
+
 function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
   const { t } = useI18n()
   const router = useRouter()
@@ -40,7 +57,6 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
   const loadProject = useEditorStore((s) => s.loadProject)
   const reset = useEditorStore((s) => s.reset)
   const setBusyKind = useEditorStore((s) => s.setBusyKind)
-  const setBusyProgress = useEditorStore((s) => s.setBusyProgress)
   const setProductPreviewUrl = useEditorStore((s) => s.setProductPreviewUrl)
   const busyKind = useEditorStore((s) => s.busyKind)
   const undo = useEditorStore((s) => s.undo)
@@ -57,12 +73,14 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
     id: string
     title: string
   } | null>(null)
+  /** Saved UUID designs stay gated until getDesign + loadProject succeed. */
+  const [hydrateStatus, setHydrateStatus] = useState<
+    "idle" | "loading" | "ready" | "error"
+  >("idle")
   const isSavedDesignId =
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
       projectId
     )
-  const loadingProject =
-    isSavedDesignId && remoteDesign?.id !== projectId
 
   useEffect(() => {
     const controller = new AbortController()
@@ -73,61 +91,86 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
     if (isNewCard) {
       reset({ blank: true })
       setProjectId(projectId)
-      setRemoteDesign(null)
+      queueMicrotask(() => {
+        if (!controller.signal.aborted) {
+          setRemoteDesign(null)
+          setHydrateStatus("ready")
+        }
+      })
       const canvas = getActiveFabricCanvas()
       if (canvas) {
         canvas.clear()
-        canvas.backgroundColor = "transparent"
+        canvas.backgroundColor = "#0d0f12"
         canvas.requestRenderAll()
       }
       return () => controller.abort()
     }
 
-    reset()
-    setProjectId(projectId)
-    if (cutout) setProductPreviewUrl(cutout)
+    // UUID designs: blank shell until remote doc restores (never flash mock pack).
+    if (isSavedDesignId) {
+      reset({ blank: true })
+      setProjectId(projectId)
+      setHydrateStatus("loading")
+      if (cutout) setProductPreviewUrl(cutout)
 
-    if (!isSavedDesignId) {
+      void getDesign(projectId, controller.signal)
+        .then((design) => {
+          if (controller.signal.aborted) return
+          setRemoteDesign({ id: design.id, title: design.title })
+
+          const fromDoc = design.editor_document
+            ? tryEditorDocumentToState(design.editor_document)
+            : null
+          if (fromDoc) {
+            loadProject({
+              projectId: design.id,
+              ...fromDoc,
+              productPreviewUrl:
+                fromDoc.productPreviewUrl ?? design.preview_url ?? cutout,
+              packSize: fromDoc.pages.length,
+            })
+            setHydrateStatus("ready")
+            return
+          }
+
+          const restoredLayers = canvasStateToLayers(design.canvas)
+          loadProject({
+            projectId: design.id,
+            pages: [restoredLayers],
+            activePageIndex: 0,
+            softbox: useEditorStore.getState().softbox,
+            productPreviewUrl: design.preview_url ?? cutout,
+            backgroundPreviewUrl: design.canvas.background_image_url ?? null,
+            packSize: 1,
+          })
+          setHydrateStatus("ready")
+        })
+        .catch((error: unknown) => {
+          if (controller.signal.aborted) return
+          if (
+            (typeof DOMException !== "undefined" &&
+              error instanceof DOMException &&
+              error.name === "AbortError") ||
+            (error instanceof Error && error.name === "AbortError")
+          ) {
+            return
+          }
+          setHydrateStatus("error")
+          setRemoteDesign({
+            id: projectId,
+            title: productData?.title ?? projectId,
+          })
+          toast.error(getApiErrorMessage(error, "Не удалось загрузить проект"))
+        })
+
       return () => controller.abort()
     }
 
-    void getDesign(projectId, controller.signal)
-      .then((design) => {
-        if (controller.signal.aborted) return
-        setRemoteDesign({ id: design.id, title: design.title })
-        if (design.editor_document) {
-          const restored = editorDocumentToState(design.editor_document)
-          loadProject({
-            projectId: design.id,
-            ...restored,
-            packSize: restored.pages.length,
-          })
-          return
-        }
-        const restoredLayers = canvasStateToLayers(design.canvas)
-        loadProject({
-          projectId: design.id,
-          pages: [restoredLayers],
-          activePageIndex: 0,
-          softbox: useEditorStore.getState().softbox,
-          productPreviewUrl: design.preview_url ?? cutout,
-          backgroundPreviewUrl: design.canvas.background_image_url ?? null,
-          packSize: 1,
-        })
-      })
-      .catch((error: unknown) => {
-        if (controller.signal.aborted) return
-        if (
-          (typeof DOMException !== "undefined" &&
-            error instanceof DOMException &&
-            error.name === "AbortError") ||
-          (error instanceof Error && error.name === "AbortError")
-        ) {
-          return
-        }
-        setRemoteDesign({ id: projectId, title: productData?.title ?? projectId })
-        toast.error(getApiErrorMessage(error, "Не удалось загрузить проект"))
-      })
+    // Sandbox / non-UUID ids: local mock pack is fine.
+    reset()
+    setProjectId(projectId)
+    setHydrateStatus("ready")
+    if (cutout) setProductPreviewUrl(cutout)
 
     return () => controller.abort()
   }, [
@@ -179,11 +222,17 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
       : (productData?.title ?? `Проект ${projectId}`)
   const isSaving = saving || busyKind === "saving"
 
+  /** Gate Fabric until this projectId is fully hydrated (no cross-project flash). */
+  const surfaceReady =
+    hydrateStatus === "ready" &&
+    (!isSavedDesignId || remoteDesign?.id === projectId)
+
   /** Avoid mounting canvas/prompt until product payload + editor store are ready. */
   const canRenderEditorSurface =
     Boolean(productData?.id) &&
     Array.isArray(layers) &&
-    softbox != null
+    softbox != null &&
+    surfaceReady
 
   const handleSave = async () => {
     if (isSaving) return
@@ -225,33 +274,13 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
     }
   }
 
-  /** Hard exit: clear editor work so Soft nav / Fabric teardown cannot freeze the UI. */
-  const leaveToProjects = (event: MouseEvent<HTMLAnchorElement>) => {
-    if (
-      event.defaultPrevented ||
-      event.button !== 0 ||
-      event.metaKey ||
-      event.ctrlKey ||
-      event.shiftKey ||
-      event.altKey
-    ) {
-      return
-    }
-    event.preventDefault()
-    setImportOpen(false)
-    setBusyKind("idle")
-    setBusyProgress(null)
-    reset()
-    router.push("/projects")
-  }
-
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-transparent text-foreground">
       <div className="relative z-20 flex h-12 shrink-0 items-center justify-between gap-3 border-b border-zinc-800/60 bg-zinc-900/40 px-3 sm:px-4">
         <div className="flex min-w-0 items-center gap-2 sm:gap-3">
           <Link
             href="/projects"
-            onClick={leaveToProjects}
+            onClick={leaveEditorToHome}
             className={cn(
               buttonVariants({ size: "sm", variant: "ghost" }),
               "shrink-0 gap-1.5 px-2 text-muted-foreground hover:text-foreground"
@@ -263,6 +292,11 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
               {t("editor.backToProjects")}
             </span>
           </Link>
+          <BrandLogo
+            href="/projects"
+            onClick={leaveEditorToHome}
+            className="hidden border-l border-white/10 pl-3 sm:flex"
+          />
           <div className="min-w-0 border-l border-white/10 pl-3">
             <p className="truncate font-heading text-sm font-semibold tracking-tight">
               {title}
@@ -320,9 +354,9 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
         projectTitle={title}
       />
 
-      {canRenderEditorSurface && !loadingProject ? (
+      {canRenderEditorSurface ? (
         <div className="relative flex min-h-0 flex-1 overflow-hidden">
-          <div className="flex h-full w-full min-w-0 flex-col gap-3 p-3 lg:flex-row lg:items-stretch">
+          <div className="flex h-full w-full min-w-0 flex-col gap-3 overflow-hidden p-3 lg:flex-row lg:items-stretch">
             <EditorAiPanel projectTitle={title} />
             <ErrorBoundary
               title="Ошибка холста"
@@ -336,32 +370,49 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
         </div>
       ) : (
         <div
-          className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 px-6"
+          className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 overflow-hidden px-6"
           role="status"
           aria-live="polite"
         >
-          <Skeleton className="h-40 w-32 rounded-xl" />
-          <p className="text-sm text-muted-foreground">
-            {!productData
-              ? t("editor.productUnavailable")
-              : t("editor.initializing")}
-          </p>
-          {!productData ? (
-            <Link
-              href="/projects"
-              onClick={leaveToProjects}
-              className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
-            >
-              {t("editor.returnToProjects")}
-            </Link>
+          {hydrateStatus === "error" ? (
+            <>
+              <p className="max-w-sm text-center text-sm text-muted-foreground">
+                Не удалось загрузить проект. Вернитесь к списку и откройте карточку снова.
+              </p>
+              <Link
+                href="/projects"
+                onClick={leaveEditorToHome}
+                className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+              >
+                {t("editor.returnToProjects")}
+              </Link>
+            </>
           ) : (
-            <Link
-              href="/projects"
-              onClick={leaveToProjects}
-              className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
-            >
-              {t("editor.backToProjects")}
-            </Link>
+            <>
+              <Skeleton className="h-40 w-32 rounded-xl" />
+              <p className="text-sm text-muted-foreground">
+                {!productData
+                  ? t("editor.productUnavailable")
+                  : t("editor.initializing")}
+              </p>
+              {!productData ? (
+                <Link
+                  href="/projects"
+                  onClick={leaveEditorToHome}
+                  className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+                >
+                  {t("editor.returnToProjects")}
+                </Link>
+              ) : (
+                <Link
+                  href="/projects"
+                  onClick={leaveEditorToHome}
+                  className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
+                >
+                  {t("editor.backToProjects")}
+                </Link>
+              )}
+            </>
           )}
         </div>
       )}

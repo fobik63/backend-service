@@ -47,11 +47,14 @@ describe("softbox", () => {
     const style = softboxOverlayStyle(BASE)
     expect(style.backgroundImage).toEqual(expect.stringContaining("radial-gradient"))
     expect(style.backgroundImage).toEqual(expect.stringContaining("linear-gradient"))
+    expect(style.transition).toBe("none")
+    expect(style.transitionProperty).toBe("none")
   })
 
   it("builds flat CSS overlay when softbox is disabled", () => {
     const style = softboxOverlayStyle({ ...BASE, enabled: false })
     expect(style.backgroundImage).toEqual(expect.stringContaining("linear-gradient"))
+    expect(style.transition).toBe("none")
   })
 
   it("builds mix-blend light overlay for scrubbing", () => {
@@ -59,11 +62,14 @@ describe("softbox", () => {
     expect(style.mixBlendMode).toBe("soft-light")
     expect(style.backgroundImage).toEqual(expect.stringContaining("radial-gradient"))
     expect(style.boxShadow).toEqual(expect.stringContaining("inset"))
+    expect(style.transition).toBe("none")
+    expect(style.transitionProperty).toBe("none")
   })
 
   it("hides blend overlay when softbox is disabled", () => {
     const style = softboxLightBlendStyle({ ...BASE, enabled: false })
     expect(style.opacity).toBe(0)
+    expect(style.transition).toBe("none")
   })
 
   it("paints softbox onto a canvas without throwing", () => {

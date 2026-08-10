@@ -116,7 +116,8 @@ function AuthForm({
     setSession(MOCK_AUTH_TOKENS, MOCK_AUTH_USER)
     onSuccess?.()
     startTransition(() => {
-      router.replace("/projects")
+      // Stay on current page (modal); dedicated auth pages return home.
+      if (!compact) router.replace("/")
       router.refresh()
     })
     // Auto-login once on mount when mock mode is enabled.
@@ -135,7 +136,8 @@ function AuthForm({
     toast.success(message)
     onSuccess?.()
     startTransition(() => {
-      router.push("/projects")
+      // Modal (compact): remain on current URL. Auth pages: go to landing.
+      if (!compact) router.replace("/")
       router.refresh()
     })
   }
@@ -277,7 +279,7 @@ function AuthForm({
     >
       {!hideHomeLink ? (
         <Link
-          href="/landing"
+          href="/"
           className="absolute top-4 left-4 inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground"
         >
           <ArrowLeft className="size-3.5" aria-hidden />

@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation"
 
 import { EditorWorkspace } from "@/components/editor"
+import { IS_MOCK } from "@/lib/constants/mock"
 import { MOCK_PROJECTS } from "@/lib/constants/mock-projects"
 import type { EditorProductData } from "@/types/editor"
 
@@ -12,15 +13,18 @@ function resolveProductData(id: string): EditorProductData | null {
   const trimmed = id?.trim()
   if (!trimmed) return null
 
-  const project = MOCK_PROJECTS.find((p) => p.id === trimmed)
-  if (project) {
-    return {
-      id: project.id,
-      title: project.title,
-      marketplace: project.marketplace,
-      status: project.status,
-      previewImage: project.previewImage,
-      productImage: project.productImage ?? project.previewImage,
+  // Sandbox catalog only when client mock mode is on.
+  if (IS_MOCK) {
+    const project = MOCK_PROJECTS.find((p) => p.id === trimmed)
+    if (project) {
+      return {
+        id: project.id,
+        title: project.title,
+        marketplace: project.marketplace,
+        status: project.status,
+        previewImage: project.previewImage,
+        productImage: project.productImage ?? project.previewImage,
+      }
     }
   }
 
@@ -34,13 +38,12 @@ function resolveProductData(id: string): EditorProductData | null {
     }
   }
 
-  // Unknown id still opens a sandbox project shell (demo / deep-link).
+  // UUID / deep-link: minimal shell — client hydrates via getDesign (no mock art).
   return {
     id: trimmed,
     title: `Проект ${trimmed}`,
     marketplace: null,
     status: null,
-    productImage: "/projects/cream-sage-mist-product.png",
   }
 }
 

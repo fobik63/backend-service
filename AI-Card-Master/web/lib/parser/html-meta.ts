@@ -1,5 +1,13 @@
 import * as cheerio from "cheerio"
 
+import {
+  antibotScrapeError,
+  isAntibotChallengeText,
+  isAntibotHtml,
+  isAntibotHttpStatus,
+  isAntibotResponseHeaders,
+  isAntibotScrapeError,
+} from "@/lib/parser/antibot"
 import { nextDesktopUserAgent } from "@/lib/parser/user-agents"
 import type { ParsedProduct, ParserMarketplace } from "@/lib/parser/types"
 import { buildParsedProduct } from "@/lib/parser/normalize"
@@ -30,6 +38,13 @@ export async function scrapeHtmlMeta(url: string): Promise<HtmlMetaFields> {
       },
     })
 
+    if (
+      isAntibotHttpStatus(response.status) ||
+      isAntibotResponseHeaders(response.headers)
+    ) {
+      throw antibotScrapeError(`HTTP ${response.status}`)
+    }
+
     if (!response.ok) {
       throw new Error(
         `Не удалось загрузить страницу (HTTP ${response.status}).`,
@@ -37,8 +52,12 @@ export async function scrapeHtmlMeta(url: string): Promise<HtmlMetaFields> {
     }
 
     const html = await response.text()
+    if (isAntibotHtml(html)) {
+      throw antibotScrapeError("HTML title/body")
+    }
     return extractHtmlMeta(html, url)
   } catch (error) {
+    if (isAntibotScrapeError(error)) throw error
     if (error instanceof Error && error.name === "AbortError") {
       throw new Error("Превышено время ожидания загрузки страницы.")
     }
@@ -49,6 +68,10 @@ export async function scrapeHtmlMeta(url: string): Promise<HtmlMetaFields> {
 }
 
 export function extractHtmlMeta(html: string, fallbackUrl: string): HtmlMetaFields {
+  if (isAntibotHtml(html)) {
+    throw antibotScrapeError("HTML title/body")
+  }
+
   const $ = cheerio.load(html)
 
   const title =
@@ -57,6 +80,10 @@ export function extractHtmlMeta(html: string, fallbackUrl: string): HtmlMetaFiel
         $('meta[name="twitter:title"]').attr("content") ||
         $("title").first().text(),
     ) || fallbackUrl
+
+  if (isAntibotChallengeText(title)) {
+    throw antibotScrapeError("parsed title")
+  }
 
   const description = clean(
     $('meta[name="description"]').attr("content") ||

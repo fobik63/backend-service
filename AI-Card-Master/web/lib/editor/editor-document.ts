@@ -443,6 +443,14 @@ export function parseEditorDocument(value: unknown): EditorDocumentDTO {
   return editorDocumentSchema.parse(value) as EditorDocumentDTO
 }
 
+/** Non-throwing parse — invalid API payloads must not crash React render. */
+export function tryParseEditorDocument(
+  value: unknown
+): EditorDocumentDTO | null {
+  const result = editorDocumentSchema.safeParse(value)
+  return result.success ? (result.data as EditorDocumentDTO) : null
+}
+
 export function editorDocumentToState(document: EditorDocumentDTO): {
   pages: CanvasLayer[][]
   activePageIndex: number
@@ -464,6 +472,23 @@ export function editorDocumentToState(document: EditorDocumentDTO): {
       intensity: parsed.softbox.intensity,
       softboxDiffusion: parsed.softbox.softbox_diffusion,
     },
+  }
+}
+
+/** Safe adapter for list cards / export — returns null on Zod failure. */
+export function tryEditorDocumentToState(document: unknown): {
+  pages: CanvasLayer[][]
+  activePageIndex: number
+  productPreviewUrl: string | null
+  backgroundPreviewUrl: string | null
+  softbox: SoftboxSettings
+} | null {
+  const parsed = tryParseEditorDocument(document)
+  if (!parsed) return null
+  try {
+    return editorDocumentToState(parsed)
+  } catch {
+    return null
   }
 }
 

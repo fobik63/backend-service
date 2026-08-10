@@ -511,7 +511,7 @@ function EditorSettingsBody() {
   const { t } = useI18n()
 
   return (
-    <>
+    <div className="flex h-full min-h-0 flex-col">
       <div className="shrink-0 border-b border-white/8 px-3 py-2.5">
         <h2 className="font-heading text-sm font-semibold tracking-tight">
           {t("editor.tools")}
@@ -521,7 +521,7 @@ function EditorSettingsBody() {
         </p>
       </div>
 
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-3 py-3">
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-3 py-3 pb-12">
         <TextParamsSection />
         <div className="border-t border-white/8 pt-3">
           <BadgeParamsSection />
@@ -533,12 +533,13 @@ function EditorSettingsBody() {
           <SoftboxParamsSection />
         </div>
       </div>
-    </>
+    </div>
   )
 }
 
+/** Viewport minus editor header (h-12) and workspace padding (p-3 × 2). */
 const PANEL_SHELL =
-  "flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900/80 backdrop-blur-xl"
+  "flex h-[calc(100dvh-4.5rem)] max-h-[calc(100dvh-4.5rem)] min-h-0 flex-col overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900/80 backdrop-blur-xl"
 
 function EditorSettingsPanel(_props: EditorSettingsPanelProps) {
   const { t } = useI18n()
@@ -548,7 +549,7 @@ function EditorSettingsPanel(_props: EditorSettingsPanelProps) {
     <>
       <aside
         className={cn(
-          "hidden w-[min(100%,360px)] shrink-0 self-stretch lg:flex",
+          "hidden w-[min(100%,360px)] shrink-0 lg:flex",
           "lg:w-[clamp(20rem,22vw,22.5rem)]",
           PANEL_SHELL,
         )}

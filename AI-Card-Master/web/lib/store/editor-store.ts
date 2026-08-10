@@ -300,7 +300,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       Math.max(0, pages.length - 1)
     )
     const layers = pages[activePageIndex] ?? []
-    set({
+    set((state) => ({
       projectId: project.projectId,
       pages,
       activePageIndex,
@@ -315,6 +315,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       importGalleryUrls: [],
       productMeta: { ...EMPTY_PRODUCT_META },
       packSize,
+      // Force Fabric scene rebuild even if layer ids collide with prior project.
+      generationEpoch: state.generationEpoch + 1,
       busyKind: "idle",
       busyProgress: null,
       aiStudioBusy: false,
@@ -322,7 +324,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       historyTransaction: null,
       canUndo: false,
       canRedo: false,
-    })
+    }))
   },
   setActivePageIndex: (index) => {
     const state = get()

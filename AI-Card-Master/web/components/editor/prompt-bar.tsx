@@ -126,12 +126,17 @@ function PromptBar({
   const activePageIndex = useEditorStore((s) => s.activePageIndex)
   const productMeta = useEditorStore((s) => s.productMeta)
   const mockRafRef = useRef(0)
+  const busySafetyTimeoutRef = useRef(0)
 
   useEffect(() => {
     return () => {
       if (mockRafRef.current) {
         window.cancelAnimationFrame(mockRafRef.current)
         mockRafRef.current = 0
+      }
+      if (busySafetyTimeoutRef.current) {
+        window.clearTimeout(busySafetyTimeoutRef.current)
+        busySafetyTimeoutRef.current = 0
       }
     }
   }, [])
@@ -238,7 +243,11 @@ function PromptBar({
       setGenerating(false)
       // Keep busy overlay until Fabric finishes rebuilding the scene
       // (fabric-canvas clears busyKind on successful rebuild). Safety timeout:
-      window.setTimeout(() => {
+      if (busySafetyTimeoutRef.current) {
+        window.clearTimeout(busySafetyTimeoutRef.current)
+      }
+      busySafetyTimeoutRef.current = window.setTimeout(() => {
+        busySafetyTimeoutRef.current = 0
         const kind = useEditorStore.getState().busyKind
         if (kind === "generating") {
           useEditorStore.getState().setBusyKind("idle")

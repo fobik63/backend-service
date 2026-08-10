@@ -28,7 +28,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { useI18n, type Locale } from "@/lib/i18n"
-import { useEditorStore } from "@/lib/store/editor-store"
 import { cn } from "@/lib/utils"
 
 type AppHeaderUser = {
@@ -53,13 +52,8 @@ const DEFAULT_USER: AppHeaderUser = {
   avatarUrl: null,
 }
 
-function resetEditorIfNeeded() {
-  if (typeof window === "undefined") return
-  if (!window.location.pathname.startsWith("/editor")) return
-  const store = useEditorStore.getState()
-  store.setBusyKind("idle")
-  store.setBusyProgress(null)
-  store.reset()
+function isEditorPath(pathname: string) {
+  return pathname.startsWith("/editor")
 }
 
 function AppHeader({
@@ -73,18 +67,21 @@ function AppHeader({
   const pathname = usePathname()
   const { locale, setLocale, t } = useI18n()
   const [pricingOpen, setPricingOpen] = useState(false)
-  const initials = user.name
-    .split(" ")
+  const initials = (user.name || "Г")
+    .split(/\s+/)
+    .filter(Boolean)
     .map((part) => part[0])
     .join("")
     .slice(0, 2)
-    .toUpperCase()
+    .toUpperCase() || "Г"
 
+  /** Leaving the editor via Soft Router freezes on Fabric teardown — use a hard load. */
   const go = (href: string) => {
-    if (pathname === href || (href === "/projects" && pathname === "/projects/")) {
+    if (pathname === href) return
+    if (isEditorPath(pathname) && !href.startsWith("/editor")) {
+      window.location.assign(href)
       return
     }
-    resetEditorIfNeeded()
     router.push(href)
   }
 
@@ -98,7 +95,7 @@ function AppHeader({
         aria-label={t("nav.ariaHeader")}
       >
       <BrandLogo
-        href="/projects"
+        href="/"
         onClick={(event) => {
           if (
             event.defaultPrevented ||
@@ -111,7 +108,7 @@ function AppHeader({
             return
           }
           event.preventDefault()
-          go("/projects")
+          go("/")
         }}
       />
 
@@ -229,9 +226,12 @@ function AppHeader({
                 variant="destructive"
                 className="cursor-pointer gap-2"
                 onClick={() => {
-                  resetEditorIfNeeded()
                   if (onLogout) {
                     onLogout()
+                    return
+                  }
+                  if (isEditorPath(pathname)) {
+                    window.location.assign("/login")
                     return
                   }
                   router.push("/login")

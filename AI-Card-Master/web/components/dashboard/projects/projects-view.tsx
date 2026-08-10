@@ -26,11 +26,10 @@ function designToProject(design: SavedDesignDTO): Project {
   return {
     id: design.id,
     title: design.title,
-    marketplace: "ozon",
+    marketplace: null,
     status: "ready",
     createdAt: design.updated_at,
-    previewImage:
-      design.preview_url ?? "/projects/cream-sage-mist.png",
+    previewImage: design.preview_url ?? null,
     productImage:
       design.editor_document?.product_preview_url ??
       design.preview_url ??
@@ -125,9 +124,9 @@ function ProjectsView() {
   }
 
   return (
-    <section className="mx-auto w-full max-w-7xl space-y-6">
-      <header className="space-y-1.5">
-        <h1 className="font-heading text-2xl font-semibold tracking-tight">
+    <section className="mx-auto w-full max-w-7xl min-w-0 space-y-6 overflow-x-hidden">
+      <header className="min-w-0 space-y-1.5">
+        <h1 className="font-heading truncate text-2xl font-semibold tracking-tight">
           {t("projects.title")}
         </h1>
         <p className="text-sm text-muted-foreground">{t("projects.subtitle")}</p>

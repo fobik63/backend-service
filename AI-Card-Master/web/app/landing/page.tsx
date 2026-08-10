@@ -1,27 +1,6 @@
-import {
-  CallToActionSection,
-  FeaturesSection,
-  FaqSection,
-  Footer,
-  HeroSection,
-  Navbar,
-  PricingSection,
-  TestimonialsSection,
-} from "@/components/landing"
+import { redirect } from "next/navigation"
 
-export default function LandingPage() {
-  return (
-    <div className="relative min-h-dvh overflow-x-hidden text-foreground">
-      <Navbar />
-      <main className="relative flex flex-col">
-        <HeroSection />
-        <FeaturesSection />
-        <PricingSection />
-        <TestimonialsSection />
-        <FaqSection />
-        <CallToActionSection />
-      </main>
-      <Footer />
-    </div>
-  )
+/** Legacy URL — landing now lives at `/`. */
+export default function LandingRedirectPage() {
+  redirect("/")
 }

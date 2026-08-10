@@ -51,7 +51,7 @@ type BrandLogoProps = {
   onClick?: MouseEventHandler<HTMLAnchorElement>
 }
 
-function BrandLogo({ href = "/projects", className, onClick }: BrandLogoProps) {
+function BrandLogo({ href = "/", className, onClick }: BrandLogoProps) {
   return (
     <Link
       href={href}

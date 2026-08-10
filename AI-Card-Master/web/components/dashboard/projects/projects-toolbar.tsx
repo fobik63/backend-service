@@ -30,9 +30,9 @@ function ProjectsToolbar({
   onMarketplaceChange,
 }: ProjectsToolbarProps) {
   return (
-    <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+    <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
       <div className="flex min-w-0 flex-1 flex-col gap-3 sm:flex-row sm:items-center">
-        <label className="relative block w-full max-w-md">
+        <label className="relative block w-full max-w-md min-w-0">
           <span className="sr-only">Поиск по названию карточки</span>
           <Search
             className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
@@ -49,7 +49,7 @@ function ProjectsToolbar({
         <div
           role="group"
           aria-label="Фильтр по маркетплейсу"
-          className="flex shrink-0 items-center gap-1 rounded-lg border border-white/10 bg-loft-surface p-1"
+          className="flex shrink-0 flex-wrap items-center gap-1 rounded-lg border border-white/10 bg-loft-surface p-1"
         >
           {MARKETPLACE_FILTERS.map((filter) => {
             const active = marketplace === filter.value
@@ -79,7 +79,7 @@ function ProjectsToolbar({
         href="/editor"
         className={cn(
           buttonVariants({ variant: "default", size: "lg" }),
-          "h-10 gap-2"
+          "h-10 w-full shrink-0 gap-2 sm:w-auto"
         )}
       >
         <Plus className="size-4" aria-hidden />

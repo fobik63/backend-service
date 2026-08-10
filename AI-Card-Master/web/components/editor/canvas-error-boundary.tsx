@@ -88,9 +88,17 @@ class CanvasErrorBoundary extends Component<
   }
 
   render() {
-    // Brief null while recovering — never the old "Ошибка элемента холста" plate.
+    // Never return null — an empty hole reads as a black void and drops the
+    // Fabric host. While recovering, hold a stable placeholder; recoverKey
+    // remounts children after store defaults commit in componentDidCatch.
     if (this.state.hasError) {
-      return null
+      return (
+        <div
+          className="absolute inset-0 bg-[#0d0f12]"
+          aria-hidden
+          data-canvas-recovering="true"
+        />
+      )
     }
 
     return (

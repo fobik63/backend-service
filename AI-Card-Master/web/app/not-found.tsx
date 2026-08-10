@@ -16,10 +16,10 @@ export default function NotFound() {
         Запрошенный адрес не существует или был перемещён.
       </p>
       <Link
-        href="/landing"
+        href="/"
         className={cn(buttonVariants({ size: "default" }))}
       >
-        На лендинг
+        На главную
       </Link>
     </main>
   )

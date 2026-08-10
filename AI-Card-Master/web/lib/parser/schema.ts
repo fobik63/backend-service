@@ -32,6 +32,7 @@ export type ParseRequestBody = z.infer<typeof parseRequestSchema>
 
 export const parseErrorSchema = z.object({
   error: z.string(),
+  message: z.string().optional(),
   code: z.string().optional(),
   details: z.unknown().optional(),
 })

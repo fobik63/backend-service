@@ -40,7 +40,7 @@ function EditorPageStrip({ className }: { className?: string }) {
           {activePageIndex + 1}/{count}
         </p>
       </div>
-      <div className="flex gap-2 overflow-x-auto pb-0.5">
+      <div className="flex gap-2 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:thin]">
         {Array.from({ length: count }, (_, index) => {
           const active = index === activePageIndex
           const label = pageLabel(index, locale)

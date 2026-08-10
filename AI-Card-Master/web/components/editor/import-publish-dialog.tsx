@@ -8,7 +8,7 @@ import {
   Sparkles,
   Upload,
 } from "lucide-react"
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -26,6 +26,7 @@ import {
   fetchProductByArticle,
   generateSeoDescription,
   getApiErrorMessage,
+  isAntibotDetectedError,
   listSellerProducts,
   publishToOzon,
   publishToWildberries,
@@ -33,6 +34,7 @@ import {
   type SeoTargetPlatform,
 } from "@/lib/api"
 import { addBadgeToCanvas, seedAiPromptFromProduct } from "@/lib/editor/canvas-actions"
+import { ANTIBOT_USER_MESSAGE } from "@/lib/parser/antibot"
 import { useEditorStore } from "@/lib/store/editor-store"
 import { cn } from "@/lib/utils"
 
@@ -66,6 +68,22 @@ function ImportPublishDialog({
   const [importedFeatures, setImportedFeatures] = useState<
     Record<string, string>
   >({})
+  const importRequestIdRef = useRef(0)
+  const seoRequestIdRef = useRef(0)
+
+  useEffect(() => {
+    if (open) return
+    // Invalidate in-flight import/SEO when the dialog closes.
+    importRequestIdRef.current += 1
+    seoRequestIdRef.current += 1
+  }, [open])
+
+  useEffect(() => {
+    return () => {
+      importRequestIdRef.current += 1
+      seoRequestIdRef.current += 1
+    }
+  }, [])
 
   const [seoPlatform, setSeoPlatform] = useState<SeoTargetPlatform>("wb")
   const [seoLoading, setSeoLoading] = useState(false)
@@ -74,17 +92,24 @@ function ImportPublishDialog({
   const [seoDescription, setSeoDescription] = useState("")
 
   // Keep dialog SEO seed in sync with the panel parser / store meta.
-  useEffect(() => {
-    if (!open) return
-    if (productMeta.title) {
-      setImportedTitle(productMeta.title)
-      setSeoTitle((prev) => prev || productMeta.title)
+  // Adjust during render when the dialog opens / meta changes (avoid effect setState).
+  const metaSeedKey = open
+    ? `${productMeta.title}\0${productMeta.category}\0${productMeta.description}`
+    : null
+  const [activeMetaSeedKey, setActiveMetaSeedKey] = useState<string | null>(null)
+  if (metaSeedKey !== activeMetaSeedKey) {
+    setActiveMetaSeedKey(metaSeedKey)
+    if (metaSeedKey !== null) {
+      if (productMeta.title) {
+        setImportedTitle(productMeta.title)
+        if (!seoTitle) setSeoTitle(productMeta.title)
+      }
+      if (productMeta.category) setImportedCategory(productMeta.category)
+      if (productMeta.description && !seoDescription) {
+        setSeoDescription(productMeta.description)
+      }
     }
-    if (productMeta.category) setImportedCategory(productMeta.category)
-    if (productMeta.description) {
-      setSeoDescription((prev) => prev || productMeta.description)
-    }
-  }, [open, productMeta.title, productMeta.category, productMeta.description])
+  }
 
   const [publishPlatform, setPublishPlatform] =
     useState<SeoTargetPlatform>("wb")
@@ -151,9 +176,11 @@ function ImportPublishDialog({
       toast.error("Введите ссылку или артикул товара")
       return
     }
+    const requestId = ++importRequestIdRef.current
     setImporting(true)
     try {
       const product = await fetchProductByArticle(value, "auto")
+      if (requestId !== importRequestIdRef.current) return
       const images = [
         ...(product.image_urls ?? []),
         ...(product.source_image_urls ?? []),
@@ -197,9 +224,17 @@ function ImportPublishDialog({
       }
       toast.success(`Импортировано: ${name} (${images.length} фото)`)
     } catch (error) {
+      if (requestId !== importRequestIdRef.current) return
+      if (isAntibotDetectedError(error)) {
+        toast.error(getApiErrorMessage(error, ANTIBOT_USER_MESSAGE), {
+          description:
+            "Поля оставлены пустыми — заполните данные товара вручную",
+        })
+        return
+      }
       toast.error(getApiErrorMessage(error, "Не удалось импортировать товар"))
     } finally {
-      setImporting(false)
+      if (requestId === importRequestIdRef.current) setImporting(false)
     }
   }
 
@@ -209,6 +244,7 @@ function ImportPublishDialog({
       toast.error("Укажите название товара для SEO-генерации")
       return
     }
+    const requestId = ++seoRequestIdRef.current
     setSeoLoading(true)
     try {
       const result = await generateSeoDescription({
@@ -217,6 +253,7 @@ function ImportPublishDialog({
         features: importedFeatures,
         targetPlatform: seoPlatform,
       })
+      if (requestId !== seoRequestIdRef.current) return
       setSeoTitle(result.optimized_title)
       setSeoBenefits(result.benefits)
       setSeoDescription(result.description)
@@ -224,11 +261,12 @@ function ImportPublishDialog({
         `SEO готово (−${result.coins_charged} коинов, баланс ${result.new_balance})`,
       )
     } catch (error) {
+      if (requestId !== seoRequestIdRef.current) return
       toast.error(
         getApiErrorMessage(error, "Не удалось сгенерировать SEO-описание"),
       )
     } finally {
-      setSeoLoading(false)
+      if (requestId === seoRequestIdRef.current) setSeoLoading(false)
     }
   }
 
@@ -379,11 +417,11 @@ function ImportPublishDialog({
           </div>
           {galleryPreview.length > 0 ? (
             <div className="flex gap-2 overflow-x-auto pb-0.5">
-              {galleryPreview.slice(0, 12).map((url) => {
+              {galleryPreview.slice(0, 12).map((url, index) => {
                 const active = url === productPreviewUrl
                 return (
                   <button
-                    key={url}
+                    key={`${url}-${index}`}
                     type="button"
                     onClick={() => setProductPreviewUrl(url)}
                     className={cn(
@@ -478,9 +516,9 @@ function ImportPublishDialog({
             </span>
             {seoBenefits.length > 0 ? (
               <div className="flex flex-wrap gap-1.5 rounded-lg border border-white/8 bg-black/20 p-2.5">
-                {seoBenefits.map((benefit) => (
+                {seoBenefits.map((benefit, index) => (
                   <span
-                    key={benefit}
+                    key={`${benefit}-${index}`}
                     className="rounded-md border border-white/12 bg-white/[0.06] px-2 py-1 text-[11px] text-foreground/90"
                   >
                     {benefit}

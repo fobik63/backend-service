@@ -74,6 +74,7 @@ export type {
 } from "./analytics";
 export {
   getApiErrorMessage,
+  isAntibotDetectedError,
   isNetworkError,
   NETWORK_ERROR_MESSAGES,
 } from "./errors";

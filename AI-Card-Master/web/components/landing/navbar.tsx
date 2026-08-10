@@ -6,7 +6,10 @@ import { useEffect, useState } from "react"
 import { AnimatePresence, motion } from "framer-motion"
 
 import { AuthModal } from "@/components/modals/auth-modal"
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { GlassButton } from "@/components/ui/glass-button"
+import { displayNameFromEmail } from "@/lib/auth/session"
+import { useAuthStore } from "@/lib/store"
 import { cn } from "@/lib/utils"
 
 const NAV_LINKS = [
@@ -68,10 +71,30 @@ function CardLogoIcon({ className }: { className?: string }) {
   )
 }
 
+function userInitials(name: string) {
+  return (
+    name
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((part) => part[0])
+      .join("")
+      .slice(0, 2)
+      .toUpperCase() || "?"
+  )
+}
+
 function Navbar() {
   const [scrolled, setScrolled] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [authOpen, setAuthOpen] = useState(false)
+  const user = useAuthStore((s) => s.user)
+  const hydrateFromStorage = useAuthStore((s) => s.hydrateFromStorage)
+  const isAuthenticated = Boolean(user)
+  const displayName = user ? displayNameFromEmail(user.email) : ""
+
+  useEffect(() => {
+    hydrateFromStorage()
+  }, [hydrateFromStorage])
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 12)
@@ -94,6 +117,22 @@ function Navbar() {
     setAuthOpen(true)
   }
 
+  const accountBadge = (
+    <div
+      className="inline-flex items-center gap-2 rounded-xl border border-white/12 bg-white/[0.04] px-2.5 py-1.5"
+      aria-label={`Аккаунт: ${displayName}`}
+    >
+      <Avatar size="sm">
+        <AvatarFallback className="bg-sage/60 text-[10px] text-emerald">
+          {userInitials(displayName)}
+        </AvatarFallback>
+      </Avatar>
+      <span className="max-w-28 truncate text-sm font-medium text-foreground">
+        {displayName}
+      </span>
+    </div>
+  )
+
   return (
     <header className="pointer-events-none fixed inset-x-0 top-0 z-50 px-3 pt-3 sm:px-5">
       <nav
@@ -105,7 +144,7 @@ function Navbar() {
         aria-label="Главная навигация"
       >
         <Link
-          href="/landing"
+          href="/"
           className="group flex shrink-0 items-center gap-2.5"
         >
           <CardLogoIcon className="size-7 transition-transform duration-300 group-hover:scale-105" />
@@ -134,29 +173,35 @@ function Navbar() {
           ))}
         </ul>
 
-        <div className="hidden items-center gap-2 sm:flex">
-          <GlassButton
-            size="default"
-            className="border border-white/12 bg-transparent text-foreground"
-            onClick={openAuth}
-          >
-            Войти
-          </GlassButton>
-          <GlassButton size="default" onClick={openAuth}>
-            Попробовать бесплатно
-          </GlassButton>
-        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {isAuthenticated ? (
+            accountBadge
+          ) : (
+            <div className="hidden items-center gap-2 sm:flex">
+              <GlassButton
+                size="default"
+                className="border border-white/12 bg-transparent text-foreground"
+                onClick={openAuth}
+              >
+                Войти
+              </GlassButton>
+              <GlassButton size="default" onClick={openAuth}>
+                Попробовать бесплатно
+              </GlassButton>
+            </div>
+          )}
 
-        <button
-          type="button"
-          className="inline-flex size-10 items-center justify-center rounded-lg border border-white/10 bg-white/[0.03] text-foreground md:hidden"
-          aria-expanded={mobileOpen}
-          aria-controls="mobile-nav"
-          aria-label={mobileOpen ? "Закрыть меню" : "Открыть меню"}
-          onClick={() => setMobileOpen((v) => !v)}
-        >
-          {mobileOpen ? <X className="size-5" /> : <Menu className="size-5" />}
-        </button>
+          <button
+            type="button"
+            className="inline-flex size-10 items-center justify-center rounded-lg border border-white/10 bg-white/[0.03] text-foreground md:hidden"
+            aria-expanded={mobileOpen}
+            aria-controls="mobile-nav"
+            aria-label={mobileOpen ? "Закрыть меню" : "Открыть меню"}
+            onClick={() => setMobileOpen((v) => !v)}
+          >
+            {mobileOpen ? <X className="size-5" /> : <Menu className="size-5" />}
+          </button>
+        </div>
       </nav>
 
       <AnimatePresence>
@@ -185,17 +230,19 @@ function Navbar() {
                 </li>
               ))}
             </ul>
-            <div className="flex flex-col gap-2 border-t border-white/8 p-3 sm:hidden">
-              <GlassButton
-                className="w-full border border-white/12 bg-transparent text-foreground"
-                onClick={openAuth}
-              >
-                Войти
-              </GlassButton>
-              <GlassButton className="w-full" onClick={openAuth}>
-                Попробовать бесплатно
-              </GlassButton>
-            </div>
+            {!isAuthenticated ? (
+              <div className="flex flex-col gap-2 border-t border-white/8 p-3 sm:hidden">
+                <GlassButton
+                  className="w-full border border-white/12 bg-transparent text-foreground"
+                  onClick={openAuth}
+                >
+                  Войти
+                </GlassButton>
+                <GlassButton className="w-full" onClick={openAuth}>
+                  Попробовать бесплатно
+                </GlassButton>
+              </div>
+            ) : null}
           </motion.div>
         ) : null}
       </AnimatePresence>

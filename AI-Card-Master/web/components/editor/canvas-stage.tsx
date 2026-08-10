@@ -95,7 +95,7 @@ function CanvasQuickBar() {
   return (
     <div className="flex shrink-0 flex-col gap-2 border-b border-white/8 px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-        <p className="text-xs text-muted-foreground">
+        <p className="min-w-0 truncate text-xs text-muted-foreground">
           {t("editor.canvas")}{" "}
           <span className="font-mono text-foreground/80">
             {CANVAS_WIDTH}×{CANVAS_HEIGHT}
@@ -107,7 +107,7 @@ function CanvasQuickBar() {
       </div>
 
       <div
-        className="flex flex-wrap items-center gap-1.5 sm:justify-end"
+        className="flex max-w-full flex-wrap items-center gap-1.5 overflow-x-auto sm:justify-end"
         role="toolbar"
         aria-label={t("editor.quickBarAria")}
       >
@@ -200,10 +200,12 @@ function EditorCanvasStage() {
     const el = viewportRef.current
     if (!el) return
 
+    let alive = true
     const measure = () => {
-      const pad = 24
-      const availW = Math.max(120, el.clientWidth - pad)
-      const availH = Math.max(120, el.clientHeight - pad)
+      if (!alive) return
+      const pad = 40
+      const availW = Math.max(120, el.clientWidth - pad * 2)
+      const availH = Math.max(120, el.clientHeight - pad * 2)
       const next = Math.min(availW / CANVAS_WIDTH, availH / CANVAS_HEIGHT)
       setFitScale(Math.max(0.12, Math.min(1, next)))
     }
@@ -211,7 +213,10 @@ function EditorCanvasStage() {
     measure()
     const ro = new ResizeObserver(measure)
     ro.observe(el)
-    return () => ro.disconnect()
+    return () => {
+      alive = false
+      ro.disconnect()
+    }
   }, [])
 
   if (!projectHydrated) {
@@ -239,10 +244,11 @@ function EditorCanvasStage() {
       <div className="relative min-h-0 flex-1">
         <div
           ref={viewportRef}
-          className="flex h-full items-center justify-center overflow-auto p-3 sm:p-4"
+          className="relative h-full min-h-0 w-full min-w-0 overflow-hidden"
         >
           <CanvasErrorBoundary resetKey={activePageIndex}>
-            <EditorCanvas key={`page-${activePageIndex}`} scale={scale} />
+            {/* Stable Fabric host — page switches rebuild layers via store, not remount. */}
+            <EditorCanvas scale={scale} />
           </CanvasErrorBoundary>
         </div>
         {showDropzone ? <CanvasPhotoDropzone /> : null}
