@@ -196,3 +196,37 @@ export type RemoveBgResponse = {
   content_type: string
   cost_coins: number
 }
+
+/** POST /generations → 202 Accepted. */
+export type GenerationCreateResponse = {
+  task_id: string
+  status: string
+  status_url: string
+  idempotent_replay?: boolean
+}
+
+export type GenerationSlideStatus = {
+  slide_key: string
+  position: number
+  status: string
+  progress: number
+  provider_used?: string | null
+  result_url?: string | null
+  warning?: string | null
+  error?: { code: string; message: string; retryable: boolean } | null
+}
+
+/** GET /generations/{task_id} */
+export type GenerationStatusResponse = {
+  task_id: string
+  status: string
+  progress: number
+  provider_used?: string | null
+  warning?: string | null
+  archive_url?: string | null
+  slides: GenerationSlideStatus[]
+  error?: { code: string; message: string; retryable: boolean } | null
+  created_at: string
+  updated_at: string
+  completed_at?: string | null
+}

@@ -174,6 +174,9 @@ async def parse_generation_form(
     ] = GenerationPostProcessingMode.FAST,
     apply_text_overlays: Annotated[bool, Form()] = False,
     overlay_texts: Annotated[str | None, Form(max_length=3000)] = None,
+    preserve_subject: Annotated[bool, Form()] = True,
+    editor_cover_only: Annotated[bool, Form()] = False,
+    style_prompt: Annotated[str | None, Form(max_length=2000)] = None,
 ) -> GenerationForm:
     parsed_overlays: dict[str, str] = {}
     if overlay_texts:
@@ -206,6 +209,9 @@ async def parse_generation_form(
             post_processing_mode=post_processing_mode,
             apply_text_overlays=apply_text_overlays,
             overlay_texts=parsed_overlays,
+            preserve_subject=preserve_subject,
+            editor_cover_only=editor_cover_only,
+            style_prompt=style_prompt,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -271,6 +277,10 @@ async def create_generation(
     current_user: Annotated[User, Depends(get_current_user)],
     cabinet: Annotated[GenerationCabinetService, Depends(get_generation_cabinet_service)],
     _: Annotated[None, Depends(enforce_generation_behavioral_limit)],
+    mask_image: Annotated[
+        UploadFile | None,
+        File(description="Optional subject mask (white = product)"),
+    ] = None,
     idempotency_key: Annotated[
         str | None,
         Header(
@@ -285,10 +295,15 @@ async def create_generation(
 
     await _maybe_emulate_flagged_http_timeout(current_user)
     settings = get_settings()
+    mask_bytes: bytes | None = None
     try:
         image_bytes = await _read_upload_bytes(
             file, max_bytes=settings.generation_max_upload_bytes
         )
+        if mask_image is not None and mask_image.filename:
+            mask_bytes = await _read_upload_bytes(
+                mask_image, max_bytes=settings.generation_max_upload_bytes
+            )
         result = await cabinet.submit_from_upload(
             user=current_user,
             image_bytes=image_bytes,
@@ -299,6 +314,13 @@ async def create_generation(
             apply_text_overlays=form.apply_text_overlays,
             overlay_texts=form.overlay_texts,
             idempotency_key=idempotency_key,
+            mask_bytes=mask_bytes,
+            mask_content_type=(
+                mask_image.content_type if mask_image is not None else None
+            ),
+            preserve_subject=form.preserve_subject,
+            editor_cover_only=form.editor_cover_only,
+            style_prompt=form.style_prompt,
         )
         return result.to_response()
     except GenerationSubmissionError as exc:
@@ -324,6 +346,8 @@ async def create_generation(
         ) from exc
     finally:
         await file.close()
+        if mask_image is not None:
+            await mask_image.close()
 
 
 @router.get("/history", response_model=list[GenerationHistoryItemResponse])

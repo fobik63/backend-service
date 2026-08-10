@@ -31,12 +31,13 @@ import {
   findEditorExportCanvas,
 } from "@/lib/export/card-pack"
 import { captureFabricPagesPngBytes } from "@/lib/editor/fabric-export"
-import { generateByPrompt, getApiErrorMessage } from "@/lib/api"
+import { generateByPrompt, getApiErrorMessage, createGenerationWithMask, pollGenerationBackgroundUrl, removeBackground } from "@/lib/api"
 import {
   canvasStateToLayers,
   layersToCanvasState,
 } from "@/lib/editor/editor-document"
 import { enrichPromptWithProductContext } from "@/lib/editor/canvas-actions"
+import { buildSubjectAndMaskFromUrl } from "@/lib/editor/subject-mask"
 import {
   delay,
   getMockGenerateLayers,
@@ -121,7 +122,6 @@ function PromptBar({
   const layers = useEditorStore((s) => s.layers)
   const softbox = useEditorStore((s) => s.softbox)
   const storePreviewUrl = useEditorStore((s) => s.productPreviewUrl)
-  const backgroundPreviewUrl = useEditorStore((s) => s.backgroundPreviewUrl)
   const packSize = useEditorStore((s) => s.packSize)
   const activePageIndex = useEditorStore((s) => s.activePageIndex)
   const productMeta = useEditorStore((s) => s.productMeta)
@@ -222,16 +222,49 @@ function PromptBar({
         await runMockGenerate()
       } else {
         setBusyProgress(null)
+        let productUrl = storePreviewUrl
+        if (!productUrl) {
+          toast.error(t("editor.generateError"))
+          setBusyKind("idle")
+          setBusyProgress(null)
+          return
+        }
+
+        // 1) Isolate subject + mask (auto rembg if cutout has no alpha).
+        let subjectMask = await buildSubjectAndMaskFromUrl(productUrl)
+        if (!subjectMask.hasTransparency) {
+          setBusyKind("removing-bg")
+          const cutout = await removeBackground({ imageUrl: productUrl })
+          productUrl = cutout.cdn_url
+          useEditorStore.getState().setProductPreviewUrl(productUrl)
+          setBusyKind("generating")
+          subjectMask = await buildSubjectAndMaskFromUrl(productUrl)
+        }
+
+        // 2) Background plate only — original product stays on the client layer.
         const enriched = enrichPromptWithProductContext(trimmed, productMeta)
+        const created = await createGenerationWithMask({
+          subject: subjectMask.subject,
+          mask: subjectMask.mask,
+          stylePrompt: enriched,
+          productCategory: productMeta?.category ?? null,
+          editorCoverOnly: true,
+          preserveSubject: true,
+          applyTextOverlays: false,
+        })
+        const backgroundUrl = await pollGenerationBackgroundUrl(created.task_id)
+
+        // 3) Layout LLM for badges/text only — never replace productPreviewUrl.
         const generated = await generateByPrompt(
           enriched,
-          layersToCanvasState(layers, storePreviewUrl, backgroundPreviewUrl),
+          layersToCanvasState(layers, productUrl, backgroundUrl),
         )
+        const layoutLayers = canvasStateToLayers(generated)
         applyGenerationResult({
-          layers: canvasStateToLayers(generated),
-          backgroundPreviewUrl: generated.background_image_url
-            ? generated.background_image_url
-            : undefined,
+          layers: layoutLayers,
+          backgroundPreviewUrl: backgroundUrl,
+          // Explicitly keep the cutout; do not take any LLM image URL.
+          productPreviewUrl: productUrl,
         })
         toast.success(t("editor.generateSuccess"))
       }

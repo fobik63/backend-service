@@ -6,7 +6,12 @@ import {
   buildDefaultPackPages,
   DEFAULT_PRODUCT_CUTOUT,
   defaultSelectedLayerId,
+  FEATURE_CHIP_BG_PRESETS,
 } from "@/lib/constants/mock-editor"
+import {
+  DEFAULT_CHIP_AUTO_APPEARANCE,
+  type ChipAutoAppearance,
+} from "@/lib/editor/extract-bg-colors"
 import {
   clampPackSize,
   PRESET_PACK_SIZES,
@@ -172,6 +177,13 @@ type EditorState = {
   productPreviewUrl: string | null
   /** AI / studio background image under the product cutout (layer 1). */
   backgroundPreviewUrl: string | null
+  /**
+   * Sidebar swatches for chip bg — defaults or dominant colors from the
+   * current background image.
+   */
+  chipBgPresets: string[]
+  /** Default glass fill/text applied when creating a new badge. */
+  chipAutoAppearance: ChipAutoAppearance
   /** Bumps on every generate so Fabric rebuilds even when payload is identical. */
   generationEpoch: number
   /** Imported marketplace photos for pack / publish gallery. */
@@ -213,6 +225,13 @@ type EditorState = {
   setSoftbox: (patch: Partial<SoftboxSettings>) => void
   setProductPreviewUrl: (url: string | null) => void
   setBackgroundPreviewUrl: (url: string | null) => void
+  /** Replace chip color presets + auto appearance (from bg extraction). */
+  setChipBgPalette: (
+    presets: string[],
+    autoAppearance?: ChipAutoAppearance
+  ) => void
+  /** Restore static chip presets when background is cleared / extraction fails. */
+  resetChipBgPalette: () => void
   /** Patch layer geometry without pushing history (auto-fit, sync). */
   syncLayerGeometry: (id: string, patch: Partial<CanvasLayer>) => void
   applyImportedGallery: (urls: string[]) => void
@@ -273,6 +292,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   softbox: DEFAULT_SOFTBOX,
   productPreviewUrl: DEFAULT_PRODUCT_CUTOUT,
   backgroundPreviewUrl: null,
+  chipBgPresets: [...FEATURE_CHIP_BG_PRESETS],
+  chipAutoAppearance: { ...DEFAULT_CHIP_AUTO_APPEARANCE },
   generationEpoch: 0,
   importGalleryUrls: [],
   productMeta: { ...EMPTY_PRODUCT_META },
@@ -497,6 +518,19 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         canUndo: true,
         canRedo: false,
       }
+    }),
+  setChipBgPalette: (presets, autoAppearance) =>
+    set({
+      chipBgPresets:
+        presets.length > 0 ? [...presets] : [...FEATURE_CHIP_BG_PRESETS],
+      chipAutoAppearance: autoAppearance
+        ? { ...autoAppearance }
+        : { ...DEFAULT_CHIP_AUTO_APPEARANCE },
+    }),
+  resetChipBgPalette: () =>
+    set({
+      chipBgPresets: [...FEATURE_CHIP_BG_PRESETS],
+      chipAutoAppearance: { ...DEFAULT_CHIP_AUTO_APPEARANCE },
     }),
   syncLayerGeometry: (id, patch) =>
     set((state) => {
@@ -768,6 +802,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       softbox: DEFAULT_SOFTBOX,
       productPreviewUrl: blank ? null : DEFAULT_PRODUCT_CUTOUT,
       backgroundPreviewUrl: null,
+      chipBgPresets: [...FEATURE_CHIP_BG_PRESETS],
+      chipAutoAppearance: { ...DEFAULT_CHIP_AUTO_APPEARANCE },
       // Bump epoch on blank so Fabric rebuilds even when scene payload is empty.
       generationEpoch: blank ? state.generationEpoch + 1 : 0,
       importGalleryUrls: [],

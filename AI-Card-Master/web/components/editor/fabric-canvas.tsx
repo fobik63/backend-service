@@ -67,6 +67,7 @@ import {
   softboxOverlayStyle,
   clearSoftboxCaches,
 } from "@/lib/editor/softbox"
+import { scheduleWhenIdle } from "@/lib/editor/main-thread-yield"
 import {
   useEditorStore,
   type SoftboxSettings,
@@ -96,6 +97,8 @@ type EngineObject = FabricObject & {
    * Layer `scale` is logical; Fabric scaleX/Y = layer.scale / chipSourceScale.
    */
   chipSourceScale?: number
+  /** Source URL currently painted on the product FabricImage (blob/http/path). */
+  productSrc?: string
   /** Canvas left/top snapped before nested chip text edit / layout. */
   __badgeAbsLeft?: number
   __badgeAbsTop?: number
@@ -599,23 +602,19 @@ async function awaitFabricImageDecoded(img: FabricImage): Promise<void> {
 }
 
 async function loadImage(url: string): Promise<FabricImage> {
-  const isLocal =
-    url.startsWith("data:") ||
-    url.startsWith("blob:") ||
-    url.startsWith("/")
-  // Fabric v6: fromURL returns a Promise (callback form is legacy).
-  // Always await the Promise so badge/product bitmaps exist before Group layout.
+  // Fabric v6: fromURL returns a Promise (legacy callback form removed).
+  // Always await so the bitmap exists before layout / canvas.add.
+  // Prefer CORS-anonymous so canvas export (toDataURL) is not tainted.
   let img: FabricImage
-  if (isLocal) {
+  try {
+    img = await FabricImage.fromURL(url, { crossOrigin: "anonymous" })
+  } catch {
     img = await FabricImage.fromURL(url)
-  } else {
-    try {
-      img = await FabricImage.fromURL(url, { crossOrigin: "anonymous" })
-    } catch {
-      img = await FabricImage.fromURL(url)
-    }
   }
   await awaitFabricImageDecoded(img)
+  if (!(img.width > 0 && img.height > 0)) {
+    throw new Error(`Image decoded with empty size: ${url.slice(0, 64)}`)
+  }
   img.set({ imageSmoothing: true, objectCaching: false, dirty: true })
   return img
 }
@@ -637,6 +636,104 @@ function bringEngineObjectToFront(
   }
   if (typeof withLegacy.bringToFront === "function") {
     withLegacy.bringToFront(obj)
+  }
+}
+
+/** Keep product above the background group without covering badges/text. */
+function ensureProductAboveBackground(
+  canvas: FabricCanvas,
+  product: FabricObject
+): void {
+  const objects = canvas.getObjects()
+  const bgIdx = objects.findIndex(
+    (o) => (o as EngineObject).layerId === "layer_bg"
+  )
+  if (bgIdx < 0) {
+    bringEngineObjectToFront(canvas, product)
+    return
+  }
+  const withMove = canvas as FabricCanvas & {
+    moveObjectTo?: (object: FabricObject, index: number) => FabricCanvas
+  }
+  if (typeof withMove.moveObjectTo === "function") {
+    withMove.moveObjectTo(product, bgIdx + 1)
+    return
+  }
+  // Fallback: pull off and re-insert after background.
+  canvas.remove(product)
+  const afterBg = canvas.getObjects()
+  const bgNow = afterBg.findIndex(
+    (o) => (o as EngineObject).layerId === "layer_bg"
+  )
+  const withInsert = canvas as FabricCanvas & {
+    insertAt?: (index: number, ...objects: FabricObject[]) => number
+  }
+  if (typeof withInsert.insertAt === "function" && bgNow >= 0) {
+    withInsert.insertAt(bgNow + 1, product)
+  } else {
+    canvas.add(product)
+    bringEngineObjectToFront(canvas, product)
+  }
+}
+
+/**
+ * Load → scale → center → paint product photo (Fabric v6 Promise fromURL).
+ * Call only after the image Promise resolves so we never add an empty bitmap.
+ */
+async function placeProductPhotoOnCanvas(
+  canvas: FabricCanvas,
+  imageUrl: string
+): Promise<FabricImage | null> {
+  const img = await loadImage(imageUrl)
+  if (!isFabricCanvasAlive(canvas)) return null
+
+  const nw = Math.max(1, img.width || 1)
+  const nh = Math.max(1, img.height || 1)
+
+  // Auto-scale to ~70% of the artboard when too large or too small.
+  if (nw > CANVAS_WIDTH || nh > CANVAS_HEIGHT) {
+    img.scaleToWidth(CANVAS_WIDTH * 0.7)
+  } else {
+    const fit = Math.min(
+      (CANVAS_WIDTH * 0.7) / nw,
+      (CANVAS_HEIGHT * 0.7) / nh
+    )
+    img.scale(Math.max(0.001, fit))
+  }
+
+  // Artboard coords (not DOM canvas.width — that is the zoomed viewport).
+  img.set({
+    originX: "center",
+    originY: "center",
+    left: CANVAS_WIDTH / 2,
+    top: CANVAS_HEIGHT / 2,
+    objectCaching: false,
+    dirty: true,
+  })
+  markObject(img, "layer_product", "product")
+  ;(img as EngineObject).productSrc = imageUrl
+  img.setCoords()
+
+  const prev = findByLayerId(canvas, "layer_product")
+  if (prev && prev !== img) {
+    canvas.remove(prev)
+    try {
+      void prev.dispose()
+    } catch {
+      // Already detached.
+    }
+  }
+
+  canvas.add(img)
+  ensureProductAboveBackground(canvas, img)
+  canvas.setActiveObject(img)
+  canvas.requestRenderAll()
+  return img
+}
+
+function clearLoadingImageBusy(): void {
+  if (useEditorStore.getState().busyKind === "loading-image") {
+    useEditorStore.getState().setBusyKind("idle")
   }
 }
 
@@ -814,6 +911,10 @@ function isFabricCanvasAlive(
  * Keep Fabric softbox bitmap in sync for PNG export, but never show it live.
  * Live lighting is exclusively the CSS SoftboxLightOverlay (one formula, one path).
  * Showing both CSS + Fabric wash stacks and darkens the artboard on slider commit.
+ *
+ * Intentionally skips `requestRenderAll`: softbox opacity is 0 in live view, so a
+ * full canvas redraw would only contend with UI/GPU animations on the main thread.
+ * Export paths call `withFabricSoftboxVisibleForExport` which renders explicitly.
  */
 function applySoftboxToFabric(
   canvas: FabricCanvas,
@@ -844,7 +945,6 @@ function applySoftboxToFabric(
     img.setCoords()
     bg?.setCoords()
     canvas.backgroundColor = "rgba(0,0,0,0)"
-    if (isFabricCanvasAlive(canvas)) canvas.requestRenderAll()
   } catch (err) {
     if (process.env.NODE_ENV !== "production") {
       console.error("[fabric-canvas] softbox redraw failed", err)
@@ -1190,7 +1290,11 @@ async function buildProductObject(
       img.scale(Math.max(0.001, photoScale * defs.scale))
     }
     img.setCoords()
-    return markObject(img, layer.id, "product")
+    const marked = markObject(img, layer.id, "product")
+    if (productPreviewUrl) {
+      marked.productSrc = productPreviewUrl
+    }
+    return marked
   } catch {
     const placeholder = new Rect({
       ...common,
@@ -2437,8 +2541,8 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
 
   /**
    * Protected product bootstrap (Fabric v6 Promise fromURL).
-   * Ensures that when a product image URL exists after mount, the bitmap is
-   * loaded and painted — even if the full scene rebuild races Strict Mode.
+   * Always paints the current productPreviewUrl after full async decode —
+   * never early-return on a stale FabricImage from a previous URL.
    */
   useEffect(() => {
     if (!ready || !productPreviewUrl) return
@@ -2450,61 +2554,47 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
     const bootstrapProduct = async () => {
       try {
         const existing = findByLayerId(canvas, "layer_product")
+        const existingSrc =
+          existing instanceof FabricImage
+            ? (existing as EngineObject).productSrc
+            : undefined
+
+        // Same URL already on canvas — sync paint + clear upload busy overlay.
         if (
           existing &&
-          (existing instanceof FabricImage || existing.type === "image")
+          (existing instanceof FabricImage || existing.type === "image") &&
+          existingSrc === productPreviewUrl
         ) {
           forceCanvasVisualSync(canvas)
+          clearLoadingImageBusy()
           setLightingPaintKey((n) => n + 1)
           return
         }
 
-        const img = await loadImage(productPreviewUrl)
         if (cancelled || !isFabricCanvasAlive(fabricRef.current)) return
         const live = fabricRef.current
 
-        // Scene rebuild may have won the race — don't double-add.
-        const again = findByLayerId(live, "layer_product")
-        if (
-          again &&
-          (again instanceof FabricImage || again.type === "image")
-        ) {
-          forceCanvasVisualSync(live)
-          setLightingPaintKey((n) => n + 1)
-          return
-        }
-
-        const nw = Math.max(1, img.width || 1)
-        const nh = Math.max(1, img.height || 1)
-        const scale = Math.min(
-          (CANVAS_WIDTH * 0.7) / nw,
-          (CANVAS_HEIGHT * 0.7) / nh
-        )
-
-        // Empty canvas: paint gray studio + centered product (user-facing fix).
+        // Place immediately so upload is visible even if full scene rebuild races.
         if (live.getObjects().length === 0) {
           live.backgroundColor = "#18181b"
-          img.set({
-            left: CANVAS_WIDTH / 2,
-            top: CANVAS_HEIGHT / 2,
-            originX: "center",
-            originY: "center",
-            objectCaching: true,
-          })
-          img.scale(Math.max(0.001, scale))
-          markObject(img, "layer_product", "product")
-          live.add(img)
-          live.setActiveObject(img)
-          syncViewportRef.current()
-          forceCanvasVisualSync(live)
-          setLightingPaintKey((n) => n + 1)
+        }
+        const placed = await placeProductPhotoOnCanvas(live, productPreviewUrl)
+        if (cancelled || !isFabricCanvasAlive(fabricRef.current) || !placed) {
+          // Image may already be on canvas from a Strict Mode race — drop gray overlay.
+          if (placed) clearLoadingImageBusy()
           return
         }
 
-        // Non-empty scene without a product image — force a full rebuild.
-        sceneKeyRef.current = ""
-        setRebuildNonce((n) => n + 1)
+        fittedProductUrlRef.current = productPreviewUrl
+        syncViewportRef.current()
+        forceCanvasVisualSync(fabricRef.current)
+        clearLoadingImageBusy()
+        setLightingPaintKey((n) => n + 1)
+        // Full scene rebuild is already scheduled via productPreviewUrl → sceneKey;
+        // do not bump rebuildNonce here (that cancelled the in-flight rebuild and
+        // left the gray loading-image overlay stuck).
       } catch (err) {
+        clearLoadingImageBusy()
         if (process.env.NODE_ENV !== "production") {
           console.error("[fabric-canvas] product bootstrap failed", err)
         }
@@ -2534,6 +2624,10 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
       storeLayers.length > 0 &&
       !canvasMissingInfographicLayers(canvas, storeLayers)
     ) {
+      // Safety: never leave the gray upload overlay stuck on a skipped rebuild.
+      if (useEditorStore.getState().busyKind === "loading-image") {
+        setBusyKind("idle")
+      }
       return
     }
 
@@ -2567,31 +2661,20 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
           // Keep product visible even before layers hydrate (UUID design load).
           if (productUrl) {
             try {
-              const img = await loadImage(productUrl)
-              if (cancelled || !isFabricCanvasAlive(fabricRef.current)) return
-              const nw = Math.max(1, img.width || 1)
-              const nh = Math.max(1, img.height || 1)
-              const fit = Math.min(
-                (CANVAS_WIDTH * 0.7) / nw,
-                (CANVAS_HEIGHT * 0.7) / nh
-              )
-              img.set({
-                left: CANVAS_WIDTH / 2,
-                top: CANVAS_HEIGHT / 2,
-                originX: "center",
-                originY: "center",
-                objectCaching: true,
-              })
-              img.scale(Math.max(0.001, fit))
-              markObject(img, "layer_product", "product")
-              canvas.add(img)
-              canvas.setActiveObject(img)
+              const placed = await placeProductPhotoOnCanvas(canvas, productUrl)
+              if (placed) fittedProductUrlRef.current = productUrl
             } catch {
               // Preview optional while layers are still empty.
             }
           }
 
-          if (cancelled || !isFabricCanvasAlive(canvas)) return
+          if (cancelled || !isFabricCanvasAlive(canvas)) {
+            // Don't leave the gray "loading-image" overlay stuck on cancel races.
+            if (useEditorStore.getState().busyKind === "loading-image") {
+              setBusyKind("idle")
+            }
+            return
+          }
           canvas.requestRenderAll()
           syncViewportRef.current()
           forceCanvasVisualSync(canvas)
@@ -2688,7 +2771,12 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
             disposeBuiltObjects(built)
             return
           }
-          if (product) built.push(product)
+          if (product) {
+            if (product instanceof FabricImage && productUrl) {
+              ;(product as EngineObject).productSrc = productUrl
+            }
+            built.push(product)
+          }
         }
 
         // 2) Badges/texts only after product bitmap is ready (+ fonts for chips).
@@ -2776,8 +2864,24 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
         }
         built.length = 0
 
+        const productBeforeBadges =
+          findByLayerId(canvas, "layer_product") ??
+          canvas
+            .getObjects()
+            .find((o) => (o as EngineObject).layerRole === "product")
+        if (productBeforeBadges) {
+          ensureProductAboveBackground(canvas, productBeforeBadges)
+          productBeforeBadges.set({ dirty: true })
+          productBeforeBadges.setCoords()
+        }
+
         await commitBadgeGroupsToCanvas(canvas, badgeCommitList)
-        if (cancelled || !isFabricCanvasAlive(canvas)) return
+        if (cancelled || !isFabricCanvasAlive(canvas)) {
+          if (useEditorStore.getState().busyKind === "loading-image") {
+            setBusyKind("idle")
+          }
+          return
+        }
 
         const productObj =
           findByLayerId(canvas, "layer_product") ??
@@ -2786,6 +2890,7 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
             .find((o) => (o as EngineObject).layerRole === "product")
 
         if (productObj instanceof FabricImage || productObj?.type === "image") {
+          ensureProductAboveBackground(canvas, productObj)
           productObj.setCoords()
         }
 
@@ -2903,17 +3008,16 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
     return () => window.clearTimeout(timer)
   }, [ready, layers, sceneKey])
 
-  // Softbox: CSS SoftboxLightOverlay is the live light. Debounced Fabric paint
-  // keeps the hidden bitmap export-ready — no visual mode switch on slider commit.
-  // Runs immediately on mount/ready from store softbox — never waits for slider onChange.
+  // Softbox: CSS SoftboxLightOverlay is the live light. Debounced + idle Fabric
+  // paint keeps the hidden bitmap export-ready without blocking 3D/UI animations.
+  // Runs on mount/ready from store softbox — never waits for slider onChange.
   useEffect(() => {
     if (!ready) return
 
     let debounceTimer = 0
-    let raf = 0
+    let cancelIdle: (() => void) | null = null
 
     const runApply = () => {
-      raf = 0
       try {
         const canvas = fabricRef.current
         if (!isFabricCanvasAlive(canvas)) return
@@ -2927,19 +3031,18 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
 
     const schedule = (immediate: boolean) => {
       window.clearTimeout(debounceTimer)
-      if (raf) {
-        cancelAnimationFrame(raf)
-        raf = 0
-      }
+      cancelIdle?.()
+      cancelIdle = null
+
       if (immediate) {
-        // Synchronously apply current lighting, then rAF for a second paint.
-        runApply()
-        raf = requestAnimationFrame(runApply)
+        // First paint soon, but still yield so WebGL/CSS animations keep a frame.
+        cancelIdle = scheduleWhenIdle(runApply, { timeoutMs: 48 })
         return
       }
+
       debounceTimer = window.setTimeout(() => {
         debounceTimer = 0
-        raf = requestAnimationFrame(runApply)
+        cancelIdle = scheduleWhenIdle(runApply, { timeoutMs: 160 })
       }, SOFTBOX_UPDATE_MS)
     }
 
@@ -2958,7 +3061,7 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
     return () => {
       unsub()
       window.clearTimeout(debounceTimer)
-      if (raf) cancelAnimationFrame(raf)
+      cancelIdle?.()
     }
   }, [ready, lightingPaintKey])
 

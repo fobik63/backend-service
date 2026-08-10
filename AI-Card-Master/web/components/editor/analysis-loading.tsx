@@ -99,9 +99,10 @@ function AnalysisStatusBar({
       >
         {pct != null ? (
           <motion.div
-            className={cn("h-full rounded-full", styles.bar)}
+            className={cn("gpu-anim h-full w-full origin-left rounded-full", styles.bar)}
             initial={false}
-            animate={{ width: `${pct}%` }}
+            animate={{ scaleX: Math.min(1, Math.max(0, pct / 100)) }}
+            style={{ transformOrigin: "left center" }}
             transition={{ duration: 0.45, ease: "easeOut" }}
           />
         ) : (

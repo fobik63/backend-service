@@ -1,9 +1,12 @@
 export {
   apiClient,
+  createGenerationWithMask,
   deleteDesign,
   generateByPrompt,
   getDesign,
+  getGenerationStatus,
   listDesigns,
+  pollGenerationBackgroundUrl,
   removeBackground,
   saveDesign,
 } from "./client";

@@ -14,6 +14,8 @@ import {
 import { IS_MOCK } from "@/lib/constants/mock";
 import type {
   CanvasStateDTO,
+  GenerationCreateResponse,
+  GenerationStatusResponse,
   RemoveBgResponse,
   SavedDesignDTO,
   SavedDesignListResponse,
@@ -313,4 +315,150 @@ export async function removeBackground(params: {
   );
 
   return data;
+}
+
+export type CreateGenerationWithMaskParams = {
+  subject: Blob
+  mask: Blob
+  stylePrompt?: string
+  productCategory?: string | null
+  editorCoverOnly?: boolean
+  preserveSubject?: boolean
+  applyTextOverlays?: boolean
+  idempotencyKey?: string
+}
+
+/** POST /generations with Original Subject + Mask (editor background plate). */
+export async function createGenerationWithMask(
+  params: CreateGenerationWithMaskParams,
+): Promise<GenerationCreateResponse> {
+  if (IS_MOCK) {
+    const { delay } = await import("@/lib/constants/mock")
+    await delay(400)
+    void params
+    return {
+      task_id: "mock-generation-task",
+      status: "queued",
+      status_url: "/api/v1/generations/mock-generation-task",
+      idempotent_replay: false,
+    }
+  }
+
+  const form = new FormData()
+  form.append("file", params.subject, "subject.png")
+  form.append("mask_image", params.mask, "mask.png")
+  form.append("editor_cover_only", String(params.editorCoverOnly ?? true))
+  form.append("preserve_subject", String(params.preserveSubject ?? true))
+  form.append("apply_text_overlays", String(params.applyTextOverlays ?? false))
+  if (params.stylePrompt?.trim()) {
+    form.append("style_prompt", params.stylePrompt.trim())
+  }
+  if (params.productCategory?.trim()) {
+    form.append("product_category", params.productCategory.trim())
+  }
+
+  const headers: Record<string, string> = {}
+  if (params.idempotencyKey) {
+    headers["Idempotency-Key"] = params.idempotencyKey
+  }
+
+  const { data } = await apiClient.post<GenerationCreateResponse>(
+    "/generations",
+    form,
+    {
+      headers: {
+        ...headers,
+        "Content-Type": "multipart/form-data",
+      },
+      timeout: LONG_RUNNING_TIMEOUT_MS,
+      skipErrorToast: true,
+      transformRequest: [
+        (body, reqHeaders) => {
+          if (
+            typeof FormData !== "undefined" &&
+            body instanceof FormData &&
+            reqHeaders
+          ) {
+            delete reqHeaders["Content-Type"]
+          }
+          return body
+        },
+      ],
+    },
+  )
+  return data
+}
+
+/** GET /generations/{taskId} */
+export async function getGenerationStatus(
+  taskId: string,
+  signal?: AbortSignal,
+): Promise<GenerationStatusResponse> {
+  if (IS_MOCK) {
+    const { delay, MOCK_CARD_IMAGE } = await import("@/lib/constants/mock")
+    await delay(300)
+    if (signal?.aborted) {
+      throw new DOMException("Aborted", "AbortError")
+    }
+    return {
+      task_id: taskId,
+      status: "completed",
+      progress: 100,
+      slides: [
+        {
+          slide_key: "editor_bg",
+          position: 1,
+          status: "completed",
+          progress: 100,
+          result_url: MOCK_CARD_IMAGE,
+        },
+      ],
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      completed_at: new Date().toISOString(),
+    }
+  }
+
+  const { data } = await apiClient.get<GenerationStatusResponse>(
+    `/generations/${encodeURIComponent(taskId)}`,
+    { signal, skipErrorToast: true },
+  )
+  return data
+}
+
+const GENERATION_POLL_MS = 2_000
+const GENERATION_POLL_TIMEOUT_MS = 180_000
+
+/** Poll until the editor background slide (or any completed slide) has a URL. */
+export async function pollGenerationBackgroundUrl(
+  taskId: string,
+  options?: { signal?: AbortSignal; timeoutMs?: number },
+): Promise<string> {
+  const timeoutMs = options?.timeoutMs ?? GENERATION_POLL_TIMEOUT_MS
+  const started = Date.now()
+  while (Date.now() - started < timeoutMs) {
+    if (options?.signal?.aborted) {
+      throw new DOMException("Aborted", "AbortError")
+    }
+    const status = await getGenerationStatus(taskId, options?.signal)
+    if (status.status === "failed") {
+      const message =
+        status.error?.message ||
+        status.slides.find((slide) => slide.error)?.error?.message ||
+        "Generation failed."
+      throw new Error(message)
+    }
+    const editorSlide =
+      status.slides.find((slide) => slide.slide_key === "editor_bg") ||
+      status.slides.find((slide) => slide.slide_key === "cover") ||
+      status.slides[0]
+    if (
+      editorSlide?.result_url &&
+      (editorSlide.status === "completed" || status.status === "completed")
+    ) {
+      return editorSlide.result_url
+    }
+    await new Promise((resolve) => setTimeout(resolve, GENERATION_POLL_MS))
+  }
+  throw new Error("Generation timed out while waiting for the background plate.")
 }

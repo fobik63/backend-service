@@ -31,6 +31,7 @@ from app.domain.generation import (
     GenerationErrorInfo,
     GenerationJobStatus,
     GenerationPostProcessingMode,
+    GenerationWorkItem,
     OutboxEventType,
     ProviderWebhookEvent,
     SlideStatus,
@@ -58,6 +59,7 @@ from app.services.product_compositor import (
 )
 from app.services.series_generator import (
     DEFAULT_SLIDE_OVERLAY_TEXTS,
+    EDITOR_BG_SLIDE_KEY,
     SLIDE_OVERLAY_STYLES,
 )
 
@@ -124,6 +126,7 @@ class GenerationApplicationService:
                 work.input_object_key,
                 max_bytes=self._settings.generation_max_upload_bytes,
             )
+            product_mask = await self._load_optional_product_mask(work)
             for slide in work.slides:
                 if slide.status == SlideStatus.COMPLETED or slide.result_object_key:
                     continue
@@ -131,6 +134,7 @@ class GenerationApplicationService:
                     job_id=job_id,
                     slide=slide,
                     product_image=product_image,
+                    product_mask=product_mask,
                     subscription_status=work.subscription_status,
                     engine_mode=work.engine_mode,
                     post_processing_mode=work.post_processing_mode,
@@ -139,6 +143,7 @@ class GenerationApplicationService:
                     ),
                     apply_text_overlays=work.apply_text_overlays,
                     overlay_texts=work.overlay_texts,
+                    preserve_subject=work.preserve_subject,
                 )
         except Exception as exc:
             await self._fail_job(job_id, exc)
@@ -360,10 +365,12 @@ class GenerationApplicationService:
                 work.input_object_key,
                 max_bytes=self._settings.generation_max_upload_bytes,
             )
+            product_mask = await self._load_optional_product_mask(work)
             await self._submit_or_fallback_slide(
                 job_id=work.id,
                 slide=slide,
                 product_image=product_image,
+                product_mask=product_mask,
                 subscription_status=work.subscription_status,
                 engine_mode=work.engine_mode,
                 post_processing_mode=work.post_processing_mode,
@@ -372,6 +379,7 @@ class GenerationApplicationService:
                 ),
                 apply_text_overlays=work.apply_text_overlays,
                 overlay_texts=work.overlay_texts,
+                preserve_subject=work.preserve_subject,
             )
             return
         if event.result_url is None:
@@ -383,6 +391,7 @@ class GenerationApplicationService:
                 work.input_object_key,
                 max_bytes=self._settings.generation_max_upload_bytes,
             )
+            product_mask = await self._load_optional_product_mask(work)
             slide = next(
                 (item for item in work.slides if item.id == attempt.slide_id), None
             )
@@ -390,11 +399,13 @@ class GenerationApplicationService:
                 return
             optimized = await self._post_process(
                 product_image=product_image,
+                product_mask=product_mask,
                 generated_background=generated,
                 slide=slide,
                 apply_text_overlays=work.apply_text_overlays,
                 overlay_texts=work.overlay_texts,
                 post_processing_mode=work.post_processing_mode,
+                preserve_subject=work.preserve_subject,
             )
             await self._store_slide(
                 job_id=work.id,
@@ -418,6 +429,7 @@ class GenerationApplicationService:
                     work.input_object_key,
                     max_bytes=self._settings.generation_max_upload_bytes,
                 ),
+                product_mask=await self._load_optional_product_mask(work),
                 subscription_status=work.subscription_status,
                 engine_mode=work.engine_mode,
                 post_processing_mode=work.post_processing_mode,
@@ -426,7 +438,30 @@ class GenerationApplicationService:
                 ),
                 apply_text_overlays=work.apply_text_overlays,
                 overlay_texts=work.overlay_texts,
+                preserve_subject=work.preserve_subject,
             )
+
+    async def _load_optional_product_mask(
+        self, work: GenerationWorkItem
+    ) -> bytes | None:
+        mask_key = work.mask_object_key
+        if not mask_key:
+            return None
+        try:
+            return await self._storage.download(
+                mask_key,
+                max_bytes=self._settings.generation_max_upload_bytes,
+            )
+        except Exception:
+            # Missing optional mask must not fail the generation job; compositor
+            # falls back to alpha / auto mask extraction.
+            logger.info(
+                "Optional product mask unavailable for job %s key=%s",
+                work.id,
+                mask_key,
+                exc_info=True,
+            )
+            return None
 
     async def _submit_or_fallback_slide(
         self,
@@ -434,12 +469,14 @@ class GenerationApplicationService:
         job_id: UUID,
         slide: SlideWorkItem,
         product_image: bytes,
+        product_mask: bytes | None,
         subscription_status: str,
         engine_mode: GenerationEngineMode,
         post_processing_mode: GenerationPostProcessingMode,
         excluded_providers: frozenset[str],
         apply_text_overlays: bool,
         overlay_texts: dict[str, str],
+        preserve_subject: bool,
     ) -> None:
         requested_midjourney = engine_mode in {
             GenerationEngineMode.STANDARD,
@@ -519,11 +556,13 @@ class GenerationApplicationService:
             )
             optimized = await self._post_process(
                 product_image=product_image,
+                product_mask=product_mask,
                 generated_background=generated,
                 slide=slide,
                 apply_text_overlays=apply_text_overlays,
                 overlay_texts=overlay_texts,
                 post_processing_mode=post_processing_mode,
+                preserve_subject=preserve_subject,
             )
             await self._store_slide(
                 job_id=job_id,
@@ -540,11 +579,13 @@ class GenerationApplicationService:
         self,
         *,
         product_image: bytes,
+        product_mask: bytes | None,
         generated_background: bytes,
         slide: SlideWorkItem,
         apply_text_overlays: bool,
         overlay_texts: dict[str, str],
         post_processing_mode: GenerationPostProcessingMode,
+        preserve_subject: bool,
     ) -> OptimizedImage:
         if _is_model_vto_slide(slide):
             final_model_bytes = await self._apply_face_fix_if_requested(
@@ -553,9 +594,20 @@ class GenerationApplicationService:
             )
             return await self._image_pipeline.optimize_lossless(final_model_bytes)
 
+        # Editor background plate: keep the AI plate only so Fabric can stack the
+        # original subject cutout + vector badges on top without double-compositing.
+        if _is_editor_background_slide(slide) or not preserve_subject:
+            final_bytes = generated_background
+            final_bytes = await self._apply_face_fix_if_requested(
+                final_bytes,
+                post_processing_mode=post_processing_mode,
+            )
+            return await self._image_pipeline.optimize_lossless(final_bytes)
+
         composited = await composite_product_on_background(
             product_image=product_image,
             background_image=generated_background,
+            product_mask=product_mask,
         )
         final_bytes = composited.image_bytes
         if self._settings.smart_inpainting_edge_pass_enabled:
@@ -720,6 +772,10 @@ def _normalise_error(exc: Exception) -> GenerationErrorInfo:
 
 def _is_model_vto_slide(slide: SlideWorkItem) -> bool:
     return slide.slide_key == MODEL_VTO_SLIDE_KEY
+
+
+def _is_editor_background_slide(slide: SlideWorkItem) -> bool:
+    return slide.slide_key == EDITOR_BG_SLIDE_KEY
 
 
 def _render_mode_for_slide(

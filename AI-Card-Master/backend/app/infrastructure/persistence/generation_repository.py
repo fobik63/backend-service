@@ -92,6 +92,8 @@ class GenerationRepository:
         apply_text_overlays: bool,
         overlay_texts: Mapping[str, str],
         slide_tasks: Sequence[SeriesTask],
+        mask_object_key: str | None = None,
+        preserve_subject: bool = True,
     ) -> tuple[GenerationJob, bool]:
         """Atomically debit, create the aggregate, and add its outbox command."""
 
@@ -144,6 +146,8 @@ class GenerationRepository:
                 engine_mode=engine_mode.value,
                 post_processing_mode=post_processing_mode.value,
                 input_object_key=input_object_key,
+                mask_object_key=mask_object_key,
+                preserve_subject=preserve_subject,
                 apply_text_overlays=apply_text_overlays,
                 overlay_texts=dict(overlay_texts) or None,
                 coin_charged=settings.generation_charge_coins,
@@ -324,6 +328,8 @@ class GenerationRepository:
             user_id=job.user_id,
             status=GenerationJobStatus(job.status),
             input_object_key=job.input_object_key,
+            mask_object_key=job.mask_object_key,
+            preserve_subject=bool(getattr(job, "preserve_subject", True)),
             product_category=job.product_category,
             subscription_status=job.subscription_status,
             engine_mode=GenerationEngineMode(job.engine_mode),

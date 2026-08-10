@@ -295,14 +295,15 @@ function ImportPublishDialog({
       return
     }
     let created = 0
+    const auto = useEditorStore.getState().chipAutoAppearance
     for (const benefit of seoBenefits) {
       const result = addBadgeToCanvas({
         label: benefit.slice(0, 48),
-        bgColor: "rgba(15,17,21,0.55)",
+        bgColor: auto.bgColor,
         iconId: "icon_spark",
         variant: "glass",
         blur: 12,
-        textColor: "#FFFFFF",
+        textColor: auto.textColor,
         borderRadius: 14,
       })
       if (result.created) created += 1

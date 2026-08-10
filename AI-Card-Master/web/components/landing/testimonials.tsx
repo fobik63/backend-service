@@ -114,6 +114,16 @@ function TestimonialCard({ testimonial }: { testimonial: Testimonial }) {
   )
 }
 
+/** Pad a short row so one marquee half stays wider than typical viewports. */
+function padMarqueeTrack(items: Testimonial[], minCards = 8): Testimonial[] {
+  if (items.length === 0) return []
+  const track = [...items]
+  while (track.length < minCards) {
+    track.push(...items)
+  }
+  return track
+}
+
 function MarqueeRow({
   items,
   direction,
@@ -123,31 +133,30 @@ function MarqueeRow({
   direction: "left" | "right"
   durationSec: number
 }) {
-  /**
-   * Always render two identical halves so SSR and client markup match.
-   * Animation pause for prefers-reduced-motion is handled in CSS
-   * (`.marquee-row` / `@media (prefers-reduced-motion: reduce)`).
-   */
-  const loop = [...items, ...items]
+  /** Two equal halves → translate3d(±50%) loops without a visible seam. */
+  const track = padMarqueeTrack(items)
 
   return (
     <div className="marquee-row marquee-fade-edges relative overflow-hidden py-1">
       <div
-        className={cn(
-          "flex w-max gap-4 will-change-transform",
-          direction === "left"
-            ? "animate-marquee-left"
-            : "animate-marquee-right"
-        )}
+        className="marquee-track"
+        data-direction={direction}
         style={
           {
             "--marquee-duration": `${durationSec}s`,
           } as CSSProperties
         }
       >
-        {loop.map((item, index) => (
-          <TestimonialCard key={`${item.id}-${index}`} testimonial={item} />
-        ))}
+        <div className="marquee-track-half">
+          {track.map((item, index) => (
+            <TestimonialCard key={`${item.id}-a-${index}`} testimonial={item} />
+          ))}
+        </div>
+        <div className="marquee-track-half" aria-hidden="true">
+          {track.map((item, index) => (
+            <TestimonialCard key={`${item.id}-b-${index}`} testimonial={item} />
+          ))}
+        </div>
       </div>
     </div>
   )
@@ -157,8 +166,9 @@ function TestimonialsSection() {
   const sectionRef = useRef<HTMLElement>(null)
   const inView = useInView(sectionRef, { once: true, amount: 0.15 })
 
-  const topRow = TESTIMONIALS
-  const bottomRow = [...TESTIMONIALS].reverse()
+  const mid = Math.ceil(TESTIMONIALS.length / 2)
+  const topRow = TESTIMONIALS.slice(0, mid)
+  const bottomRow = TESTIMONIALS.slice(mid)
 
   return (
     <section
@@ -182,16 +192,13 @@ function TestimonialsSection() {
         </div>
       </div>
 
-      <motion.div
+      <div
         className="flex flex-col gap-4"
-        initial={{ opacity: 0 }}
-        animate={inView ? { opacity: 1 } : { opacity: 0 }}
-        transition={{ delay: 0.15, duration: 0.55 }}
         aria-label="Лента отзывов"
       >
-        <MarqueeRow items={topRow} direction="left" durationSec={42} />
-        <MarqueeRow items={bottomRow} direction="right" durationSec={48} />
-      </motion.div>
+        <MarqueeRow items={topRow} direction="left" durationSec={35} />
+        <MarqueeRow items={bottomRow} direction="right" durationSec={40} />
+      </div>
     </section>
   )
 }

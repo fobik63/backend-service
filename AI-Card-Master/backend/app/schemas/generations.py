@@ -104,6 +104,9 @@ class GenerationForm(StrictAPIModel):
     post_processing_mode: GenerationPostProcessingMode = GenerationPostProcessingMode.FAST
     apply_text_overlays: bool = False
     overlay_texts: dict[str, str] = Field(default_factory=dict)
+    preserve_subject: bool = True
+    editor_cover_only: bool = False
+    style_prompt: str | None = Field(default=None, max_length=2000)
 
     @field_validator("engine_mode", mode="before")
     @classmethod
@@ -121,6 +124,14 @@ class GenerationForm(StrictAPIModel):
         if value is None:
             return None
         cleaned = value.strip()
+        return cleaned or None
+
+    @field_validator("style_prompt")
+    @classmethod
+    def clean_style_prompt(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = " ".join(value.strip().split())
         return cleaned or None
 
     @field_validator("overlay_texts")

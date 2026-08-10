@@ -31,7 +31,6 @@ import {
 import { Input } from "@/components/ui/input"
 import {
   BADGE_PRESETS,
-  FEATURE_CHIP_BG_PRESETS,
   FEATURE_CHIP_ICONS,
 } from "@/lib/constants/mock-editor"
 import {
@@ -44,6 +43,7 @@ import {
   flushChipLiveIcon,
   setChipAppearanceScrubbing,
 } from "@/lib/editor/chip-live"
+import { contrastTextForBg } from "@/lib/editor/extract-bg-colors"
 import { useI18n } from "@/lib/i18n"
 import { useEditorStore } from "@/lib/store/editor-store"
 import type { FeatureChipDraft } from "@/types/canvas"
@@ -69,16 +69,7 @@ const TEXT_COLOR_PRESETS = [
 ] as const
 
 function contrastTextColor(bg: string): string {
-  const hex = bg.toLowerCase()
-  if (
-    hex === "#ffffff" ||
-    hex === "#fff" ||
-    hex === "#f59e0b" ||
-    hex.startsWith("rgba")
-  ) {
-    return hex.startsWith("rgba") ? "#FFFFFF" : "#0F1115"
-  }
-  return "#FFFFFF"
+  return contrastTextForBg(bg)
 }
 
 function clamp(n: number, min: number, max: number) {
@@ -142,7 +133,7 @@ function ColorSwatchRow({
                 onCommit?.()
               }}
               className={cn(
-                "size-7 rounded-md ring-1 ring-white/15 transition-transform hover:scale-105 disabled:pointer-events-none disabled:opacity-40",
+                "badge-element is-scale-hover size-7 rounded-md ring-1 ring-white/15 transition-transform disabled:pointer-events-none disabled:opacity-40",
                 selected && "ring-2 ring-emerald"
               )}
               style={{ backgroundColor: hex }}
@@ -154,10 +145,10 @@ function ColorSwatchRow({
         <label
           title={pickerValue}
           className={cn(
-            "relative flex size-7 items-center justify-center overflow-hidden rounded-md ring-1 ring-white/15 transition-transform",
+            "badge-element relative flex size-7 items-center justify-center overflow-hidden rounded-md ring-1 ring-white/15 transition-transform",
             disabled
               ? "pointer-events-none opacity-40"
-              : "cursor-pointer hover:scale-105",
+              : "is-scale-hover cursor-pointer",
             isCustom && "ring-2 ring-emerald"
           )}
         >
@@ -303,6 +294,7 @@ function BadgeParamsSection() {
   const layers = useEditorStore((s) => s.layers)
   const selectedLayerId = useEditorStore((s) => s.selectedLayerId)
   const toolsPanelFocus = useEditorStore((s) => s.toolsPanelFocus)
+  const chipBgPresets = useEditorStore((s) => s.chipBgPresets)
   const updateLayer = useEditorStore((s) => s.updateLayer)
   const beginHistoryTransaction = useEditorStore(
     (s) => s.beginHistoryTransaction
@@ -550,7 +542,7 @@ function BadgeParamsSection() {
         <ColorSwatchRow
           label={t("editor.badgeBgColor")}
           value={bgDraft}
-          presets={FEATURE_CHIP_BG_PRESETS}
+          presets={chipBgPresets}
           disabled={disabled}
           onChange={(bgColor) =>
             scrubChipAppearance({

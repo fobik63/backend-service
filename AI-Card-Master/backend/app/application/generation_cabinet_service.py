@@ -125,6 +125,11 @@ class GenerationCabinetService:
         apply_text_overlays: bool,
         overlay_texts: Mapping[str, str],
         idempotency_key: str | None,
+        mask_bytes: bytes | None = None,
+        mask_content_type: str | None = None,
+        preserve_subject: bool = True,
+        editor_cover_only: bool = False,
+        style_prompt: str | None = None,
     ) -> GenerationCreateResult:
         """Receive bytes → validate → S3 → durable job → response DTO."""
 
@@ -157,9 +162,20 @@ class GenerationCabinetService:
             image_bytes, claimed_content_type
         )
 
+        mask_object_key: str | None = None
+        validated_mask: bytes | None = None
+        mask_mime = "image/png"
+        if mask_bytes is not None:
+            validated_mask = read_bounded_bytes(
+                mask_bytes, max_bytes=settings.generation_max_upload_bytes
+            )
+            mask_mime, _mask_ext = await validate_image(
+                validated_mask, mask_content_type
+            )
+
         input_key = f"generation-inputs/{user.id}/{uuid4().hex}{extension}"
         storage = None
-        uploaded = False
+        uploaded_keys: list[str] = []
         try:
             storage = get_s3_storage()
             await storage.upload_bytes(
@@ -168,12 +184,34 @@ class GenerationCabinetService:
                 content_type=mime_type,
                 presign=False,
             )
-            uploaded = True
+            uploaded_keys.append(input_key)
 
-            slide_tasks = await self._slide_tasks_with_brand(
-                user_id=user.id,
-                slide_tasks=await build_series_tasks_cached(product_category),
-            )
+            if validated_mask is not None:
+                from app.services.product_compositor import companion_mask_object_key
+
+                mask_object_key = companion_mask_object_key(input_key)
+                await storage.upload_bytes(
+                    object_key=mask_object_key,
+                    data=validated_mask,
+                    content_type=mask_mime,
+                    presign=False,
+                )
+                uploaded_keys.append(mask_object_key)
+
+            if editor_cover_only:
+                from app.services.series_generator import build_editor_background_task
+
+                slide_tasks = await self._slide_tasks_with_brand(
+                    user_id=user.id,
+                    slide_tasks=(
+                        build_editor_background_task(style_prompt=style_prompt),
+                    ),
+                )
+            else:
+                slide_tasks = await self._slide_tasks_with_brand(
+                    user_id=user.id,
+                    slide_tasks=await build_series_tasks_cached(product_category),
+                )
             job, created = await self._repository.create_job(
                 user_id=user.id,
                 idempotency_key=idempotency_key,
@@ -185,9 +223,12 @@ class GenerationCabinetService:
                 apply_text_overlays=apply_text_overlays,
                 overlay_texts=overlay_texts,
                 slide_tasks=slide_tasks,
+                mask_object_key=mask_object_key,
+                preserve_subject=preserve_subject,
             )
             if not created:
-                await self._best_effort_delete(storage, input_key)
+                for key in uploaded_keys:
+                    await self._best_effort_delete(storage, key)
             if created:
                 await invalidate_generation_history_cache(user.id)
             return GenerationCreateResult(
@@ -196,8 +237,9 @@ class GenerationCabinetService:
                 idempotent_replay=not created,
             )
         except BillingValidationError as exc:
-            if uploaded and storage is not None:
-                await self._best_effort_delete(storage, input_key)
+            for key in uploaded_keys:
+                if storage is not None:
+                    await self._best_effort_delete(storage, key)
             raise GenerationPaymentRequiredError(str(exc)) from exc
         except S3StorageConfigurationError as exc:
             raise GenerationStorageUnavailableError(
@@ -207,16 +249,21 @@ class GenerationCabinetService:
             logger.exception(
                 "Generation input upload failed user_id=%s", user.id
             )
+            for key in uploaded_keys:
+                if storage is not None:
+                    await self._best_effort_delete(storage, key)
             raise GenerationStorageUnavailableError(
                 "Object storage is temporarily unavailable."
             ) from exc
         except GenerationSubmissionError:
-            if uploaded and storage is not None:
-                await self._best_effort_delete(storage, input_key)
+            for key in uploaded_keys:
+                if storage is not None:
+                    await self._best_effort_delete(storage, key)
             raise
         except Exception as exc:
-            if uploaded and storage is not None:
-                await self._best_effort_delete(storage, input_key)
+            for key in uploaded_keys:
+                if storage is not None:
+                    await self._best_effort_delete(storage, key)
             logger.exception(
                 "Could not create durable generation job user_id=%s", user.id
             )

@@ -77,6 +77,26 @@ class SeriesTask:
     user_text: str
 
 
+EDITOR_BG_SLIDE_KEY = "editor_bg"
+
+_DEFAULT_EDITOR_BG_PROMPT = (
+    "Generate a clean background plate for product compositing. "
+    "Leave the central product area empty, preserve realistic light direction and "
+    "ground plane, no text, no logos, no duplicate products."
+)
+
+
+def build_editor_background_task(*, style_prompt: str | None = None) -> SeriesTask:
+    """Single-slide task used by the Fabric editor (background plate only)."""
+
+    prompt = (style_prompt or "").strip() or _DEFAULT_EDITOR_BG_PROMPT
+    return SeriesTask(
+        slide_key=EDITOR_BG_SLIDE_KEY,
+        selected_style="background plate for editor compositing",
+        user_text=prompt,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class SeriesResult:
     """Generated slide payload returned to caller."""

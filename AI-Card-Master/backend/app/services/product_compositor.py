@@ -35,10 +35,26 @@ class CompositedImage(BaseModel):
     mask_coverage: float = Field(gt=0.0, le=1.0)
 
 
+def companion_mask_object_key(input_object_key: str) -> str:
+    """Deterministic S3 key for a client-supplied subject mask beside the input."""
+
+    cleaned = input_object_key.strip().replace("\\", "/")
+    if not cleaned:
+        raise ProductCompositorError("input_object_key must not be empty.")
+    if "/" in cleaned:
+        directory, filename = cleaned.rsplit("/", 1)
+    else:
+        directory, filename = "", cleaned
+    stem = filename.rsplit(".", 1)[0] if "." in filename else filename
+    suffix = f"{stem}.mask.png"
+    return f"{directory}/{suffix}" if directory else suffix
+
+
 async def composite_product_on_background(
     *,
     product_image: bytes,
     background_image: bytes,
+    product_mask: bytes | None = None,
     options: CompositingOptions | None = None,
 ) -> CompositedImage:
     """Composite the original product over an AI-generated background."""
@@ -47,6 +63,7 @@ async def composite_product_on_background(
         _composite_sync,
         bytes(product_image),
         bytes(background_image),
+        bytes(product_mask) if product_mask is not None else None,
         options or CompositingOptions(),
     )
 
@@ -54,6 +71,7 @@ async def composite_product_on_background(
 def _composite_sync(
     product_bytes: bytes,
     background_bytes: bytes,
+    product_mask_bytes: bytes | None,
     options: CompositingOptions,
 ) -> CompositedImage:
     try:
@@ -68,7 +86,10 @@ def _composite_sync(
             "Product or background image cannot be decoded."
         ) from exc
 
-    mask = _extract_product_mask(product)
+    if product_mask_bytes is not None:
+        mask = _load_client_mask(product_mask_bytes, product.size)
+    else:
+        mask = _extract_product_mask(product)
     bbox = mask.getbbox()
     if bbox is None:
         raise ProductCompositorError("Could not extract a non-empty product mask.")
@@ -144,6 +165,37 @@ def _composite_sync(
         height=canvas.height,
         mask_coverage=max(0.000001, min(float(coverage), 1.0)),
     )
+
+
+def _load_client_mask(
+    mask_bytes: bytes, product_size: tuple[int, int]
+) -> Image.Image:
+    """Decode a client mask (white = product). Resize to the product canvas."""
+
+    try:
+        with Image.open(io.BytesIO(mask_bytes)) as mask_source:
+            mask_source.load()
+            mask_image = ImageOps.exif_transpose(mask_source)
+            if mask_image.mode in {"RGBA", "LA"}:
+                # Prefer explicit luminance; fall back to alpha when the plate is
+                # a transparent cutout exported as a mask.
+                alpha = mask_image.getchannel("A")
+                if alpha.getextrema()[1] > 0 and alpha.getextrema()[0] < 250:
+                    mask = alpha
+                else:
+                    mask = mask_image.convert("L")
+            else:
+                mask = mask_image.convert("L")
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise ProductCompositorError("Product mask image cannot be decoded.") from exc
+
+    if mask.size != product_size:
+        mask = mask.resize(product_size, Image.Resampling.NEAREST)
+    # White / bright = keep product; dark = background hole.
+    mask = mask.point(lambda pixel: 255 if pixel >= 12 else 0)
+    if mask.getbbox() is None:
+        raise ProductCompositorError("Client product mask is empty.")
+    return mask.filter(ImageFilter.MaxFilter(5))
 
 
 def _extract_product_mask(product: Image.Image) -> Image.Image:

@@ -109,16 +109,21 @@ function SoftboxDemo() {
       <div className="absolute inset-0 bg-[linear-gradient(180deg,#14171d_0%,#0d0f12_55%,#0a0b0e_100%)]" />
       <div className="absolute inset-x-0 bottom-0 h-[42%] bg-[linear-gradient(180deg,transparent,rgba(27,62,43,0.25))]" />
 
-      {/* Softbox key light bloom */}
-      <div
-        className="absolute size-16 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-white/30"
-        style={{
-          left: `${lx}%`,
-          top: `${ly}%`,
-          background: `linear-gradient(135deg, ${lightColor}, rgba(255,255,255,0.35))`,
-          boxShadow: `0 0 ${soft}px ${lightColor}`,
-        }}
-      />
+      {/* Softbox key light bloom — full-size carrier so % translate is parent-relative. */}
+      <div className="pointer-events-none absolute inset-0">
+        <div
+          className="absolute left-0 top-0 size-full"
+          style={{ transform: `translate3d(${lx}%, ${ly}%, 0)` }}
+        >
+          <div
+            className="absolute left-0 top-0 size-16 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-white/30"
+            style={{
+              background: `linear-gradient(135deg, ${lightColor}, rgba(255,255,255,0.35))`,
+              boxShadow: `0 0 ${soft}px ${lightColor}`,
+            }}
+          />
+        </div>
+      </div>
 
       {/* Vector light rays (SVG) */}
       <svg className="pointer-events-none absolute inset-0 h-full w-full" aria-hidden>
@@ -254,11 +259,12 @@ function CutoutDemo() {
           <span className="absolute top-0 right-0 size-3 border-t-2 border-r-2 border-emerald" />
           <span className="absolute bottom-0 left-0 size-3 border-b-2 border-l-2 border-emerald" />
           <span className="absolute bottom-0 right-0 size-3 border-b-2 border-r-2 border-emerald" />
-          <motion.div
-            className="absolute inset-x-2 h-0.5 bg-gradient-to-r from-transparent via-emerald to-transparent"
-            animate={{ top: ["8%", "88%", "8%"] }}
-            transition={{ duration: 1.6, ease: "easeInOut", repeat: Infinity }}
-          />
+          {/* GPU scan: translateY on a full-height wrapper — never animate `top`. */}
+          <div className="pointer-events-none absolute inset-x-2 top-[8%] bottom-[12%]">
+            <div className="absolute inset-x-0 top-0 h-full animate-[scan-line-y_1.6s_ease-in-out_infinite]">
+              <div className="h-0.5 w-full bg-gradient-to-r from-transparent via-emerald to-transparent" />
+            </div>
+          </div>
         </div>
         <span className="absolute top-2 left-2 z-10 rounded bg-loft/80 px-1.5 py-0.5 font-heading text-[10px] text-emerald">
           Скан краёв

@@ -195,23 +195,12 @@
       transparent 100%
     );
   }
-
-  .animate-marquee-left {
-    animation: marquee-left var(--marquee-duration, 42s) linear infinite;
-  }
-
-  .animate-marquee-right {
-    animation: marquee-right var(--marquee-duration, 48s) linear infinite;
-  }
-
-  .marquee-row:hover .animate-marquee-left,
-  .marquee-row:hover .animate-marquee-right,
-  .marquee-row:focus-within .animate-marquee-left,
-  .marquee-row:focus-within .animate-marquee-right {
-    animation-play-state: paused;
-  }
 }
 
+/*
+ * Infinite testimonial marquee — unlayered so nothing in @layer can swallow it.
+ * Track markup is [...items, ...items]; ±50% translate lands on the duplicate seam.
+ */
 @keyframes marquee-left {
   from {
     transform: translate3d(0, 0, 0);
@@ -230,25 +219,97 @@
   }
 }
 
+.marquee-track {
+  display: flex;
+  width: max-content;
+  will-change: transform;
+  backface-visibility: hidden;
+  transform: translate3d(0, 0, 0);
+}
+
+.marquee-track-half {
+  display: flex;
+  flex-shrink: 0;
+  gap: 1rem;
+  /* Matches gap so each half is exactly 50% of the track (seamless -50%). */
+  padding-right: 1rem;
+}
+
+.marquee-track[data-direction="left"] {
+  animation: marquee-left var(--marquee-duration, 35s) linear infinite;
+}
+
+.marquee-track[data-direction="right"] {
+  animation: marquee-right var(--marquee-duration, 40s) linear infinite;
+}
+
+.marquee-row:hover .marquee-track,
+.marquee-row:focus-within .marquee-track {
+  animation-play-state: paused !important;
+}
+
+/* Compositor-only flash — never animate filter (paints on CPU). */
 @keyframes layer-flash {
   0% {
-    filter: brightness(1.2);
+    opacity: 0.72;
+    transform: translateZ(0) scale(1.01);
   }
   40% {
-    filter: brightness(1.08);
+    opacity: 0.9;
+    transform: translateZ(0) scale(1.004);
   }
   100% {
-    filter: brightness(1);
+    opacity: 1;
+    transform: translateZ(0) scale(1);
   }
 }
 
 @keyframes progress-indeterminate {
   0% {
-    transform: translateX(-120%);
+    transform: translate3d(-120%, 0, 0);
   }
   100% {
-    transform: translateX(320%);
+    transform: translate3d(320%, 0, 0);
   }
+}
+
+/* Scan line travel: % translate is relative to the full-height wrapper. */
+@keyframes scan-line-y {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(0, calc(100% - 2px), 0);
+  }
+}
+
+/*
+ * Force GPU layers for animated 3D surfaces and badge chips.
+ * translateZ(0) + will-change promotes a compositor layer (no Layout/Reflow).
+ * Hover lift keeps translateZ so the layer is not demoted.
+ */
+.animated-3d-card,
+.badge-element {
+  will-change: transform;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  perspective: 1000px;
+}
+
+.animated-3d-card.is-lift-hover:hover {
+  transform: translate3d(0, -0.125rem, 0);
+}
+
+.badge-element.is-scale-hover:hover {
+  transform: translateZ(0) scale(1.05);
+}
+
+/* Hard rule: never animate layout geometry via CSS transitions/keyframes. */
+.animated-3d-card,
+.badge-element,
+.gpu-anim {
+  transition-property: transform, opacity;
 }
 
 /*
@@ -263,17 +324,22 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .animate-marquee-left,
-  .animate-marquee-right {
-    animation: none !important;
-    transform: none !important;
-  }
-
+  /* Keep marquee running — decorative loop with hover-pause; only tone down UI flashes. */
   .animate-\[layer-flash_0\.9s_ease-out\] {
     animation: none !important;
   }
 
   .animate-\[progress-indeterminate_1\.2s_ease-in-out_infinite\] {
     animation: none !important;
+  }
+
+  .animate-\[scan-line-y_1\.6s_ease-in-out_infinite\] {
+    animation: none !important;
+  }
+
+  .animated-3d-card,
+  .badge-element {
+    will-change: auto;
+    transform: none;
   }
 }

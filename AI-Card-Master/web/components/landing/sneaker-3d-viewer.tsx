@@ -1,8 +1,15 @@
 "use client"
 
 import { Center, ContactShadows, Environment, OrbitControls, useGLTF } from "@react-three/drei"
-import { Canvas, useThree } from "@react-three/fiber"
-import { Suspense, useEffect, useMemo, useSyncExternalStore } from "react"
+import { Canvas, useFrame, useThree } from "@react-three/fiber"
+import {
+  Suspense,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react"
 import {
   DoubleSide,
   PCFShadowMap,
@@ -17,6 +24,15 @@ import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js"
 import { Rotate3d } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+
+/**
+ * OrbitControls `autoRotateSpeed` convention: speed=1 → one full turn per 60s.
+ * three-stdlib applies a fixed per-frame step (60 FPS assumption) and ignores delta —
+ * we reimplement with rAF delta so motion stays smooth on 240/360 Hz displays.
+ */
+const AUTO_ROTATE_RAD_PER_SEC = (Math.PI * 2) / 60
+/** Clamp huge deltas after tab resume so the model does not jump. */
+const MAX_DELTA_SEC = 1 / 30
 
 /** Full PBR shoe with baseColor / normal / ORM maps + KHR material variants. */
 const SHOE_MODEL_URL = "/landing/models/shoe.glb"
@@ -144,8 +160,18 @@ function disposeObjectTree(root: Group) {
   })
 }
 
-function SneakerModel({ scale = 1 }: { scale?: number }) {
+function SneakerModel({
+  scale = 1,
+  autoRotate = false,
+  autoRotateSpeed = 1.6,
+}: {
+  scale?: number
+  autoRotate?: boolean
+  /** OrbitControls-compatible speed units (1 ≈ full turn / 60s). */
+  autoRotateSpeed?: number
+}) {
   const gltf = useGLTF(SHOE_MODEL_URL) as unknown as GltfWithParser
+  const spinRef = useRef<Group>(null)
 
   const model = useMemo(() => {
     const next = gltf.scene.clone(true) as Group
@@ -189,13 +215,22 @@ function SneakerModel({ scale = 1 }: { scale?: number }) {
     }
   }, [gltf, model])
 
+  // R3F render loop = requestAnimationFrame; rotate with real delta (not 60 FPS steps).
+  useFrame((_, delta) => {
+    if (!autoRotate || !spinRef.current) return
+    const dt = Math.min(delta, MAX_DELTA_SEC)
+    spinRef.current.rotation.y += AUTO_ROTATE_RAD_PER_SEC * autoRotateSpeed * dt
+  })
+
   return (
-    <primitive
-      object={model}
-      scale={scale}
-      rotation={[0.12, Math.PI * 1.05, 0.04]}
-      position={[0, 0.02, 0]}
-    />
+    <group ref={spinRef}>
+      <primitive
+        object={model}
+        scale={scale}
+        rotation={[0.12, Math.PI * 1.05, 0.04]}
+        position={[0, 0.02, 0]}
+      />
+    </group>
   )
 }
 
@@ -222,6 +257,8 @@ function ViewerScene({
   enableZoom: boolean
 }) {
   const isCard = variant === "card"
+  const [orbitBusy, setOrbitBusy] = useState(false)
+  const rotateSpeed = isCard ? 1.6 : 1.15
 
   return (
     <>
@@ -243,7 +280,11 @@ function ViewerScene({
 
       <Suspense fallback={null}>
         <Center>
-          <SneakerModel scale={isCard ? 1.55 : 1.85} />
+          <SneakerModel
+            scale={isCard ? 1.55 : 1.85}
+            autoRotate={autoRotate && !orbitBusy}
+            autoRotateSpeed={rotateSpeed}
+          />
         </Center>
         <Environment preset="studio" environmentIntensity={0.85} />
         <ContactShadows
@@ -255,10 +296,14 @@ function ViewerScene({
         />
       </Suspense>
 
+      {/*
+        Keep OrbitControls for drag/zoom only.
+        Do NOT use its autoRotate — three-stdlib steps rotation as if every
+        frame were 1/60s (looks stepped / wrong on high-refresh monitors).
+      */}
       <OrbitControls
         makeDefault
-        autoRotate={autoRotate}
-        autoRotateSpeed={isCard ? 1.6 : 1.15}
+        autoRotate={false}
         enablePan={false}
         enableZoom={enableZoom}
         zoomSpeed={1.05}
@@ -268,6 +313,8 @@ function ViewerScene({
         minPolarAngle={Math.PI / 6}
         maxPolarAngle={Math.PI / 1.55}
         target={[0, 0.05, 0]}
+        onStart={() => setOrbitBusy(true)}
+        onEnd={() => setOrbitBusy(false)}
       />
     </>
   )
@@ -293,7 +340,7 @@ function Sneaker3DViewer({
   return (
     <div
       className={cn(
-        "relative h-full w-full overflow-hidden bg-[#1a1612]",
+        "animated-3d-card relative h-full w-full overflow-hidden bg-[#1a1612]",
         className
       )}
       role="img"
@@ -311,6 +358,8 @@ function Sneaker3DViewer({
       {mounted ? (
         <Canvas
           className="touch-none"
+          // Sync to display refresh (incl. 240/360 Hz) — never "demand" / capped loop.
+          frameloop="always"
           dpr={[1, 1.75]}
           camera={{
             // Default framing sits close so mesh/collar detail reads immediately

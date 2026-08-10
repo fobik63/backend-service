@@ -205,36 +205,42 @@ function CompareFrame({
         <ExampleLayer example={example} mode="before" priority={priority} />
       </div>
 
-      <div
-        className="absolute inset-y-0 z-20 w-12 -translate-x-1/2 touch-none cursor-ew-resize"
-        style={{ left: `${position}%` }}
-        onPointerDown={onHandlePointerDown}
-        onPointerMove={onHandlePointerMove}
-        onPointerUp={onHandlePointerUp}
-        onPointerCancel={onHandlePointerUp}
-        role="slider"
-        aria-valuemin={4}
-        aria-valuemax={96}
-        aria-valuenow={Math.round(position)}
-        aria-label="Разделитель до/после"
-        tabIndex={0}
-        onKeyDown={(e) => {
-          onInteract()
-          if (e.key === "ArrowLeft") {
-            onPositionChange(Math.min(96, Math.max(4, position - 2)))
-          }
-          if (e.key === "ArrowRight") {
-            onPositionChange(Math.min(96, Math.max(4, position + 2)))
-          }
-        }}
-      >
-        <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-white/80" />
-        <div className="absolute left-1/2 top-1/2 flex size-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/30 bg-loft/90">
-          <span className="flex gap-0.5 text-emerald">
-            <span className="block h-3.5 w-0.5 rounded-full bg-current opacity-70" />
-            <span className="block h-3.5 w-0.5 rounded-full bg-current" />
-            <span className="block h-3.5 w-0.5 rounded-full bg-current opacity-70" />
-          </span>
+      <div className="pointer-events-none absolute inset-y-0 left-0 z-20 w-full">
+        <div
+          className="absolute inset-y-0 left-0 w-full"
+          style={{ transform: `translate3d(${position}%, 0, 0)` }}
+        >
+          <div
+            className="pointer-events-auto absolute inset-y-0 left-0 w-12 -translate-x-1/2 touch-none cursor-ew-resize"
+            onPointerDown={onHandlePointerDown}
+            onPointerMove={onHandlePointerMove}
+            onPointerUp={onHandlePointerUp}
+            onPointerCancel={onHandlePointerUp}
+            role="slider"
+            aria-valuemin={4}
+            aria-valuemax={96}
+            aria-valuenow={Math.round(position)}
+            aria-label="Разделитель до/после"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              onInteract()
+              if (e.key === "ArrowLeft") {
+                onPositionChange(Math.min(96, Math.max(4, position - 2)))
+              }
+              if (e.key === "ArrowRight") {
+                onPositionChange(Math.min(96, Math.max(4, position + 2)))
+              }
+            }}
+          >
+            <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-white/80" />
+            <div className="absolute top-1/2 left-1/2 flex size-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/30 bg-loft/90">
+              <span className="flex gap-0.5 text-emerald">
+                <span className="block h-3.5 w-0.5 rounded-full bg-current opacity-70" />
+                <span className="block h-3.5 w-0.5 rounded-full bg-current" />
+                <span className="block h-3.5 w-0.5 rounded-full bg-current opacity-70" />
+              </span>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -413,10 +419,10 @@ function BeforeAfterSlider() {
                           title={item.label}
                           onClick={() => goToExample(index)}
                           className={cn(
-                            "h-2 rounded-full transition-all duration-300",
+                            "gpu-anim h-2 w-6 origin-left rounded-full transition-transform duration-300",
                             active
-                              ? "w-6 bg-foreground"
-                              : "w-2 bg-white/25 hover:bg-white/45"
+                              ? "scale-x-100 bg-foreground"
+                              : "scale-x-[0.333] bg-white/25 hover:bg-white/45"
                           )}
                         />
                       )
@@ -464,10 +470,10 @@ function BeforeAfterSlider() {
               title={item.label}
               onClick={() => goToExample(index)}
               className={cn(
-                "h-2 rounded-full transition-all duration-300",
+                "gpu-anim h-2 w-6 origin-left rounded-full transition-transform duration-300",
                 active
-                  ? "w-6 bg-foreground"
-                  : "w-2 bg-white/25 hover:bg-white/45"
+                  ? "scale-x-100 bg-foreground"
+                  : "scale-x-[0.333] bg-white/25 hover:bg-white/45"
               )}
             />
           )

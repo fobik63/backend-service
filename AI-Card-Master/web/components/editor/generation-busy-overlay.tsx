@@ -76,8 +76,8 @@ function GenerationBusyOverlay({
         >
           {determinate ? (
             <div
-              className="h-full rounded-full bg-foreground transition-[width] duration-150 ease-out"
-              style={{ width: `${pct}%` }}
+              className="gpu-anim h-full w-full origin-left rounded-full bg-foreground transition-transform duration-150 ease-out"
+              style={{ transform: `translateZ(0) scaleX(${pct / 100})` }}
             />
           ) : (
             <div className="h-full w-1/3 animate-[progress-indeterminate_1.2s_ease-in-out_infinite] rounded-full bg-foreground/80" />

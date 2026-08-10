@@ -96,6 +96,13 @@ class GenerationJob(Base):
         server_default=text("'fast'"),
     )
     input_object_key: Mapped[str] = mapped_column(String(1024), nullable=False)
+    mask_object_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    preserve_subject: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default=text("true"),
+    )
     input_retention_status: Mapped[str] = mapped_column(
         String(32),
         nullable=False,

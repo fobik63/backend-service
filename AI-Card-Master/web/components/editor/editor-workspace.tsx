@@ -24,6 +24,7 @@ import {
 } from "@/lib/editor/editor-document"
 import { getActiveFabricCanvas } from "@/lib/editor/fabric-export"
 import { useI18n } from "@/lib/i18n"
+import { useChipColorsFromBackground } from "@/lib/editor/use-chip-bg-palette"
 import { useEditorStore } from "@/lib/store/editor-store"
 import { cn } from "@/lib/utils"
 import type { EditorProductData } from "@/types/editor"
@@ -96,6 +97,8 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
       projectId
     )
+
+  useChipColorsFromBackground()
 
   useEffect(() => {
     const controller = new AbortController()

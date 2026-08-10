@@ -138,12 +138,12 @@ function Sidebar({
             aria-label={t("nav.coins")}
           >
             <div
-              className="h-full rounded-full bg-foreground"
+              className="gpu-anim h-full w-full origin-left rounded-full bg-foreground"
               style={{
-                width: `${Math.min(
-                  100,
-                  (balance.current / Math.max(balance.limit, 1)) * 100
-                )}%`,
+                transform: `translateZ(0) scaleX(${Math.min(
+                  1,
+                  balance.current / Math.max(balance.limit, 1)
+                )})`,
               }}
             />
           </div>

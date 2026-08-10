@@ -238,7 +238,7 @@ function EditorAiBody({ projectTitle }: EditorAiPanelProps) {
                 title={t(labelKey)}
                 onClick={() => setTab(id)}
                 className={cn(
-                  "flex min-h-[3.25rem] flex-col items-center justify-center gap-1 rounded-xl px-1 py-1.5 text-center transition-all",
+                  "flex min-h-[3.25rem] flex-col items-center justify-center gap-1 rounded-xl px-1 py-1.5 text-center transition-[transform,opacity]",
                   selected
                     ? "bg-loft-surface text-foreground shadow-sm ring-1 ring-white/15"
                     : "text-muted-foreground hover:bg-white/[0.04] hover:text-foreground",

@@ -213,6 +213,8 @@ class GenerationWorkItem(DomainModel):
     user_id: UUID
     status: GenerationJobStatus
     input_object_key: str = Field(min_length=1, max_length=1024)
+    mask_object_key: str | None = Field(default=None, max_length=1024)
+    preserve_subject: bool = True
     product_category: str | None = Field(default=None, max_length=128)
     subscription_status: str = Field(min_length=1, max_length=32)
     engine_mode: GenerationEngineMode = GenerationEngineMode.STANDARD

@@ -107,3 +107,51 @@ async def test_compositor_preserves_product_and_builds_edge_and_shadow() -> None
         colors = output.convert("RGB").getcolors(maxcolors=1_000_000)
         assert colors is not None
         assert any(red > 170 and green < 80 for _count, (red, green, _blue) in colors)
+
+
+@pytest.mark.asyncio
+async def test_compositor_uses_client_mask_over_auto_extract() -> None:
+    product = Image.new("RGBA", (100, 100), (0, 0, 0, 0))
+    ImageDraw.Draw(product).ellipse((20, 20, 80, 80), fill=(10, 200, 40, 255))
+    # Misleading auto-mask would follow the green circle; client mask keeps a square.
+    client_mask = Image.new("L", (100, 100), 0)
+    ImageDraw.Draw(client_mask).rectangle((30, 30, 70, 70), fill=255)
+    background = Image.new("RGB", (160, 160), (40, 40, 80))
+
+    result = await composite_product_on_background(
+        product_image=_png(product),
+        background_image=_png(background),
+        product_mask=_png(client_mask),
+    )
+
+    assert 0 < result.mask_coverage <= 1
+    with Image.open(io.BytesIO(result.image_bytes)) as output:
+        rgb = output.convert("RGB")
+        # Center of the square mask should carry product green.
+        assert rgb.getpixel((80, 80))[1] > 100
+
+
+@pytest.mark.asyncio
+async def test_compositor_rejects_empty_client_mask() -> None:
+    from app.services.product_compositor import ProductCompositorError
+
+    product = Image.new("RGB", (64, 64), (200, 20, 20))
+    background = Image.new("RGB", (64, 64), (10, 10, 10))
+    empty_mask = Image.new("L", (64, 64), 0)
+
+    with pytest.raises(ProductCompositorError, match="empty"):
+        await composite_product_on_background(
+            product_image=_png(product),
+            background_image=_png(background),
+            product_mask=_png(empty_mask),
+        )
+
+
+def test_companion_mask_object_key() -> None:
+    from app.services.product_compositor import companion_mask_object_key
+
+    assert (
+        companion_mask_object_key("generation-inputs/u/abc.png")
+        == "generation-inputs/u/abc.mask.png"
+    )
+    assert companion_mask_object_key("plain") == "plain.mask.png"

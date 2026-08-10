@@ -3,6 +3,7 @@ import {
   TEXT_PRESETS,
   nextBadgePosition,
 } from "@/lib/constants/mock-editor"
+import { DEFAULT_CHIP_AUTO_APPEARANCE } from "@/lib/editor/extract-bg-colors"
 import {
   useEditorStore,
   type EditorProductMeta,
@@ -14,6 +15,13 @@ import {
 } from "@/types/canvas"
 
 const AI_PRODUCT_CONTEXT_MARKER = "--- Контекст товара ---"
+
+/** Glass badge defaults — uses palette from current background when available. */
+function glassBadgeAppearance() {
+  return (
+    useEditorStore.getState().chipAutoAppearance ?? DEFAULT_CHIP_AUTO_APPEARANCE
+  )
+}
 
 /** Build an AI-infographic prompt from marketplace product fields. */
 export function buildProductInfographicPrompt(
@@ -182,14 +190,16 @@ export function addQuickBadgeById(
 ): { label: string; created: boolean } | null {
   const badge = BADGE_PRESETS.find((b) => b.id === badgeId)
   if (!badge) return null
+  const isGlass = badge.variant === "glass"
+  const auto = isGlass ? glassBadgeAppearance() : null
   return addBadgeToCanvas({
     label: badge.label,
-    bgColor: badge.bgColor,
+    bgColor: auto?.bgColor ?? badge.bgColor,
     iconId: badge.iconId,
     variant: badge.variant,
     subtitle: "subtitle" in badge ? badge.subtitle : undefined,
-    blur: badge.variant === "glass" ? 12 : 0,
-    textColor: badge.variant === "glass" ? "#FFFFFF" : undefined,
+    blur: isGlass ? 12 : 0,
+    textColor: isGlass ? auto?.textColor ?? "#FFFFFF" : undefined,
   })
 }
 
@@ -199,13 +209,14 @@ export function addCustomBadge(label: string): {
 } | null {
   const trimmed = label.trim()
   if (!trimmed) return null
+  const auto = glassBadgeAppearance()
   return addBadgeToCanvas({
     label: trimmed,
-    bgColor: "rgba(15,17,21,0.55)",
+    bgColor: auto.bgColor,
     iconId: "icon_spark",
     variant: "glass",
     blur: 12,
-    textColor: "#FFFFFF",
+    textColor: auto.textColor,
     borderRadius: 14,
   })
 }
@@ -229,6 +240,7 @@ export function applyEyeInsightsToProject(opts: {
     .filter(Boolean)
   const seen = new Set<string>()
   let badgesCreated = 0
+  const auto = glassBadgeAppearance()
 
   for (const label of labels) {
     const key = normalizeBadgeLabel(label)
@@ -236,11 +248,11 @@ export function applyEyeInsightsToProject(opts: {
     seen.add(key)
     const result = addBadgeToCanvas({
       label: label.slice(0, 48),
-      bgColor: "rgba(15,17,21,0.55)",
+      bgColor: auto.bgColor,
       iconId: "icon_spark",
       variant: "glass",
       blur: 12,
-      textColor: "#FFFFFF",
+      textColor: auto.textColor,
       borderRadius: 14,
     })
     if (result.created) badgesCreated += 1
