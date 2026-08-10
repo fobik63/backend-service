@@ -1240,8 +1240,8 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
         height: initH,
         preserveObjectStacking: true,
         selection: true,
-        // Transparent so CSS SoftboxLightOverlay wash shows through live.
-        backgroundColor: "rgba(0,0,0,0)",
+        // Zinc gray — never pure black void while the scene is still loading.
+        backgroundColor: "#18181b",
         stopContextMenu: true,
         controlsAboveOverlay: true,
         // Batch adds during rebuild; interactive frames call requestRenderAll.
@@ -1267,12 +1267,20 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
         canvas.setWidth(sized.width)
         canvas.setHeight(sized.height)
       }
+      // Recover from soft-teardown / empty remount — gray until scene rebuild paints.
+      if (canvas.getObjects().length === 0) {
+        canvas.backgroundColor = "#18181b"
+        canvas.requestRenderAll()
+      }
     }
     sceneEpochRef.current = 0
     sceneKeyRef.current = ""
     fittedProductUrlRef.current = null
     setReady(true)
     setSceneError(null)
+    // Strict Mode remount keeps ready=true after soft teardown — force scene rebuild
+    // so product / layers are reattached instead of leaving a blank rectangle.
+    setRebuildNonce((n) => n + 1)
 
     // Initial Fit: size to wrapper, zoom so 1080×1440 fits with ~40px padding, center.
     // Host can be 0×0 for a frame (flex layout) — retry until real metrics exist.
@@ -1654,12 +1662,11 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
         canvas.off("mouse:up", onMouseUp)
         canvas.off("text:changed", onTextChanged)
         canvas.off("mouse:dblclick", onMouseDblClick)
-        // Soft teardown only — keep the DOM <canvas> + Fabric instance intact.
-        // Never dispose(): it destroys the 2d context on fast React remounts.
-        canvas.clear()
-        canvas.backgroundColor = "#0d0f12"
+        // Soft teardown: keep Fabric instance + scene objects intact across
+        // React Strict Mode effect re-runs. Never dispose() (kills 2d context)
+        // and never clear() here — that left a black void because `ready` stayed
+        // true and the scene rebuild effect did not re-fire.
         canvas.discardActiveObject()
-        canvas.requestRenderAll()
         sceneKeyRef.current = ""
         fittedProductUrlRef.current = null
       } catch {
@@ -1675,6 +1682,86 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
     if (!ready) return
     syncViewportRef.current()
   }, [scale, zoomMode, ready])
+
+  /**
+   * Protected product bootstrap (Fabric v6 Promise fromURL).
+   * Ensures that when a product image URL exists after mount, the bitmap is
+   * loaded and painted — even if the full scene rebuild races Strict Mode.
+   */
+  useEffect(() => {
+    if (!ready || !productPreviewUrl) return
+    const canvas = fabricRef.current
+    if (!isFabricCanvasAlive(canvas) || !canvasRef.current) return
+
+    let cancelled = false
+
+    const bootstrapProduct = async () => {
+      try {
+        const existing = findByLayerId(canvas, "layer_product")
+        if (
+          existing &&
+          (existing instanceof FabricImage || existing.type === "image")
+        ) {
+          canvas.requestRenderAll()
+          return
+        }
+
+        const img = await loadImage(productPreviewUrl)
+        if (cancelled || !isFabricCanvasAlive(fabricRef.current)) return
+        const live = fabricRef.current
+
+        // Scene rebuild may have won the race — don't double-add.
+        const again = findByLayerId(live, "layer_product")
+        if (
+          again &&
+          (again instanceof FabricImage || again.type === "image")
+        ) {
+          live.requestRenderAll()
+          return
+        }
+
+        const nw = Math.max(1, img.width || 1)
+        const nh = Math.max(1, img.height || 1)
+        const scale = Math.min(
+          (CANVAS_WIDTH * 0.7) / nw,
+          (CANVAS_HEIGHT * 0.7) / nh
+        )
+
+        // Empty canvas: paint gray studio + centered product (user-facing fix).
+        if (live.getObjects().length === 0) {
+          live.backgroundColor = "#18181b"
+          img.set({
+            left: CANVAS_WIDTH / 2,
+            top: CANVAS_HEIGHT / 2,
+            originX: "center",
+            originY: "center",
+            objectCaching: true,
+          })
+          img.scale(Math.max(0.001, scale))
+          markObject(img, "layer_product", "product")
+          live.add(img)
+          live.setActiveObject(img)
+          live.requestRenderAll()
+          syncViewportRef.current()
+          live.requestRenderAll()
+          return
+        }
+
+        // Non-empty scene without a product image — force a full rebuild.
+        sceneKeyRef.current = ""
+        setRebuildNonce((n) => n + 1)
+      } catch (err) {
+        if (process.env.NODE_ENV !== "production") {
+          console.error("[fabric-canvas] product bootstrap failed", err)
+        }
+      }
+    }
+
+    void bootstrapProduct()
+    return () => {
+      cancelled = true
+    }
+  }, [ready, productPreviewUrl])
 
   // Rebuild 3-layer scene when structure changes (not on pure transforms)
   useEffect(() => {
@@ -1701,9 +1788,38 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
           clearChipInlineEditors(canvas)
           canvas.renderOnAddRemove = false
           canvas.clear()
-          // Transparent — CSS SoftboxLightOverlay owns the studio wash live.
-          canvas.backgroundColor = "rgba(0,0,0,0)"
+          // Gray studio — never a pure black void when the stack is empty.
+          canvas.backgroundColor = "#18181b"
           canvas.discardActiveObject()
+
+          // Keep product visible even before layers hydrate (UUID design load).
+          const previewUrl = productPreviewUrl
+          if (previewUrl) {
+            try {
+              const img = await loadImage(previewUrl)
+              if (cancelled || !isFabricCanvasAlive(fabricRef.current)) return
+              const nw = Math.max(1, img.width || 1)
+              const nh = Math.max(1, img.height || 1)
+              const fit = Math.min(
+                (CANVAS_WIDTH * 0.7) / nw,
+                (CANVAS_HEIGHT * 0.7) / nh
+              )
+              img.set({
+                left: CANVAS_WIDTH / 2,
+                top: CANVAS_HEIGHT / 2,
+                originX: "center",
+                originY: "center",
+                objectCaching: true,
+              })
+              img.scale(Math.max(0.001, fit))
+              markObject(img, "layer_product", "product")
+              canvas.add(img)
+              canvas.setActiveObject(img)
+            } catch {
+              // Preview optional while layers are still empty.
+            }
+          }
+
           canvas.requestRenderAll()
           syncViewportRef.current()
           sceneEpochRef.current += 1
@@ -1822,7 +1938,8 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
         canvas.renderOnAddRemove = false
         canvas.clear()
         // Transparent so CSS SoftboxLightOverlay wash is the live studio light.
-        canvas.backgroundColor = "rgba(0,0,0,0)"
+        // Fallback gray until objects paint (avoids a black flash mid-rebuild).
+        canvas.backgroundColor = "#18181b"
         for (const obj of built) {
           canvas.add(obj)
         }
@@ -1846,6 +1963,8 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
         } else if (productObj?.selectable) {
           canvas.setActiveObject(productObj)
         }
+        // Softbox wash shows through once objects are on the artboard.
+        canvas.backgroundColor = "rgba(0,0,0,0)"
         // Immediate paint after fromURL builds (product / bg / chips).
         canvas.renderAll()
         // Re-apply Fit / zoom after clear/rebuild (Fabric may reset viewport).
@@ -2014,7 +2133,7 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
   return (
     <div
       className={cn(
-        "relative flex h-full min-h-0 w-full items-center justify-center overflow-hidden bg-zinc-900 p-6"
+        "relative flex h-[calc(100vh-120px)] min-h-[500px] w-full items-center justify-center overflow-hidden bg-zinc-900 p-6"
       )}
     >
       <div
@@ -2022,7 +2141,7 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
         id="editor-export-canvas"
         data-export-canvas="true"
         data-fabric-engine="true"
-        className="relative h-full min-h-0 w-full overflow-hidden"
+        className="relative h-full min-h-[500px] w-full overflow-hidden"
         role="img"
         aria-label={`Холст ${CANVAS_WIDTH}×${CANVAS_HEIGHT}`}
         aria-busy={showBusyOverlay}

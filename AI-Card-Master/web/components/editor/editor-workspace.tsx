@@ -115,7 +115,7 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
       const canvas = getActiveFabricCanvas()
       if (canvas) {
         canvas.clear()
-        canvas.backgroundColor = "#0d0f12"
+        canvas.backgroundColor = "#18181b"
         canvas.requestRenderAll()
       }
       return () => controller.abort()
