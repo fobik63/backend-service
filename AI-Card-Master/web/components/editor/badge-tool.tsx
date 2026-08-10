@@ -6,6 +6,7 @@ import {
   FlaskConical,
   Leaf,
   Package,
+  Palette,
   Plus,
   Shield,
   Sparkles,
@@ -37,6 +38,12 @@ import {
   addCustomBadge,
   addQuickBadgeById,
 } from "@/lib/editor/canvas-actions"
+import { getActiveFabricCanvas } from "@/lib/editor/fabric-export"
+import {
+  applyChipLiveColors,
+  flushChipLiveIcon,
+  setChipAppearanceScrubbing,
+} from "@/lib/editor/chip-live"
 import { useI18n } from "@/lib/i18n"
 import { useEditorStore } from "@/lib/store/editor-store"
 import type { FeatureChipDraft } from "@/types/canvas"
@@ -89,14 +96,31 @@ function ColorSwatchRow({
   presets,
   disabled,
   onChange,
+  onCommit,
 }: {
   label: string
   value: string
   presets: readonly string[]
   disabled?: boolean
   onChange: (hex: string) => void
+  /** Fires when the OS color picker closes / loses focus. */
+  onCommit?: () => void
 }) {
-  const current = value.toLowerCase()
+  const [live, setLive] = useState(value)
+  const pickingRef = useRef(false)
+
+  useEffect(() => {
+    if (!pickingRef.current) setLive(value)
+  }, [value])
+
+  const current = live.toLowerCase()
+  const pickerValue = toColorInputValue(live)
+  const isCustom = !presets.some((hex) => hex.toLowerCase() === current)
+
+  const pushLive = (hex: string) => {
+    setLive(hex)
+    onChange(hex)
+  }
 
   return (
     <div className="space-y-1.5">
@@ -112,7 +136,11 @@ function ColorSwatchRow({
               type="button"
               title={hex}
               disabled={disabled}
-              onClick={() => onChange(hex)}
+              onClick={() => {
+                pickingRef.current = false
+                pushLive(hex)
+                onCommit?.()
+              }}
               className={cn(
                 "size-7 rounded-md ring-1 ring-white/15 transition-transform hover:scale-105 disabled:pointer-events-none disabled:opacity-40",
                 selected && "ring-2 ring-emerald"
@@ -124,23 +152,56 @@ function ColorSwatchRow({
           )
         })}
         <label
+          title={pickerValue}
           className={cn(
-            "relative size-7 overflow-hidden rounded-md ring-1 ring-white/15",
-            disabled ? "pointer-events-none opacity-40" : "cursor-pointer"
+            "relative flex size-7 items-center justify-center overflow-hidden rounded-md ring-1 ring-white/15 transition-transform",
+            disabled
+              ? "pointer-events-none opacity-40"
+              : "cursor-pointer hover:scale-105",
+            isCustom && "ring-2 ring-emerald"
           )}
         >
           <span
             className="absolute inset-0"
-            style={{ backgroundColor: toColorInputValue(value) }}
+            style={{
+              background:
+                "conic-gradient(from 0deg, #ff0000, #ffea00, #00ff6a, #00e5ff, #0033ff, #cc00ff, #ff0000)",
+            }}
+            aria-hidden
+          />
+          <span
+            className="absolute inset-[3px] rounded-[4px] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.35)]"
+            style={{ backgroundColor: pickerValue }}
+            aria-hidden
+          />
+          <Palette
+            className="relative size-3.5 drop-shadow-[0_1px_1px_rgba(0,0,0,0.65)]"
+            style={{
+              color:
+                contrastTextColor(pickerValue) === "#FFFFFF"
+                  ? "#FFFFFF"
+                  : "#0F1115",
+            }}
             aria-hidden
           />
           <input
             type="color"
-            value={toColorInputValue(value)}
+            value={pickerValue}
             disabled={disabled}
-            onChange={(e) => onChange(e.target.value)}
+            onInput={(e) => {
+              pickingRef.current = true
+              pushLive((e.target as HTMLInputElement).value)
+            }}
+            onChange={(e) => {
+              pickingRef.current = true
+              pushLive(e.target.value)
+            }}
+            onBlur={() => {
+              pickingRef.current = false
+              onCommit?.()
+            }}
             className="absolute inset-0 size-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
-            aria-label={label}
+            aria-label={`${label} — произвольный цвет`}
           />
         </label>
       </div>
@@ -243,6 +304,12 @@ function BadgeParamsSection() {
   const selectedLayerId = useEditorStore((s) => s.selectedLayerId)
   const toolsPanelFocus = useEditorStore((s) => s.toolsPanelFocus)
   const updateLayer = useEditorStore((s) => s.updateLayer)
+  const beginHistoryTransaction = useEditorStore(
+    (s) => s.beginHistoryTransaction
+  )
+  const commitHistoryTransaction = useEditorStore(
+    (s) => s.commitHistoryTransaction
+  )
   const layer = layers.find((l) => l.id === selectedLayerId)
   const chip = layer?.chip
   const isBadge = Boolean(chip)
@@ -253,13 +320,32 @@ function BadgeParamsSection() {
   const [labelDraft, setLabelDraft] = useState(chip?.label ?? "")
   const [subtitleDraft, setSubtitleDraft] = useState(chip?.subtitle ?? "")
 
-  // Sync drafts from store when selection changes or when inputs are not focused.
+  const storeBlur = chip?.blur ?? (chip?.variant === "glass" ? 12 : 0)
+  const storeTextColor =
+    chip?.textColor ??
+    (chip ? contrastTextColor(chip.bgColor) : "#FFFFFF")
+  const storeBg = chip?.bgColor ?? "#0F1115"
+  const storeOpacityPct = Math.round((layer?.opacity ?? 1) * 100)
+
+  const [bgDraft, setBgDraft] = useState(storeBg)
+  const [textDraft, setTextDraft] = useState(storeTextColor)
+  const [blurDraft, setBlurDraft] = useState(storeBlur)
+  const [opacityDraft, setOpacityDraft] = useState(storeOpacityPct)
+
+  const scrubbingRef = useRef(false)
+  const chipDraftRef = useRef<FeatureChipDraft | null>(chip ?? null)
+  const uiRafRef = useRef(0)
+  const opacityDraftRef = useRef(storeOpacityPct)
+
+  // Sync drafts from store when selection changes or when not scrubbing.
   useEffect(() => {
     if (!chip) {
       setLabelDraft("")
       setSubtitleDraft("")
+      chipDraftRef.current = null
       return
     }
+    chipDraftRef.current = chip
     const labelFocused =
       typeof document !== "undefined" &&
       document.activeElement === labelInputRef.current
@@ -268,7 +354,29 @@ function BadgeParamsSection() {
       document.activeElement === subtitleInputRef.current
     if (!labelFocused) setLabelDraft(chip.label)
     if (!subtitleFocused) setSubtitleDraft(chip.subtitle ?? "")
-  }, [selectedLayerId, chip])
+    if (!scrubbingRef.current) {
+      setBgDraft(chip.bgColor)
+      setTextDraft(chip.textColor ?? contrastTextColor(chip.bgColor))
+      setBlurDraft(chip.blur ?? (chip.variant === "glass" ? 12 : 0))
+      const op = Math.round((layer?.opacity ?? 1) * 100)
+      setOpacityDraft(op)
+      opacityDraftRef.current = op
+    }
+  }, [selectedLayerId, chip, layer?.opacity])
+
+  useEffect(() => {
+    return () => {
+      if (uiRafRef.current) {
+        cancelAnimationFrame(uiRafRef.current)
+        uiRafRef.current = 0
+      }
+      if (scrubbingRef.current) {
+        scrubbingRef.current = false
+        setChipAppearanceScrubbing(false)
+        useEditorStore.getState().commitHistoryTransaction()
+      }
+    }
+  }, [])
 
   // Focus/select only when toolsPanelFocus nonce fires — never on every chip keystroke.
   useEffect(() => {
@@ -292,10 +400,50 @@ function BadgeParamsSection() {
     }
   }, [toolsPanelFocus, disabled, isBadge, selectedLayerId])
 
+  const beginScrub = () => {
+    if (scrubbingRef.current) return
+    scrubbingRef.current = true
+    setChipAppearanceScrubbing(true)
+    beginHistoryTransaction()
+  }
+
+  const syncUiDraftsFromRef = () => {
+    const live = chipDraftRef.current
+    if (!live) return
+    setBgDraft(live.bgColor)
+    setTextDraft(live.textColor ?? contrastTextColor(live.bgColor))
+    setBlurDraft(live.blur ?? (live.variant === "glass" ? 12 : 0))
+    setOpacityDraft(opacityDraftRef.current)
+  }
+
+  const endScrub = () => {
+    if (!scrubbingRef.current) return
+    if (uiRafRef.current) {
+      cancelAnimationFrame(uiRafRef.current)
+      uiRafRef.current = 0
+    }
+    const live = chipDraftRef.current
+    if (layer && live) {
+      // Single store write at the end of the drag — keeps scrub at ~60fps.
+      updateLayer(layer.id, {
+        chip: live,
+        opacity: opacityDraftRef.current / 100,
+      })
+      flushChipLiveIcon(layer.id, live)
+      syncUiDraftsFromRef()
+    }
+    scrubbingRef.current = false
+    setChipAppearanceScrubbing(false)
+    commitHistoryTransaction()
+  }
+
   const patchChip = (patch: Partial<FeatureChipDraft>) => {
     if (!layer?.chip) return
+    const base = chipDraftRef.current ?? layer.chip
+    const next = { ...base, ...patch }
+    chipDraftRef.current = next
     updateLayer(layer.id, {
-      chip: { ...layer.chip, ...patch },
+      chip: next,
       name:
         patch.label !== undefined
           ? `${t("editor.badge")} «${patch.label || layer.chip.label}»`
@@ -303,11 +451,44 @@ function BadgeParamsSection() {
     })
   }
 
-  const blurValue = chip?.blur ?? (chip?.variant === "glass" ? 12 : 0)
-  const textColor =
-    chip?.textColor ??
-    (chip ? contrastTextColor(chip.bgColor) : "#FFFFFF")
-  const opacityPct = Math.round((layer?.opacity ?? 1) * 100)
+  const scheduleUiDraft = () => {
+    if (uiRafRef.current) return
+    uiRafRef.current = requestAnimationFrame(() => {
+      uiRafRef.current = 0
+      syncUiDraftsFromRef()
+    })
+  }
+
+  /**
+   * Fabric-only during drag. No parent setState / Zustand — keeps scrub at ~60fps.
+   * ColorSwatchRow keeps its own live swatch; sidebar drafts sync on commit.
+   */
+  const scrubChipAppearance = (patch: Partial<FeatureChipDraft>) => {
+    if (!layer?.chip) return
+    beginScrub()
+    const base = chipDraftRef.current ?? layer.chip
+    const next = { ...base, ...patch }
+    chipDraftRef.current = next
+    // Blur slider is controlled by parent state — refresh at most once/frame.
+    if (patch.blur !== undefined) scheduleUiDraft()
+    applyChipLiveColors(layer.id, next)
+  }
+
+  const scrubOpacity = (pct: number) => {
+    if (!layer) return
+    beginScrub()
+    const next = clamp(pct, 10, 100)
+    opacityDraftRef.current = next
+    scheduleUiDraft()
+    const canvas = getActiveFabricCanvas()
+    const obj = canvas
+      ?.getObjects()
+      .find((o) => (o as { layerId?: string }).layerId === layer.id)
+    if (obj) {
+      obj.set("opacity", next / 100)
+      canvas?.requestRenderAll()
+    }
+  }
 
   return (
     <section className="space-y-2.5">
@@ -368,23 +549,25 @@ function BadgeParamsSection() {
 
         <ColorSwatchRow
           label={t("editor.badgeBgColor")}
-          value={chip?.bgColor ?? "#0F1115"}
+          value={bgDraft}
           presets={FEATURE_CHIP_BG_PRESETS}
           disabled={disabled}
           onChange={(bgColor) =>
-            patchChip({
+            scrubChipAppearance({
               bgColor,
-              variant: blurValue > 0 ? "glass" : "solid",
+              variant: blurDraft > 0 ? "glass" : "solid",
             })
           }
+          onCommit={endScrub}
         />
 
         <ColorSwatchRow
           label={t("editor.badgeTextColor")}
-          value={textColor}
+          value={textDraft}
           presets={TEXT_COLOR_PRESETS}
           disabled={disabled}
-          onChange={(next) => patchChip({ textColor: next })}
+          onChange={(next) => scrubChipAppearance({ textColor: next })}
+          onCommit={endScrub}
         />
 
         <div className="space-y-1.5">
@@ -419,33 +602,30 @@ function BadgeParamsSection() {
 
         <SliderControl
           label={t("editor.opacity")}
-          value={opacityPct}
+          value={opacityDraft}
           min={10}
           max={100}
           unit="%"
           disabled={disabled}
-          onChange={(pct) => {
-            if (!layer) return
-            updateLayer(layer.id, {
-              opacity: clamp(pct, 10, 100) / 100,
-            })
-          }}
+          onChange={scrubOpacity}
+          onValueCommitted={endScrub}
         />
 
         <SliderControl
           label={t("editor.blur")}
-          value={blurValue}
+          value={blurDraft}
           min={0}
           max={32}
           unit="px"
           disabled={disabled}
           onChange={(blur) => {
             const next = clamp(blur, 0, 32)
-            patchChip({
+            scrubChipAppearance({
               blur: next,
               variant: next > 0 ? "glass" : "solid",
             })
           }}
+          onValueCommitted={endScrub}
           hint={<span>{t("editor.badgeGlassHint")}</span>}
         />
       </div>

@@ -42,6 +42,11 @@ import {
 import { resolveFabricFontFamily } from "@/lib/editor/fabric-fonts"
 import { chipIconDataUrl, chipTextColor } from "@/lib/editor/fabric-icons"
 import {
+  applyChipLiveColors,
+  isChipAppearanceScrubbing,
+  rememberChipIconFg,
+} from "@/lib/editor/chip-live"
+import {
   applyFabricZoomView,
   computeFitZoom,
   FABRIC_FIT_PADDING,
@@ -731,8 +736,8 @@ async function commitBadgeGroupsToCanvas(
 
 /**
  * Structural fingerprint — excludes transforms AND softbox (softbox updates in-place).
- * Chip label/subtitle are patched onto existing Group children; including them here
- * would rebuild the whole scene on every keystroke and steal input focus.
+ * Chip label/subtitle/colors/blur/opacity are patched onto existing objects; including
+ * them here would rebuild the whole scene on every color-picker frame (~5fps stutter).
  */
 function structureKey(args: {
   layers: CanvasLayer[]
@@ -752,18 +757,14 @@ function structureKey(args: {
         visible: l.visible,
         locked: l.locked,
         zIndex: l.zIndex,
-        opacity: l.opacity,
         text: l.text,
         textStyle: l.textStyle,
-        // Structural chip fields only — content (label/subtitle) syncs in-place.
+        // Structural chip fields only — colors/blur/content sync in-place.
         chip: chip
           ? {
-              bgColor: chip.bgColor,
               borderRadius: chip.borderRadius,
               iconId: chip.iconId,
               variant: chip.variant,
-              textColor: chip.textColor,
-              blur: chip.blur,
               hasSubtitle: Boolean(chip.subtitle),
             }
           : undefined,
@@ -1437,6 +1438,7 @@ async function buildChipObject(layer: CanvasLayer): Promise<Group> {
   // Dirty + coords before canvas.add — metrics are stable after fonts.ready + icon load.
   marked.set({ dirty: true })
   marked.setCoords()
+  rememberChipIconFg(layer.id, fg)
   return marked as Group
 }
 
@@ -1598,6 +1600,7 @@ function updateBadgeLayout(group: Group): void {
 /**
  * Update badge label/subtitle on an existing Group — never rebuild the Group.
  * Resizes the background plate and triggers Fabric layout so handles stay correct.
+ * Skips layout when text is unchanged (color/opacity scrub must stay cheap).
  */
 function applyChipContentInPlace(group: Group, chip: FeatureChipDraft): void {
   const children = group.getObjects()
@@ -1608,20 +1611,23 @@ function applyChipContentInPlace(group: Group, chip: FeatureChipDraft): void {
     | Textbox
     | undefined
 
+  let textChanged = false
   if (label && label.text !== chip.label) {
     // Don't clobber in-progress canvas editing.
     if (!(label as Textbox).isEditing) {
       label.set("text", chip.label)
+      textChanged = true
     }
   }
   if (subtitle) {
     const next = chip.subtitle ?? ""
     if (subtitle.text !== next && !(subtitle as Textbox).isEditing) {
       subtitle.set("text", next)
+      textChanged = true
     }
   }
 
-  updateBadgeLayout(group)
+  if (textChanged) updateBadgeLayout(group)
 }
 
 /** Remove leftover top-level chip overlay editors from earlier edit sessions. */
@@ -2960,6 +2966,8 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
   useEffect(() => {
     const canvas = fabricRef.current
     if (!canvas || writingStoreRef.current || interactingRef.current) return
+    // Color-picker scrub paints Fabric directly — don't fight it with a full layers pass.
+    if (isChipAppearanceScrubbing()) return
 
     for (const layer of layers) {
       if (!layer.visible || layer.type === "background") continue
@@ -2989,6 +2997,7 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
           )
         if (!editingChild) {
           applyChipContentInPlace(group, layer.chip)
+          applyChipLiveColors(layer.id, layer.chip, { immediate: true })
         }
       }
     }
