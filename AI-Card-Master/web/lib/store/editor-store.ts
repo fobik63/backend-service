@@ -163,16 +163,6 @@ type EditorState = {
   flashLayerId: string | null
   zoomMode: EditorZoomMode
   softbox: SoftboxSettings
-  /**
-   * True while a softbox slider is dragged — Fabric softbox stays frozen;
-   * CSS overlay reads `softboxLivePreview` at 60fps until commit.
-   */
-  softboxScrubbing: boolean
-  /**
-   * Ephemeral softbox knobs while scrubbing — drives CSS preview only.
-   * Never written into history; cleared on scrub end / reset.
-   */
-  softboxLivePreview: SoftboxSettings | null
   /** Local product preview (blob / CDN URL) shown on canvas. */
   productPreviewUrl: string | null
   /** AI / studio background image under the product cutout (layer 1). */
@@ -214,9 +204,6 @@ type EditorState = {
   addLayer: (layer: CanvasLayer) => void
   removeLayer: (id: string) => void
   setSoftbox: (patch: Partial<SoftboxSettings>) => void
-  setSoftboxScrubbing: (scrubbing: boolean) => void
-  /** High-frequency slider draft for CSS overlay (no Fabric / no history). */
-  setSoftboxLivePreview: (preview: SoftboxSettings | null) => void
   setProductPreviewUrl: (url: string | null) => void
   setBackgroundPreviewUrl: (url: string | null) => void
   /** Patch layer geometry without pushing history (auto-fit, sync). */
@@ -276,8 +263,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   flashLayerId: null,
   zoomMode: "fit",
   softbox: DEFAULT_SOFTBOX,
-  softboxScrubbing: false,
-  softboxLivePreview: null,
   productPreviewUrl: DEFAULT_PRODUCT_CUTOUT,
   backgroundPreviewUrl: null,
   generationEpoch: 0,
@@ -308,8 +293,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       selectedLayerId: defaultSelectedLayerId(layers),
       flashLayerId: null,
       softbox: { ...project.softbox },
-      softboxScrubbing: false,
-      softboxLivePreview: null,
       productPreviewUrl: project.productPreviewUrl,
       backgroundPreviewUrl: project.backgroundPreviewUrl ?? null,
       importGalleryUrls: [],
@@ -476,29 +459,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         history,
         canUndo: history.past.length > 0,
         canRedo: state.historyTransaction ? state.canRedo : false,
-      }
-    }),
-  setSoftboxScrubbing: (scrubbing) =>
-    set((state) => {
-      if (state.softboxScrubbing === scrubbing) {
-        if (scrubbing || state.softboxLivePreview == null) return state
-        return { softboxLivePreview: null }
-      }
-      return {
-        softboxScrubbing: scrubbing,
-        softboxLivePreview: scrubbing ? state.softboxLivePreview : null,
-      }
-    }),
-  setSoftboxLivePreview: (preview) =>
-    set((state) => {
-      if (preview == null) {
-        return state.softboxLivePreview == null
-          ? state
-          : { softboxLivePreview: null }
-      }
-      return {
-        softboxScrubbing: true,
-        softboxLivePreview: preview,
       }
     }),
   setProductPreviewUrl: (url) =>
@@ -733,8 +693,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         selectedLayerId: defaultSelectedLayerId(layers),
         flashLayerId: null,
         softbox: { ...previous.softbox },
-        softboxScrubbing: false,
-        softboxLivePreview: null,
         productPreviewUrl: previous.productPreviewUrl,
         backgroundPreviewUrl: previous.backgroundPreviewUrl,
         packSize: previous.packSize,
@@ -766,8 +724,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         selectedLayerId: defaultSelectedLayerId(layers),
         flashLayerId: null,
         softbox: { ...next.softbox },
-        softboxScrubbing: false,
-        softboxLivePreview: null,
         productPreviewUrl: next.productPreviewUrl,
         backgroundPreviewUrl: next.backgroundPreviewUrl,
         packSize: next.packSize,
@@ -795,8 +751,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       flashLayerId: null,
       zoomMode: "fit",
       softbox: DEFAULT_SOFTBOX,
-      softboxScrubbing: false,
-      softboxLivePreview: null,
       productPreviewUrl: blank ? null : DEFAULT_PRODUCT_CUTOUT,
       backgroundPreviewUrl: null,
       // Bump epoch on blank so Fabric rebuilds even when scene payload is empty.

@@ -199,8 +199,6 @@ function SoftboxParamsSection() {
   const { t } = useI18n()
   const softbox = useEditorStore((s) => s.softbox)
   const setSoftbox = useEditorStore((s) => s.setSoftbox)
-  const setSoftboxScrubbing = useEditorStore((s) => s.setSoftboxScrubbing)
-  const setSoftboxLivePreview = useEditorStore((s) => s.setSoftboxLivePreview)
   const beginHistoryTransaction = useEditorStore(
     (s) => s.beginHistoryTransaction,
   )
@@ -208,7 +206,7 @@ function SoftboxParamsSection() {
     (s) => s.commitHistoryTransaction,
   )
 
-  // Local slider state — 60fps UI; CSS overlay via softboxLivePreview; Fabric only on commit.
+  // Local slider state for 60fps thumb UI; light layer reads `softbox` from the store.
   const [draft, setDraft] = useState<SoftboxSettings>(softbox)
   const draftRef = useRef(draft)
   const scrubbingRef = useRef(false)
@@ -233,8 +231,6 @@ function SoftboxParamsSection() {
           lightElevation: draftRef.current.lightElevation,
           enabled: draftRef.current.enabled,
         })
-        store.setSoftboxLivePreview(null)
-        store.setSoftboxScrubbing(false)
         store.commitHistoryTransaction()
       }
     }
@@ -255,29 +251,23 @@ function SoftboxParamsSection() {
     if (scrubbingRef.current) return
     scrubbingRef.current = true
     beginHistoryTransaction()
-    setSoftboxLivePreview(draftRef.current)
-    setSoftboxScrubbing(true)
   }
 
   const endScrub = () => {
     if (!scrubbingRef.current) return
-    // Commit → Fabric; clear CSS live preview in the same turn.
+    // Final softbox values already applied on each onChange — only close history.
     pushDraftToStore(draftRef.current)
-    setSoftboxLivePreview(null)
     scrubbingRef.current = false
-    setSoftboxScrubbing(false)
     commitHistoryTransaction()
   }
 
   const patchDraft = (patch: Partial<SoftboxSettings>) => {
     beginScrub()
-    setDraft((prev) => {
-      const next = { ...prev, ...patch }
-      draftRef.current = next
-      return next
-    })
-    // CSS overlay at 60fps — Fabric softbox stays frozen until onValueCommitted.
-    setSoftboxLivePreview({ ...draftRef.current })
+    const next = { ...draftRef.current, ...patch }
+    draftRef.current = next
+    setDraft(next)
+    // Live light: same softbox state for drag and idle (CSS overlay only).
+    pushDraftToStore(next)
   }
 
   const tempLabel = (v: number) => {

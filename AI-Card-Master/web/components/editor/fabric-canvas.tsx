@@ -43,6 +43,7 @@ import {
   applyFabricZoomView,
   computeFitZoom,
   FABRIC_FIT_PADDING,
+  resolveFitContainerSize,
   type FabricViewportFrame,
 } from "@/lib/editor/fabric-viewport"
 import {
@@ -453,14 +454,13 @@ function isFabricCanvasAlive(
 }
 
 /**
- * Update softbox wash in-place on the existing Fabric.Image element.
- * Never recreates layers / never setElement on slider ticks (avoids canvas resize races).
- * Lost light object / dead canvas → quiet return (must not trip Error Boundary).
+ * Keep Fabric softbox bitmap in sync for PNG export, but never show it live.
+ * Live lighting is exclusively the CSS SoftboxLightOverlay (one formula, one path).
+ * Showing both CSS + Fabric wash stacks and darkens the artboard on slider commit.
  */
 function applySoftboxToFabric(
   canvas: FabricCanvas,
-  softbox: SoftboxSettings,
-  options: { preview: boolean; hideSoftboxForCssOverlay: boolean }
+  softbox: SoftboxSettings
 ): void {
   try {
     if (!isFabricCanvasAlive(canvas)) return
@@ -469,42 +469,24 @@ function applySoftboxToFabric(
     if (!img) return
     const bg = findBackgroundGroup(canvas)
 
-    const caching = !options.preview && !options.hideSoftboxForCssOverlay
-    const hide = options.hideSoftboxForCssOverlay
-
-    // While CSS overlay is active, hide Fabric softbox once — skip paint + redundant renders.
-    if (hide) {
-      if ((img.opacity ?? 1) !== 0 || canvas.backgroundColor !== "rgba(0,0,0,0)") {
-        img.set({ objectCaching: false, opacity: 0 })
-        bg?.set({ objectCaching: false })
-        canvas.backgroundColor = "rgba(0,0,0,0)"
-        img.setCoords()
-        bg?.setCoords()
-        if (isFabricCanvasAlive(canvas)) canvas.requestRenderAll()
-      }
-      return
-    }
-
-    img.set({
-      objectCaching: caching,
-      opacity: 1,
-    })
-    bg?.set({ objectCaching: caching })
-
     const el = img.getElement()
     if (!(el instanceof HTMLCanvasElement)) return
-    // Keep Fabric-bound size stable — do not resize for preview (clears buffer mid-render).
     if (el.width !== CANVAS_WIDTH || el.height !== CANVAS_HEIGHT) {
       el.width = CANVAS_WIDTH
       el.height = CANVAS_HEIGHT
     }
     if (!paintSoftboxInPlace(el, softbox)) return
 
-    img.set({ dirty: true })
+    // Hidden for live view — CSS overlay owns the visible light.
+    img.set({
+      objectCaching: true,
+      opacity: 0,
+      dirty: true,
+    })
+    bg?.set({ objectCaching: true, dirty: true })
     img.setCoords()
-    bg?.set({ dirty: true })
     bg?.setCoords()
-    canvas.backgroundColor = "#0d0f12"
+    canvas.backgroundColor = "rgba(0,0,0,0)"
     if (isFabricCanvasAlive(canvas)) canvas.requestRenderAll()
   } catch (err) {
     if (process.env.NODE_ENV !== "production") {
@@ -513,12 +495,35 @@ function applySoftboxToFabric(
   }
 }
 
+/** Briefly reveal Fabric softbox for toDataURL export, then restore CSS-only live mode. */
+async function withFabricSoftboxVisibleForExport<T>(
+  canvas: FabricCanvas,
+  run: () => Promise<T>
+): Promise<T> {
+  const img = findSoftboxImage(canvas)
+  if (img) {
+    img.set({ opacity: 1 })
+    canvas.backgroundColor = "#0d0f12"
+    canvas.requestRenderAll()
+  }
+  try {
+    return await run()
+  } finally {
+    if (isFabricCanvasAlive(canvas)) {
+      const current = findSoftboxImage(canvas)
+      if (current) current.set({ opacity: 0 })
+      canvas.backgroundColor = "rgba(0,0,0,0)"
+      canvas.requestRenderAll()
+    }
+  }
+}
+
 /**
- * CSS softbox preview — stable DOM (never mount/unmount on scrub).
- * Styles update imperatively via store.subscribe so Fabric host does not re-render
- * and left/top/opacity never animate from zero (transition: none).
+ * Single live lighting path — CSS wash (under canvas) + soft-light blend (over).
+ * Always driven by `softbox` state (drag and idle identical). Stable DOM — never
+ * mount/unmount on slider ticks; styles update imperatively via store.subscribe.
  */
-function SoftboxScrubOverlay({
+function SoftboxLightOverlay({
   frame,
 }: {
   frame: FabricViewportFrame | null
@@ -526,7 +531,6 @@ function SoftboxScrubOverlay({
   const washRef = useRef<HTMLDivElement>(null)
   const blendRef = useRef<HTMLDivElement>(null)
   const frameRef = useRef(frame)
-  const hideRafRef = useRef(0)
   const paintOverlayRef = useRef<() => void>(() => {})
 
   useLayoutEffect(() => {
@@ -542,8 +546,7 @@ function SoftboxScrubOverlay({
 
       const state = useEditorStore.getState()
       const f = frameRef.current
-      const scrubbing = state.softboxScrubbing && f != null
-      const preview = state.softboxLivePreview ?? state.softbox
+      const softbox = state.softbox
 
       const applyBox = (el: HTMLDivElement) => {
         if (!f) return
@@ -556,37 +559,22 @@ function SoftboxScrubOverlay({
       applyBox(wash)
       applyBox(blend)
 
-      if (!scrubbing) {
-        // Defer hide: Fabric softbox restore may still run in later store subscribers
-        // this tick — hiding CSS first would flash an empty artboard.
-        if (hideRafRef.current) cancelAnimationFrame(hideRafRef.current)
-        hideRafRef.current = requestAnimationFrame(() => {
-          hideRafRef.current = 0
-          if (useEditorStore.getState().softboxScrubbing) return
-          const w = washRef.current
-          const b = blendRef.current
-          if (!w || !b) return
-          w.hidden = true
-          b.hidden = true
-          w.style.visibility = "hidden"
-          b.style.visibility = "hidden"
-        })
+      if (f == null) {
+        wash.hidden = true
+        blend.hidden = true
+        wash.style.visibility = "hidden"
+        blend.style.visibility = "hidden"
         return
-      }
-
-      if (hideRafRef.current) {
-        cancelAnimationFrame(hideRafRef.current)
-        hideRafRef.current = 0
       }
 
       let washStyle: CSSProperties | null = null
       let blendStyle: CSSProperties | null = null
       try {
-        // Full wash under canvas only when Fabric softbox is the visible bg.
+        // Studio wash under the transparent Fabric softbox; skip when AI bg covers it.
         if (!state.backgroundPreviewUrl) {
-          washStyle = softboxOverlayStyle(preview)
+          washStyle = softboxOverlayStyle(softbox)
         }
-        blendStyle = softboxLightBlendStyle(preview)
+        blendStyle = softboxLightBlendStyle(softbox)
       } catch {
         wash.hidden = true
         blend.hidden = true
@@ -601,7 +589,6 @@ function SoftboxScrubOverlay({
         }
         el.hidden = false
         el.style.visibility = "visible"
-        // Geometry already set — only light look props.
         el.style.transition = "none"
         el.style.transitionProperty = "none"
         el.style.animation = "none"
@@ -629,8 +616,6 @@ function SoftboxScrubOverlay({
     paintOverlay()
     const unsub = useEditorStore.subscribe((state, prev) => {
       if (
-        state.softboxLivePreview === prev.softboxLivePreview &&
-        state.softboxScrubbing === prev.softboxScrubbing &&
         state.softbox === prev.softbox &&
         state.backgroundPreviewUrl === prev.backgroundPreviewUrl
       ) {
@@ -640,7 +625,6 @@ function SoftboxScrubOverlay({
     })
     return () => {
       unsub()
-      if (hideRafRef.current) cancelAnimationFrame(hideRafRef.current)
     }
   }, [])
 
@@ -690,6 +674,8 @@ async function buildBackgroundLayer(args: {
     selectable: false,
     evented: false,
     objectCaching: true,
+    // Live light is CSS SoftboxLightOverlay — Fabric softbox is export-only.
+    opacity: 0,
   })
   ;(softboxImg as EngineObject).isSoftbox = true
   softboxImg.scaleToWidth(CANVAS_WIDTH)
@@ -1171,15 +1157,23 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
     const host = containerRef.current
     if (!isFabricCanvasAlive(canvas) || !host) return null
     const rect = host.getBoundingClientRect()
-    const w = Math.floor(rect.width) || host.clientWidth
-    const h = Math.floor(rect.height) || host.clientHeight
-    if (w < 2 || h < 2) return null
+    const hostW = Math.floor(rect.width) || host.clientWidth
+    const hostH = Math.floor(rect.height) || host.clientHeight
+    if (hostW < 2 || hostH < 2) return null
+
+    // Cap height by chrome: window - header - topToolbar - 40px.
+    const { width: w, height: h } = resolveFitContainerSize(
+      hostW,
+      hostH,
+      typeof window !== "undefined" ? window.innerHeight : undefined
+    )
 
     // Keep Fabric backstore in sync with the parent box (never 0×0).
     canvas.setWidth(w)
     canvas.setHeight(h)
 
     const mode = zoomModeRef.current
+    // Fit: min((availW - 80) / canvasW, (availH - 80) / canvasH) via padding=40.
     const zoom =
       mode === "fit"
         ? computeFitZoom(w, h, FABRIC_FIT_PADDING)
@@ -1228,20 +1222,26 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
     if (!isFabricCanvasAlive(canvas)) {
       const host = containerRef.current
       const rect = host?.getBoundingClientRect()
-      const initW = Math.max(
+      const rawW = Math.max(
         1,
         Math.floor(rect?.width ?? 0) || host?.clientWidth || CANVAS_WIDTH
       )
-      const initH = Math.max(
+      const rawH = Math.max(
         1,
         Math.floor(rect?.height ?? 0) || host?.clientHeight || CANVAS_HEIGHT
+      )
+      const { width: initW, height: initH } = resolveFitContainerSize(
+        rawW,
+        rawH,
+        typeof window !== "undefined" ? window.innerHeight : undefined
       )
       canvas = new FabricCanvas(el, {
         width: initW,
         height: initH,
         preserveObjectStacking: true,
         selection: true,
-        backgroundColor: "#0d0f12",
+        // Transparent so CSS SoftboxLightOverlay wash shows through live.
+        backgroundColor: "rgba(0,0,0,0)",
         stopContextMenu: true,
         controlsAboveOverlay: true,
         // Batch adds during rebuild; interactive frames call requestRenderAll.
@@ -1259,8 +1259,13 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
       const host = containerRef.current
       const rect = host?.getBoundingClientRect()
       if (rect && rect.width >= 2 && rect.height >= 2) {
-        canvas.setWidth(Math.floor(rect.width))
-        canvas.setHeight(Math.floor(rect.height))
+        const sized = resolveFitContainerSize(
+          Math.floor(rect.width),
+          Math.floor(rect.height),
+          typeof window !== "undefined" ? window.innerHeight : undefined
+        )
+        canvas.setWidth(sized.width)
+        canvas.setHeight(sized.height)
       }
     }
     sceneEpochRef.current = 0
@@ -1615,11 +1620,16 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
       getSceneEpoch: () => sceneEpochRef.current,
       toPngDataUrl: async (size?: FabricExportSize) => {
         clearSmartGuides(canvas)
-        return fabricCanvasToPngDataUrl(canvas, size ?? FABRIC_EXPORT_PRESETS[0])
+        // Live view hides Fabric softbox (CSS owns light) — reveal for raster export.
+        return withFabricSoftboxVisibleForExport(canvas, () =>
+          fabricCanvasToPngDataUrl(canvas, size ?? FABRIC_EXPORT_PRESETS[0])
+        )
       },
       toPngBytes: async (size?: FabricExportSize) => {
         clearSmartGuides(canvas)
-        return fabricCanvasToPngBytes(canvas, size ?? FABRIC_EXPORT_PRESETS[0])
+        return withFabricSoftboxVisibleForExport(canvas, () =>
+          fabricCanvasToPngBytes(canvas, size ?? FABRIC_EXPORT_PRESETS[0])
+        )
       },
     })
 
@@ -1691,8 +1701,8 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
           clearChipInlineEditors(canvas)
           canvas.renderOnAddRemove = false
           canvas.clear()
-          // Keep artboard fill — transparent + dark host reads as a "black void".
-          canvas.backgroundColor = "#0d0f12"
+          // Transparent — CSS SoftboxLightOverlay owns the studio wash live.
+          canvas.backgroundColor = "rgba(0,0,0,0)"
           canvas.discardActiveObject()
           canvas.requestRenderAll()
           syncViewportRef.current()
@@ -1811,7 +1821,8 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
         const prevSelected = useEditorStore.getState().selectedLayerId
         canvas.renderOnAddRemove = false
         canvas.clear()
-        canvas.backgroundColor = "#0d0f12"
+        // Transparent so CSS SoftboxLightOverlay wash is the live studio light.
+        canvas.backgroundColor = "rgba(0,0,0,0)"
         for (const obj of built) {
           canvas.add(obj)
         }
@@ -1891,27 +1902,20 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
     setBusyKind,
   ])
 
-  // Softbox updates: imperative store.subscribe — does not re-render this Fabric host.
-  // During scrub: CSS overlay only (softboxLivePreview). Fabric paints on scrub end / idle.
+  // Softbox: CSS SoftboxLightOverlay is the live light. Debounced Fabric paint
+  // keeps the hidden bitmap export-ready — no visual mode switch on slider commit.
   useEffect(() => {
     if (!ready) return
 
     let debounceTimer = 0
     let raf = 0
-    let lastScrubbing: boolean | null = null
 
     const runApply = () => {
       raf = 0
       try {
         const canvas = fabricRef.current
         if (!isFabricCanvasAlive(canvas)) return
-        const state = useEditorStore.getState()
-        const useCssOverlay =
-          state.softboxScrubbing && !state.backgroundPreviewUrl
-        applySoftboxToFabric(canvas, state.softbox, {
-          preview: state.softboxScrubbing,
-          hideSoftboxForCssOverlay: useCssOverlay,
-        })
+        applySoftboxToFabric(canvas, useEditorStore.getState().softbox)
       } catch (err) {
         if (process.env.NODE_ENV !== "production") {
           console.error("[fabric-canvas] softbox apply failed", err)
@@ -1920,33 +1924,15 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
     }
 
     const schedule = (immediate: boolean) => {
-      const state = useEditorStore.getState()
-      const scrubbing = state.softboxScrubbing
-      const scrubbingChanged = lastScrubbing !== scrubbing
-      lastScrubbing = scrubbing
-
-      // Mid-scrub value ticks: CSS overlay is the preview — do not touch Fabric.
-      if (scrubbing && !scrubbingChanged && !immediate) {
-        return
-      }
-
       window.clearTimeout(debounceTimer)
       if (raf) {
         cancelAnimationFrame(raf)
         raf = 0
       }
-
-      if (immediate || scrubbingChanged) {
-        // Scrub end must restore Fabric softbox before React paints without CSS overlay
-        // (rAF would flash one empty frame).
-        if (immediate && !scrubbing) {
-          runApply()
-          return
-        }
+      if (immediate) {
         raf = requestAnimationFrame(runApply)
         return
       }
-
       debounceTimer = window.setTimeout(() => {
         debounceTimer = 0
         raf = requestAnimationFrame(runApply)
@@ -1956,17 +1942,13 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
     schedule(true)
 
     const unsub = useEditorStore.subscribe((state, prev) => {
-      // Ignore softboxLivePreview — CSS overlay owns that channel.
       if (
         state.softbox === prev.softbox &&
-        state.softboxScrubbing === prev.softboxScrubbing &&
         state.backgroundPreviewUrl === prev.backgroundPreviewUrl
       ) {
         return
       }
-      // Flush final Fabric paint as soon as scrub ends (onChangeCommitted).
-      const scrubEnded = prev.softboxScrubbing && !state.softboxScrubbing
-      schedule(scrubEnded)
+      schedule(false)
     })
 
     return () => {
@@ -2031,63 +2013,67 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
 
   return (
     <div
-      ref={containerRef}
-      id="editor-export-canvas"
-      data-export-canvas="true"
-      data-fabric-engine="true"
       className={cn(
-        "relative flex h-[calc(100vh-120px)] min-h-[500px] w-full items-center justify-center overflow-hidden bg-zinc-900"
+        "relative flex h-full min-h-0 w-full items-center justify-center overflow-hidden bg-zinc-900 p-6"
       )}
-      role="img"
-      aria-label={`Холст ${CANVAS_WIDTH}×${CANVAS_HEIGHT}`}
-      aria-busy={showBusyOverlay}
     >
-      {artboardFrame ? (
-        <div
-          aria-hidden
-          className="pointer-events-none absolute z-0 bg-loft shadow-[0_24px_80px_rgba(0,0,0,0.55)] ring-1 ring-white/10"
-          style={{
-            left: artboardFrame.left,
-            top: artboardFrame.top,
-            width: artboardFrame.width,
-            height: artboardFrame.height,
-          }}
-        />
-      ) : null}
-
-      <div className="absolute inset-0">
-        {/* Softbox overlays are always mounted (hidden when idle) — never remount next to Fabric. */}
-        <SoftboxScrubOverlay frame={artboardFrame} />
-        <canvas ref={canvasRef} className="relative z-[1]" />
-      </div>
-
-      {sceneError ? (
-        <div
-          className="absolute inset-0 z-[140] flex flex-col items-center justify-center gap-3 bg-loft/90 px-4 text-center"
-          role="alert"
-          data-export-chrome="true"
-        >
-          <p className="font-heading text-sm font-semibold">Слой не загрузился</p>
-          <p className="max-w-xs text-xs text-muted-foreground">{sceneError}</p>
-          <button
-            type="button"
-            className="rounded-md border border-white/15 bg-white/5 px-3 py-1.5 text-xs hover:bg-white/10"
-            onClick={() => {
-              setSceneError(null)
-              setRebuildNonce((n) => n + 1)
+      <div
+        ref={containerRef}
+        id="editor-export-canvas"
+        data-export-canvas="true"
+        data-fabric-engine="true"
+        className="relative h-full min-h-0 w-full overflow-hidden"
+        role="img"
+        aria-label={`Холст ${CANVAS_WIDTH}×${CANVAS_HEIGHT}`}
+        aria-busy={showBusyOverlay}
+      >
+        {artboardFrame ? (
+          <div
+            aria-hidden
+            className="pointer-events-none absolute z-0 bg-loft shadow-[0_24px_80px_rgba(0,0,0,0.55)] ring-1 ring-white/10"
+            style={{
+              left: artboardFrame.left,
+              top: artboardFrame.top,
+              width: artboardFrame.width,
+              height: artboardFrame.height,
             }}
-          >
-            Пересобрать холст
-          </button>
-        </div>
-      ) : null}
+          />
+        ) : null}
 
-      {showBusyOverlay ? (
-        <GenerationBusyOverlay
-          kind={busyKind}
-          progress={busyKind === "generating" ? busyProgress : null}
-        />
-      ) : null}
+        <div className="absolute inset-0">
+          {/* Softbox CSS light — always mounted; props update from softbox state. */}
+          <SoftboxLightOverlay frame={artboardFrame} />
+          <canvas ref={canvasRef} className="relative z-[1]" />
+        </div>
+
+        {sceneError ? (
+          <div
+            className="absolute inset-0 z-[140] flex flex-col items-center justify-center gap-3 bg-loft/90 px-4 text-center"
+            role="alert"
+            data-export-chrome="true"
+          >
+            <p className="font-heading text-sm font-semibold">Слой не загрузился</p>
+            <p className="max-w-xs text-xs text-muted-foreground">{sceneError}</p>
+            <button
+              type="button"
+              className="rounded-md border border-white/15 bg-white/5 px-3 py-1.5 text-xs hover:bg-white/10"
+              onClick={() => {
+                setSceneError(null)
+                setRebuildNonce((n) => n + 1)
+              }}
+            >
+              Пересобрать холст
+            </button>
+          </div>
+        ) : null}
+
+        {showBusyOverlay ? (
+          <GenerationBusyOverlay
+            kind={busyKind}
+            progress={busyKind === "generating" ? busyProgress : null}
+          />
+        ) : null}
+      </div>
     </div>
   )
 }

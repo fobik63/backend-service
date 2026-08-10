@@ -1,14 +1,16 @@
 "use client"
 
-import { Menu, X } from "lucide-react"
+import { ChevronDown, FolderKanban, LogOut, Menu, X } from "lucide-react"
 import Link from "next/link"
-import { useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
+import { useEffect, useRef, useState } from "react"
 import { AnimatePresence, motion } from "framer-motion"
 
 import { AuthModal } from "@/components/modals/auth-modal"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { GlassButton } from "@/components/ui/glass-button"
 import { displayNameFromEmail } from "@/lib/auth/session"
+import { IS_MOCK } from "@/lib/constants/mock"
 import { useAuthStore } from "@/lib/store"
 import { cn } from "@/lib/utils"
 
@@ -84,11 +86,15 @@ function userInitials(name: string) {
 }
 
 function Navbar() {
+  const router = useRouter()
   const [scrolled, setScrolled] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [authOpen, setAuthOpen] = useState(false)
+  const [isMenuOpen, setIsMenuOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
   const user = useAuthStore((s) => s.user)
   const hydrateFromStorage = useAuthStore((s) => s.hydrateFromStorage)
+  const clearAuth = useAuthStore((s) => s.clearAuth)
   const isAuthenticated = Boolean(user)
   const displayName = user ? displayNameFromEmail(user.email) : ""
 
@@ -112,24 +118,109 @@ function Navbar() {
     return () => window.removeEventListener("keydown", onKey)
   }, [mobileOpen])
 
+  useEffect(() => {
+    if (!isMenuOpen) return
+
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node
+      if (menuRef.current && !menuRef.current.contains(target)) {
+        setIsMenuOpen(false)
+      }
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setIsMenuOpen(false)
+    }
+
+    document.addEventListener("mousedown", onPointerDown)
+    document.addEventListener("keydown", onKeyDown)
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown)
+      document.removeEventListener("keydown", onKeyDown)
+    }
+  }, [isMenuOpen])
+
   const openAuth = () => {
     setMobileOpen(false)
     setAuthOpen(true)
   }
 
-  const accountBadge = (
-    <div
-      className="inline-flex items-center gap-2 rounded-xl border border-white/12 bg-white/[0.04] px-2.5 py-1.5"
-      aria-label={`Аккаунт: ${displayName}`}
-    >
-      <Avatar size="sm">
-        <AvatarFallback className="bg-sage/60 text-[10px] text-emerald">
-          {userInitials(displayName)}
-        </AvatarFallback>
-      </Avatar>
-      <span className="max-w-28 truncate text-sm font-medium text-foreground">
-        {displayName}
-      </span>
+  const handleLogout = () => {
+    setIsMenuOpen(false)
+    setMobileOpen(false)
+    clearAuth()
+    if (IS_MOCK) return
+    router.push("/login")
+  }
+
+  const accountMenu = (
+    <div ref={menuRef} className="relative">
+      {isMenuOpen ? (
+        <button
+          type="button"
+          className="fixed inset-0 z-40 cursor-default bg-transparent"
+          aria-label="Закрыть меню"
+          onClick={() => setIsMenuOpen(false)}
+        />
+      ) : null}
+
+      <button
+        type="button"
+        className={cn(
+          "relative z-50 inline-flex items-center gap-2 rounded-xl border border-white/12 bg-white/[0.04] px-2.5 py-1.5 text-sm transition-colors",
+          "hover:bg-white/[0.07] outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+          isMenuOpen && "bg-white/[0.07]"
+        )}
+        aria-label={`Аккаунт: ${displayName}`}
+        aria-expanded={isMenuOpen}
+        aria-haspopup="menu"
+        onClick={() => setIsMenuOpen((open) => !open)}
+      >
+        <Avatar size="sm">
+          <AvatarFallback className="bg-sage/60 text-[10px] text-emerald">
+            {userInitials(displayName)}
+          </AvatarFallback>
+        </Avatar>
+        <span className="max-w-28 truncate font-medium text-foreground">
+          {displayName}
+        </span>
+        <ChevronDown
+          className={cn(
+            "size-3.5 text-text-muted transition-transform",
+            isMenuOpen && "rotate-180"
+          )}
+          aria-hidden
+        />
+      </button>
+
+      {isMenuOpen ? (
+        <div
+          role="menu"
+          className="absolute right-0 top-full z-50 mt-2 min-w-48 rounded-xl border border-white/12 bg-zinc-900/95 p-1 shadow-lg backdrop-blur-xl"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-foreground outline-none hover:bg-white/[0.06] focus-visible:bg-white/[0.06]"
+            onClick={() => {
+              setIsMenuOpen(false)
+              router.push("/projects")
+            }}
+          >
+            <FolderKanban className="size-4" aria-hidden />
+            Мои проекты
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-destructive outline-none hover:bg-destructive/10 focus-visible:bg-destructive/10"
+            onClick={handleLogout}
+          >
+            <LogOut className="size-4" aria-hidden />
+            Выйти
+          </button>
+        </div>
+      ) : null}
     </div>
   )
 
@@ -175,7 +266,7 @@ function Navbar() {
 
         <div className="flex shrink-0 items-center gap-2">
           {isAuthenticated ? (
-            accountBadge
+            accountMenu
           ) : (
             <div className="hidden items-center gap-2 sm:flex">
               <GlassButton
@@ -230,7 +321,29 @@ function Navbar() {
                 </li>
               ))}
             </ul>
-            {!isAuthenticated ? (
+            {isAuthenticated ? (
+              <div className="flex flex-col gap-1 border-t border-white/8 p-3 sm:hidden">
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm text-foreground hover:bg-white/[0.04]"
+                  onClick={() => {
+                    setMobileOpen(false)
+                    router.push("/projects")
+                  }}
+                >
+                  <FolderKanban className="size-4" aria-hidden />
+                  Мои проекты
+                </button>
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm text-destructive hover:bg-destructive/10"
+                  onClick={handleLogout}
+                >
+                  <LogOut className="size-4" aria-hidden />
+                  Выйти
+                </button>
+              </div>
+            ) : (
               <div className="flex flex-col gap-2 border-t border-white/8 p-3 sm:hidden">
                 <GlassButton
                   className="w-full border border-white/12 bg-transparent text-foreground"
@@ -242,7 +355,7 @@ function Navbar() {
                   Попробовать бесплатно
                 </GlassButton>
               </div>
-            ) : null}
+            )}
           </motion.div>
         ) : null}
       </AnimatePresence>

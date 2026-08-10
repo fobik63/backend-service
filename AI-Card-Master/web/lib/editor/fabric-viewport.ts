@@ -5,8 +5,20 @@ import {
   CANVAS_WIDTH,
 } from "@/lib/constants/mock-editor"
 
-/** Inset around the artboard so transform handles stay on-screen. */
+/** Inset around the artboard so transform handles stay on-screen (40px × 2 = 80). */
 export const FABRIC_FIT_PADDING = 40
+
+/**
+ * App shell header (h-14 = 56) + editor workspace bar (h-12 = 48).
+ * Used when clamping Fit height against the window.
+ */
+export const EDITOR_HEADER_HEIGHT = 56 + 48
+
+/** Canvas quick bar (CanvasQuickBar) approximate height. */
+export const EDITOR_TOP_TOOLBAR_HEIGHT = 52
+
+/** Extra gap below chrome before Fit padding is applied. */
+export const EDITOR_VIEWPORT_GAP = 40
 
 export type FabricViewportFrame = {
   zoom: number
@@ -20,8 +32,21 @@ export type FabricViewportFrame = {
 }
 
 /**
+ * Available canvas height under top chrome:
+ * `window.innerHeight - headerHeight - topToolbarHeight - 40px`.
+ */
+export function computeAvailableCanvasHeight(
+  windowHeight: number,
+  headerHeight: number = EDITOR_HEADER_HEIGHT,
+  topToolbarHeight: number = EDITOR_TOP_TOOLBAR_HEIGHT,
+  gap: number = EDITOR_VIEWPORT_GAP
+): number {
+  return Math.max(120, windowHeight - headerHeight - topToolbarHeight - gap)
+}
+
+/**
  * Zoom so the full artboard fits in the wrapper with equal padding on each side.
- * Capped at 1 so Fit never upscales past native pixels.
+ * Formula: `min((availW - 80) / canvasW, (availH - 80) / canvasH)`, capped at 1×.
  */
 export function computeFitZoom(
   containerWidth: number,
@@ -34,6 +59,23 @@ export function computeFitZoom(
   const availH = Math.max(1, containerHeight - padding * 2)
   const next = Math.min(availW / artboardWidth, availH / artboardHeight)
   return Math.max(0.05, Math.min(1, next))
+}
+
+/**
+ * Resolve container size for Fit: prefer the host box, but never exceed the
+ * chrome-aware window height so the artboard cannot draw under top bars.
+ */
+export function resolveFitContainerSize(
+  hostWidth: number,
+  hostHeight: number,
+  windowHeight?: number
+): { width: number; height: number } {
+  const width = Math.max(1, Math.floor(hostWidth))
+  let height = Math.max(1, Math.floor(hostHeight))
+  if (typeof windowHeight === "number" && Number.isFinite(windowHeight)) {
+    height = Math.min(height, computeAvailableCanvasHeight(windowHeight))
+  }
+  return { width, height }
 }
 
 /**

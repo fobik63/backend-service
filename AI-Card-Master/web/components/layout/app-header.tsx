@@ -2,25 +2,21 @@
 
 import {
   ChevronDown,
-  Coins,
   FolderKanban,
-  ImagePlus,
+  Home,
   Languages,
   LogOut,
-  Settings,
 } from "lucide-react"
 import { usePathname, useRouter } from "next/navigation"
-import { useState, type ReactNode } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 
 import { BrandLogo } from "@/components/dashboard/brand-logo"
 import { Breadcrumbs } from "@/components/dashboard/breadcrumbs"
-import { TopUpDialog } from "@/components/dashboard/top-up-dialog"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuGroup,
-  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
@@ -56,6 +52,10 @@ function isEditorPath(pathname: string) {
   return pathname.startsWith("/editor")
 }
 
+function isProjectsPath(pathname: string) {
+  return pathname === "/projects" || pathname.startsWith("/projects/")
+}
+
 function AppHeader({
   user = DEFAULT_USER,
   onLogout,
@@ -66,7 +66,8 @@ function AppHeader({
   const router = useRouter()
   const pathname = usePathname()
   const { locale, setLocale, t } = useI18n()
-  const [pricingOpen, setPricingOpen] = useState(false)
+  const [isMenuOpen, setIsMenuOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
   const initials = (user.name || "Г")
     .split(/\s+/)
     .filter(Boolean)
@@ -85,15 +86,49 @@ function AppHeader({
     router.push(href)
   }
 
+  const handleLogout = () => {
+    setIsMenuOpen(false)
+    if (onLogout) {
+      onLogout()
+      return
+    }
+    if (isEditorPath(pathname)) {
+      window.location.assign("/login")
+      return
+    }
+    router.push("/login")
+  }
+
+  useEffect(() => {
+    if (!isMenuOpen) return
+
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node
+      if (menuRef.current && !menuRef.current.contains(target)) {
+        setIsMenuOpen(false)
+      }
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setIsMenuOpen(false)
+    }
+
+    document.addEventListener("mousedown", onPointerDown)
+    document.addEventListener("keydown", onKeyDown)
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown)
+      document.removeEventListener("keydown", onKeyDown)
+    }
+  }, [isMenuOpen])
+
   return (
-    <>
-      <header
-        className={cn(
-          "sticky top-0 z-40 flex h-14 shrink-0 items-center gap-3 border-b border-zinc-800/80 bg-zinc-900/80 px-4 backdrop-blur-xl sm:px-6",
-          className
-        )}
-        aria-label={t("nav.ariaHeader")}
-      >
+    <header
+      className={cn(
+        "sticky top-0 z-40 flex h-14 shrink-0 items-center gap-3 border-b border-zinc-800/80 bg-zinc-900/80 px-4 backdrop-blur-xl sm:px-6",
+        className
+      )}
+      aria-label={t("nav.ariaHeader")}
+    >
       <BrandLogo
         href="/"
         onClick={(event) => {
@@ -152,13 +187,27 @@ function AppHeader({
           </DropdownMenuContent>
         </DropdownMenu>
 
-        <DropdownMenu>
-          <DropdownMenuTrigger
+        <div ref={menuRef} className="relative">
+          {isMenuOpen ? (
+            <button
+              type="button"
+              className="fixed inset-0 z-40 cursor-default bg-transparent"
+              aria-label={t("common.closeMenu")}
+              onClick={() => setIsMenuOpen(false)}
+            />
+          ) : null}
+
+          <button
+            type="button"
             className={cn(
-              "inline-flex items-center gap-2 rounded-lg px-1.5 py-1 text-sm transition-colors",
-              "hover:bg-muted outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+              "relative z-50 inline-flex items-center gap-2 rounded-lg px-1.5 py-1 text-sm transition-colors",
+              "hover:bg-muted outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+              isMenuOpen && "bg-muted"
             )}
             aria-label={t("topBar.profileMenu")}
+            aria-expanded={isMenuOpen}
+            aria-haspopup="menu"
+            onClick={() => setIsMenuOpen((open) => !open)}
           >
             <Avatar size="sm">
               {user.avatarUrl ? (
@@ -172,81 +221,60 @@ function AppHeader({
               {user.name}
             </span>
             <ChevronDown
-              className="size-3.5 text-text-muted"
+              className={cn(
+                "size-3.5 text-text-muted transition-transform",
+                isMenuOpen && "rotate-180"
+              )}
               aria-hidden
             />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="min-w-52">
-            <DropdownMenuGroup>
-              <DropdownMenuLabel className="font-normal">
-                <div className="flex flex-col gap-0.5">
-                  <span className="text-sm font-medium text-foreground">
-                    {user.name}
-                  </span>
-                  {user.email ? (
-                    <span className="text-xs text-text-muted">{user.email}</span>
-                  ) : null}
-                </div>
-              </DropdownMenuLabel>
-            </DropdownMenuGroup>
-            <DropdownMenuSeparator />
-            <DropdownMenuGroup>
-              <DropdownMenuItem
-                className="cursor-pointer gap-2"
-                onClick={() => go("/editor/new")}
-              >
-                <ImagePlus className="size-4" aria-hidden />
-                {t("nav.createProject")}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                className="cursor-pointer gap-2"
-                onClick={() => go("/projects")}
-              >
-                <FolderKanban className="size-4" aria-hidden />
-                {t("nav.projects")}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                className="cursor-pointer gap-2"
-                onClick={() => go("/settings")}
-              >
-                <Settings className="size-4" aria-hidden />
-                {t("common.settings")}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                className="cursor-pointer gap-2"
-                onClick={() => setPricingOpen(true)}
-              >
-                <Coins className="size-4" aria-hidden />
-                {t("nav.pricing")}
-              </DropdownMenuItem>
-            </DropdownMenuGroup>
-            <DropdownMenuSeparator />
-            <DropdownMenuGroup>
-              <DropdownMenuItem
-                variant="destructive"
-                className="cursor-pointer gap-2"
-                onClick={() => {
-                  if (onLogout) {
-                    onLogout()
-                    return
-                  }
-                  if (isEditorPath(pathname)) {
-                    window.location.assign("/login")
-                    return
-                  }
-                  router.push("/login")
-                }}
+          </button>
+
+          {isMenuOpen ? (
+            <div
+              role="menu"
+              className="absolute right-0 top-full z-50 mt-2 min-w-48 rounded-lg border border-zinc-800 bg-zinc-900 p-1 shadow-lg"
+            >
+              {isProjectsPath(pathname) ? (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground outline-none hover:bg-muted focus-visible:bg-muted"
+                  onClick={() => {
+                    setIsMenuOpen(false)
+                    go("/")
+                  }}
+                >
+                  <Home className="size-4" aria-hidden />
+                  {t("nav.home")}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground outline-none hover:bg-muted focus-visible:bg-muted"
+                  onClick={() => {
+                    setIsMenuOpen(false)
+                    go("/projects")
+                  }}
+                >
+                  <FolderKanban className="size-4" aria-hidden />
+                  {t("nav.projects")}
+                </button>
+              )}
+              <button
+                type="button"
+                role="menuitem"
+                className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-destructive outline-none hover:bg-destructive/10 focus-visible:bg-destructive/10"
+                onClick={handleLogout}
               >
                 <LogOut className="size-4" aria-hidden />
                 {t("common.logout")}
-              </DropdownMenuItem>
-            </DropdownMenuGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
+              </button>
+            </div>
+          ) : null}
+        </div>
       </div>
-      </header>
-      <TopUpDialog open={pricingOpen} onOpenChange={setPricingOpen} />
-    </>
+    </header>
   )
 }
 

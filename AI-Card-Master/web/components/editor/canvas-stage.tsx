@@ -18,6 +18,10 @@ import {
   CANVAS_WIDTH,
 } from "@/lib/constants/mock-editor"
 import {
+  computeAvailableCanvasHeight,
+  FABRIC_FIT_PADDING,
+} from "@/lib/editor/fabric-viewport"
+import {
   downloadCurrentCanvasImage,
   findEditorExportCanvas,
 } from "@/lib/export/card-pack"
@@ -203,9 +207,14 @@ function EditorCanvasStage() {
     let alive = true
     const measure = () => {
       if (!alive) return
-      const pad = 40
+      const pad = FABRIC_FIT_PADDING
       const availW = Math.max(120, el.clientWidth - pad * 2)
-      const availH = Math.max(120, el.clientHeight - pad * 2)
+      const hostH = el.clientHeight
+      const chromeH =
+        typeof window !== "undefined"
+          ? computeAvailableCanvasHeight(window.innerHeight)
+          : hostH
+      const availH = Math.max(120, Math.min(hostH, chromeH) - pad * 2)
       const next = Math.min(availW / CANVAS_WIDTH, availH / CANVAS_HEIGHT)
       setFitScale(Math.max(0.12, Math.min(1, next)))
     }

@@ -251,8 +251,8 @@ export function softboxToDataUrl(
 }
 
 /**
- * Lightweight CSS stand-in for the softbox wash while sliders are dragging.
- * Placed under the Fabric canvas (Fabric softbox opacity → 0) — no canvas paint.
+ * CSS studio wash under the Fabric canvas (Fabric softbox stays opacity 0 live).
+ * Same formula for drag and idle — driven solely by `softbox` store state.
  * Never animate geometry/opacity — mount + transition:all looks like the artboard "spawns and slides".
  */
 const SOFTBOX_NO_TRANSITION: CSSProperties = {
@@ -295,8 +295,9 @@ export function softboxOverlayStyle(softbox: SoftboxSettings): CSSProperties {
 }
 
 /**
- * Top-of-canvas CSS light wash (mix-blend) — 60fps scrub preview over product layers.
+ * Top-of-canvas CSS light wash (mix-blend) — lights product layers.
  * Complements `softboxOverlayStyle` under the canvas; alone when an AI bg covers softbox.
+ * Part of the single live lighting path (always on with softbox state).
  */
 export function softboxLightBlendStyle(softbox: SoftboxSettings): CSSProperties {
   if (!softbox.enabled) {

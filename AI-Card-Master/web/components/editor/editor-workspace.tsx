@@ -35,7 +35,7 @@ type EditorWorkspaceProps = {
 }
 
 /** Exit editor via full page load — Soft Router + Fabric dispose can freeze the UI. */
-function leaveEditorToHome(event: MouseEvent<HTMLAnchorElement>) {
+function leaveEditorToProjects(event: MouseEvent<HTMLAnchorElement>) {
   if (
     event.defaultPrevented ||
     event.button !== 0 ||
@@ -48,6 +48,21 @@ function leaveEditorToHome(event: MouseEvent<HTMLAnchorElement>) {
   }
   event.preventDefault()
   window.location.assign("/projects")
+}
+
+function leaveEditorToHome(event: MouseEvent<HTMLAnchorElement>) {
+  if (
+    event.defaultPrevented ||
+    event.button !== 0 ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.shiftKey ||
+    event.altKey
+  ) {
+    return
+  }
+  event.preventDefault()
+  window.location.assign("/")
 }
 
 function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
@@ -280,7 +295,7 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
         <div className="flex min-w-0 items-center gap-2 sm:gap-3">
           <Link
             href="/projects"
-            onClick={leaveEditorToHome}
+            onClick={leaveEditorToProjects}
             className={cn(
               buttonVariants({ size: "sm", variant: "ghost" }),
               "shrink-0 gap-1.5 px-2 text-muted-foreground hover:text-foreground"
@@ -293,7 +308,7 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
             </span>
           </Link>
           <BrandLogo
-            href="/projects"
+            href="/"
             onClick={leaveEditorToHome}
             className="hidden border-l border-white/10 pl-3 sm:flex"
           />
@@ -381,7 +396,7 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
               </p>
               <Link
                 href="/projects"
-                onClick={leaveEditorToHome}
+                onClick={leaveEditorToProjects}
                 className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
               >
                 {t("editor.returnToProjects")}
@@ -398,7 +413,7 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
               {!productData ? (
                 <Link
                   href="/projects"
-                  onClick={leaveEditorToHome}
+                  onClick={leaveEditorToProjects}
                   className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
                 >
                   {t("editor.returnToProjects")}
@@ -406,7 +421,7 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
               ) : (
                 <Link
                   href="/projects"
-                  onClick={leaveEditorToHome}
+                  onClick={leaveEditorToProjects}
                   className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
                 >
                   {t("editor.backToProjects")}

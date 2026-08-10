@@ -23,6 +23,7 @@ export const dictionaries = {
     },
     nav: {
       projects: "Мои проекты",
+      home: "Главная страница",
       createProject: "Создать новый проект",
       editor: "Создать карточку",
       pricing: "Тарифы и баланс",
@@ -256,6 +257,7 @@ export const dictionaries = {
     },
     nav: {
       projects: "My projects",
+      home: "Home page",
       createProject: "Create new project",
       editor: "Create card",
       pricing: "Plans & balance",

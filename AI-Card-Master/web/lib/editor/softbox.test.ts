@@ -57,7 +57,7 @@ describe("softbox", () => {
     expect(style.transition).toBe("none")
   })
 
-  it("builds mix-blend light overlay for scrubbing", () => {
+  it("builds mix-blend light overlay", () => {
     const style = softboxLightBlendStyle(BASE)
     expect(style.mixBlendMode).toBe("soft-light")
     expect(style.backgroundImage).toEqual(expect.stringContaining("radial-gradient"))
