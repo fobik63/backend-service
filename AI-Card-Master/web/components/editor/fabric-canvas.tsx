@@ -90,6 +90,15 @@ type EngineObject = FabricObject & {
    * Layer `scale` is logical; Fabric scaleX/Y = layer.scale / chipSourceScale.
    */
   chipSourceScale?: number
+  /** Canvas left/top snapped before nested chip text edit / layout. */
+  __badgeAbsLeft?: number
+  __badgeAbsTop?: number
+  /** Last in-bounds scale during an object:scaling gesture. */
+  lastGoodScaleX?: number
+  lastGoodScaleY?: number
+  /** Last in-bounds position paired with lastGoodScale (corner handles move left/top). */
+  lastGoodLeft?: number
+  lastGoodTop?: number
 }
 
 /** Author chip geometry at 3×; place on canvas via scaleX/Y so vectors stay sharp when shrunk. */
@@ -273,6 +282,42 @@ function constrainObjectToArtboard(obj: FabricObject): void {
   obj.setCoords()
 }
 
+/**
+ * Soft-clamp scale so the AABB stays inside the artboard.
+ * Remembers the last in-bounds scale (+ left/top — corner handles move both)
+ * and reverts when the gesture would overflow. Uses artboard size (CANVAS_*),
+ * not the zoomed viewport.
+ */
+function constrainScaleToArtboard(obj: FabricObject): void {
+  const engine = obj as EngineObject
+  if (isSmartGuideObject(obj)) return
+  if (engine.layerRole === "background") return
+  if (engine.isSoftbox || engine.isChipInlineEditor) return
+
+  obj.setCoords()
+  const rect = obj.getBoundingRect()
+
+  if (
+    rect.left < 0 ||
+    rect.top < 0 ||
+    rect.left + rect.width > CANVAS_WIDTH ||
+    rect.top + rect.height > CANVAS_HEIGHT
+  ) {
+    obj.set({
+      scaleX: engine.lastGoodScaleX ?? obj.scaleX,
+      scaleY: engine.lastGoodScaleY ?? obj.scaleY,
+      left: engine.lastGoodLeft ?? obj.left,
+      top: engine.lastGoodTop ?? obj.top,
+    })
+    obj.setCoords()
+  } else {
+    engine.lastGoodScaleX = obj.scaleX
+    engine.lastGoodScaleY = obj.scaleY
+    engine.lastGoodLeft = obj.left
+    engine.lastGoodTop = obj.top
+  }
+}
+
 function applySmartSnap(
   canvas: FabricCanvas,
   moving: EngineObject,
@@ -445,12 +490,40 @@ function findByLayerId(canvas: FabricCanvas, layerId: string) {
     | undefined
 }
 
+/** Wait until the underlying HTMLImageElement is fully decoded for paint. */
+async function awaitFabricImageDecoded(img: FabricImage): Promise<void> {
+  const el =
+    (typeof img.getElement === "function" ? img.getElement() : null) ??
+    (
+      img as FabricImage & {
+        _element?: HTMLImageElement | HTMLCanvasElement | HTMLVideoElement
+      }
+    )._element
+  if (!el || el instanceof HTMLCanvasElement || el instanceof HTMLVideoElement) {
+    return
+  }
+  if (typeof el.decode === "function") {
+    try {
+      await el.decode()
+    } catch {
+      // decode() can reject for SVG data-URLs in some browsers; onload already fired.
+    }
+  }
+  // Zero-size SVG decode race — yield a frame so naturalWidth settles.
+  if (!(img.width > 0 && img.height > 0) || !(el.naturalWidth > 0)) {
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve())
+    })
+  }
+}
+
 async function loadImage(url: string): Promise<FabricImage> {
   const isLocal =
     url.startsWith("data:") ||
     url.startsWith("blob:") ||
     url.startsWith("/")
   // Fabric v6: fromURL returns a Promise (callback form is legacy).
+  // Always await the Promise so badge/product bitmaps exist before Group layout.
   let img: FabricImage
   if (isLocal) {
     img = await FabricImage.fromURL(url)
@@ -461,8 +534,29 @@ async function loadImage(url: string): Promise<FabricImage> {
       img = await FabricImage.fromURL(url)
     }
   }
-  img.set({ imageSmoothing: true, objectCaching: false })
+  await awaitFabricImageDecoded(img)
+  img.set({ imageSmoothing: true, objectCaching: false, dirty: true })
   return img
+}
+
+/** Fabric v6: stack methods live on the canvas (`bringObjectToFront`). */
+function bringEngineObjectToFront(
+  canvas: FabricCanvas,
+  obj: FabricObject
+): void {
+  const withV6 = canvas as FabricCanvas & {
+    bringObjectToFront?: (object: FabricObject) => boolean
+  }
+  if (typeof withV6.bringObjectToFront === "function") {
+    withV6.bringObjectToFront(obj)
+    return
+  }
+  const withLegacy = canvas as FabricCanvas & {
+    bringToFront?: (object: FabricObject) => FabricCanvas
+  }
+  if (typeof withLegacy.bringToFront === "function") {
+    withLegacy.bringToFront(obj)
+  }
 }
 
 /**
@@ -620,6 +714,7 @@ function applyLightingEffects(
 function forceCanvasVisualSync(canvas: FabricCanvas): void {
   if (!isFabricCanvasAlive(canvas)) return
   canvas.forEachObject((obj) => {
+    obj.set({ dirty: true })
     obj.setCoords()
   })
   canvas.calcOffset()
@@ -627,8 +722,12 @@ function forceCanvasVisualSync(canvas: FabricCanvas): void {
   canvas.requestRenderAll()
   window.setTimeout(() => {
     if (!isFabricCanvasAlive(canvas)) return
+    canvas.forEachObject((obj) => {
+      obj.set({ dirty: true })
+      obj.setCoords()
+    })
     canvas.renderAll()
-  }, 150)
+  }, 200)
 }
 
 /** Briefly reveal Fabric softbox for toDataURL export, then restore CSS-only live mode. */
@@ -1020,6 +1119,8 @@ async function buildChipObject(layer: CanvasLayer): Promise<Group> {
   // SVG rasterized well above on-canvas icon box (extra 2× before group downscale).
   const iconSrcPx = Math.max(192, Math.round(iconSize * 2))
 
+  // Promise-wrap icon load (FabricImage.fromURL) so the Group is never measured
+  // against an empty / half-decoded SVG bitmap on first hydrate.
   const icon = await loadImage(chipIconDataUrl(chip.iconId, fg, iconSrcPx))
   icon.set({
     originX: "left",
@@ -1030,8 +1131,10 @@ async function buildChipObject(layer: CanvasLayer): Promise<Group> {
     evented: false,
     objectCaching: false,
     imageSmoothing: true,
+    dirty: true,
   })
   icon.scaleToWidth(iconSize)
+  icon.setCoords()
   ;(icon as EngineObject).chipPart = "icon"
 
   const chipFont = resolveFabricFontFamily("Inter")
@@ -1160,7 +1263,8 @@ async function buildChipObject(layer: CanvasLayer): Promise<Group> {
   })
   const marked = markObject(group, layer.id, "infographic")
   marked.chipSourceScale = hi
-  // Coords before canvas.add — metrics are stable after fonts.ready + icon load.
+  // Dirty + coords before canvas.add — metrics are stable after fonts.ready + icon load.
+  marked.set({ dirty: true })
   marked.setCoords()
   return marked as Group
 }
@@ -1193,11 +1297,15 @@ function chipDraftOf(group: Group): FeatureChipDraft | undefined {
 
 /**
  * Recalculate badge plate size + relative child coords after text length changes.
- * Keeps the group canvas center stable (no drift / “falling apart”).
- *
- * Fabric v6: `addWithUpdate` → `triggerLayout`.
+ * Preserves absolute canvas left/top across addWithUpdate / triggerLayout
+ * (Fabric otherwise resets the group to 0,0).
  */
 function updateBadgeLayout(group: Group): void {
+  // Snapshot BEFORE child mutations — Fabric auto-layout on nested text
+  // `changed` / addWithUpdate can zero the group's canvas left/top.
+  const absoluteLeft = group.left ?? 0
+  const absoluteTop = group.top ?? 0
+
   const hi = Math.max(
     1,
     (group as EngineObject).chipSourceScale ?? CHIP_SOURCE_SCALE
@@ -1293,17 +1401,19 @@ function updateBadgeLayout(group: Group): void {
     }
   }
 
-  // Preserve canvas position while the plate grows/shrinks.
-  const anchor = group.getCenterPoint()
-
-  // Fabric v6 equivalent of addWithUpdate — recompute group bbox + child offsets.
+  // addWithUpdate / triggerLayout can reset the group's canvas left/top to 0.
+  // Restore the absolute position captured at the start of this update.
   const withLegacy = group as Group & { addWithUpdate?: () => void }
   if (typeof withLegacy.addWithUpdate === "function") {
     withLegacy.addWithUpdate()
   } else {
     group.triggerLayout()
   }
-  group.setPositionByOrigin(anchor, "center", "center")
+
+  group.set({
+    left: absoluteLeft,
+    top: absoluteTop,
+  })
   group.setCoords()
   group.set("dirty", true)
   group.canvas?.requestRenderAll()
@@ -1691,11 +1801,17 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
 
     /** Commit transform to Zustand only when a gesture ends (60 FPS during drag). */
     const commitTransform = (obj: EngineObject | undefined) => {
-      if (!obj?.layerId) return
-      const patch = objectToLayerPatch(obj)
+      if (!obj) return
+      // Nested chip IText fires object:modified on editing exit with LOCAL left/top
+      // (near 0). Always persist the parent Group's canvas position instead.
+      const transformTarget = (
+        isChipTextPart(obj) ? (chipGroupOf(obj) as EngineObject | null) : obj
+      ) as EngineObject | null
+      if (!transformTarget?.layerId) return
+      const patch = objectToLayerPatch(transformTarget)
       if (!patch) return
       writingStoreRef.current = true
-      updateLayer(obj.layerId, patch)
+      updateLayer(transformTarget.layerId, patch)
       queueMicrotask(() => {
         writingStoreRef.current = false
       })
@@ -1747,6 +1863,11 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
       }
       const group = chipGroupOf(text) as EngineObject | null
       if (group?.layerId) selectLayer(group.layerId)
+      // Snapshot canvas position before edit/layout so exit can restore it.
+      if (group) {
+        group.__badgeAbsLeft = group.left ?? 0
+        group.__badgeAbsTop = group.top ?? 0
+      }
       syncTextEditingCoords(canvas, text)
       canvas.setActiveObject(text)
       text.enterEditing()
@@ -1785,10 +1906,14 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
       constrainObjectToArtboard(target)
       scheduleGuides(target)
     }
-    const onObjectScaling = () => {
+    const onObjectScaling = (e: { target?: FabricObject }) => {
       clickEditRef.current.moved = true
       lastGuideSigRef.current = ""
       clearSmartGuides(canvas)
+      const target = e.target as EngineObject | undefined
+      if (target && !isSmartGuideObject(target)) {
+        constrainScaleToArtboard(target)
+      }
       canvas.requestRenderAll()
     }
     const onObjectRotating = () => {
@@ -1959,6 +2084,10 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
           ? { ...layer.chip, label: nextText }
           : { ...layer.chip, subtitle: nextText || undefined }
 
+      const group = chipGroupOf(obj) as (Group & EngineObject) | null
+      const absoluteLeft = group?.__badgeAbsLeft ?? group?.left ?? null
+      const absoluteTop = group?.__badgeAbsTop ?? group?.top ?? null
+
       writingStoreRef.current = true
       updateLayer(layerId, {
         chip: nextChip,
@@ -1966,8 +2095,16 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
           ? { name: `Плашка «${nextText || layer.chip.label}»` }
           : {}),
       })
-      const group = chipGroupOf(obj)
-      if (group) applyChipContentInPlace(group, nextChip)
+      if (group) {
+        applyChipContentInPlace(group, nextChip)
+        // Re-apply saved canvas coords after layout / any detach-regroup path.
+        if (absoluteLeft != null && absoluteTop != null) {
+          group.set({ left: absoluteLeft, top: absoluteTop })
+          group.setCoords()
+        }
+        delete group.__badgeAbsLeft
+        delete group.__badgeAbsTop
+      }
       queueMicrotask(() => {
         writingStoreRef.current = false
       })
@@ -2418,15 +2555,20 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
         )
 
         for (const obj of commitList) {
-          canvas.add(obj)
-          // Badges + text: force coords right after add so hydrate paint sticks.
           const role = (obj as EngineObject).layerRole
-          if (
+          const isBadgeOrText =
             role === "infographic" ||
             (obj instanceof Group &&
               (obj as EngineObject).chipSourceScale != null)
-          ) {
+
+          if (isBadgeOrText) {
+            // Force Z + paint after hydrate: dirty/coords before add, then front.
+            obj.set({ dirty: true })
             obj.setCoords()
+            canvas.add(obj)
+            bringEngineObjectToFront(canvas, obj)
+          } else {
+            canvas.add(obj)
           }
         }
         // Keep false — interactive frames call requestRenderAll explicitly.
@@ -2451,16 +2593,39 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
         }
         // Softbox wash shows through once objects are on the artboard.
         canvas.backgroundColor = "rgba(0,0,0,0)"
-        // Explicit offset + double paint — badges can sit in memory until a
-        // later add/transform otherwise (hydrate race after product fromURL).
+        // Re-apply Fit / zoom after clear/rebuild (Fabric may reset viewport).
+        syncViewportRef.current()
+        // Guaranteed post-hydrate paint: fonts may settle after fromURL/add,
+        // leaving chips in memory but invisible until a manual icon tweak.
+        await awaitDocumentFontsReady()
+        if (cancelled || !isFabricCanvasAlive(canvas)) return
+        // Remeasure chip IText now that document fonts are actually ready.
+        canvas.forEachObject((obj) => {
+          if (
+            obj instanceof Group &&
+            (obj as EngineObject).chipSourceScale != null
+          ) {
+            for (const child of obj.getObjects()) {
+              if (child.type === "i-text") {
+                const text = child as IText
+                if (typeof text.initDimensions === "function") {
+                  text.initDimensions()
+                }
+              }
+            }
+            updateBadgeLayout(obj)
+          }
+        })
         canvas.calcOffset()
         canvas.requestRenderAll()
         window.setTimeout(() => {
           if (!isFabricCanvasAlive(canvas)) return
+          canvas.forEachObject((obj) => {
+            obj.set({ dirty: true })
+            obj.setCoords()
+          })
           canvas.renderAll()
-        }, 150)
-        // Re-apply Fit / zoom after clear/rebuild (Fabric may reset viewport).
-        syncViewportRef.current()
+        }, 200)
         // Force setCoords + lighting + delayed render — objects can sit in memory
         // while the artboard stays dark until a manual softbox slider change.
         forceCanvasVisualSync(canvas)
