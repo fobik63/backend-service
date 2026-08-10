@@ -13,7 +13,7 @@ import {
   Star,
   type LucideIcon,
 } from "lucide-react"
-import { useState, type FormEvent } from "react"
+import { useEffect, useRef, useState, type FormEvent } from "react"
 import { toast } from "sonner"
 
 import { SliderControl } from "@/components/editor/slider-control"
@@ -241,12 +241,56 @@ function BadgeParamsSection() {
   const { t } = useI18n()
   const layers = useEditorStore((s) => s.layers)
   const selectedLayerId = useEditorStore((s) => s.selectedLayerId)
+  const toolsPanelFocus = useEditorStore((s) => s.toolsPanelFocus)
   const updateLayer = useEditorStore((s) => s.updateLayer)
-
   const layer = layers.find((l) => l.id === selectedLayerId)
   const chip = layer?.chip
   const isBadge = Boolean(chip)
   const disabled = !isBadge || Boolean(layer?.locked)
+  const labelInputRef = useRef<HTMLInputElement>(null)
+  const subtitleInputRef = useRef<HTMLInputElement>(null)
+  /** Local drafts keep caret stable — store updates must not remount/reset the input. */
+  const [labelDraft, setLabelDraft] = useState(chip?.label ?? "")
+  const [subtitleDraft, setSubtitleDraft] = useState(chip?.subtitle ?? "")
+
+  // Sync drafts from store when selection changes or when inputs are not focused.
+  useEffect(() => {
+    if (!chip) {
+      setLabelDraft("")
+      setSubtitleDraft("")
+      return
+    }
+    const labelFocused =
+      typeof document !== "undefined" &&
+      document.activeElement === labelInputRef.current
+    const subtitleFocused =
+      typeof document !== "undefined" &&
+      document.activeElement === subtitleInputRef.current
+    if (!labelFocused) setLabelDraft(chip.label)
+    if (!subtitleFocused) setSubtitleDraft(chip.subtitle ?? "")
+  }, [selectedLayerId, chip])
+
+  // Focus/select only when toolsPanelFocus nonce fires — never on every chip keystroke.
+  useEffect(() => {
+    if (!toolsPanelFocus || toolsPanelFocus.field !== "badgeLabel") return
+    if (!isBadge || disabled) return
+
+    const tryFocus = () => {
+      const input = labelInputRef.current
+      // Skip the CSS-hidden desktop clone while the mobile Sheet is used.
+      if (!input || input.getClientRects().length === 0) return false
+      input.focus()
+      input.select()
+      input.scrollIntoView({ block: "nearest", behavior: "smooth" })
+      return true
+    }
+
+    if (tryFocus()) return
+    const timers = [50, 150, 300].map((ms) => window.setTimeout(tryFocus, ms))
+    return () => {
+      for (const id of timers) window.clearTimeout(id)
+    }
+  }, [toolsPanelFocus, disabled, isBadge, selectedLayerId])
 
   const patchChip = (patch: Partial<FeatureChipDraft>) => {
     if (!layer?.chip) return
@@ -289,11 +333,16 @@ function BadgeParamsSection() {
             {t("editor.badgeText")}
           </span>
           <Input
-            value={chip?.label ?? ""}
+            ref={labelInputRef}
+            value={labelDraft}
             disabled={disabled}
             maxLength={48}
             placeholder={t("editor.badgeTextPlaceholder")}
-            onChange={(e) => patchChip({ label: e.target.value })}
+            onChange={(e) => {
+              const next = e.target.value
+              setLabelDraft(next)
+              patchChip({ label: next })
+            }}
             className="h-8 border-white/10 bg-white/[0.04] text-xs"
           />
         </div>
@@ -303,13 +352,16 @@ function BadgeParamsSection() {
             {t("editor.badgeSubtitle")}
           </span>
           <Input
-            value={chip?.subtitle ?? ""}
+            ref={subtitleInputRef}
+            value={subtitleDraft}
             disabled={disabled}
             maxLength={64}
             placeholder={t("editor.badgeSubtitlePlaceholder")}
-            onChange={(e) =>
-              patchChip({ subtitle: e.target.value || undefined })
-            }
+            onChange={(e) => {
+              const next = e.target.value
+              setSubtitleDraft(next)
+              patchChip({ subtitle: next || undefined })
+            }}
             className="h-8 border-white/10 bg-white/[0.04] text-xs"
           />
         </div>

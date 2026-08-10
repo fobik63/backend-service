@@ -161,6 +161,11 @@ type EditorState = {
   selectedLayerId: string | null
   /** Briefly pulse a layer on canvas (e.g. existing badge re-click). */
   flashLayerId: string | null
+  /**
+   * Focus a field in «Инструменты и Параметры» (e.g. chip label after
+   * canvas click). `nonce` bumps so the same field can re-focus.
+   */
+  toolsPanelFocus: { field: "badgeLabel"; nonce: number } | null
   zoomMode: EditorZoomMode
   softbox: SoftboxSettings
   /** Local product preview (blob / CDN URL) shown on canvas. */
@@ -189,6 +194,8 @@ type EditorState = {
   setActivePageIndex: (index: number) => void
   selectLayer: (id: string | null) => void
   flashLayer: (id: string) => void
+  /** Focus a tools-panel input (badge label). */
+  requestToolsPanelFocus: (field: "badgeLabel") => void
   setZoomMode: (mode: EditorZoomMode) => void
   updateLayer: (id: string, patch: Partial<CanvasLayer>) => void
   replaceActivePage: (layers: CanvasLayer[]) => void
@@ -261,6 +268,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   layers: INITIAL_LAYERS,
   selectedLayerId: defaultSelectedLayerId(INITIAL_LAYERS),
   flashLayerId: null,
+  toolsPanelFocus: null,
   zoomMode: "fit",
   softbox: DEFAULT_SOFTBOX,
   productPreviewUrl: DEFAULT_PRODUCT_CUTOUT,
@@ -336,6 +344,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       flashClearTimer = null
     }, 900)
   },
+  requestToolsPanelFocus: (field) =>
+    set((state) => ({
+      toolsPanelFocus: {
+        field,
+        nonce: (state.toolsPanelFocus?.nonce ?? 0) + 1,
+      },
+    })),
   setZoomMode: (mode) => set({ zoomMode: mode }),
   updateLayer: (id, patch) =>
     set((state) => {

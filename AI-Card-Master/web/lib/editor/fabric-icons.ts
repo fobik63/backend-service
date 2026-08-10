@@ -19,10 +19,14 @@ const ICON_PATHS: Record<string, string> = {
     "M9 3h6M10 9V3m4 6V3M8 14.5A4.5 4.5 0 0012.5 19h0A4.5 4.5 0 0017 14.5V9H8v5.5z",
 }
 
+/**
+ * SVG data-URL for chip icons. Prefer a large `size` (192+) so FabricImage
+ * rasterizes crisply before scaleToWidth / group downscale.
+ */
 export function chipIconDataUrl(
   iconId: string,
   color: string,
-  size = 64
+  size = 192
 ): string {
   const path = ICON_PATHS[iconId] ?? ICON_PATHS.icon_check
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="${path}"/></svg>`

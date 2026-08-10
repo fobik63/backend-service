@@ -33,6 +33,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet"
+import { Input } from "@/components/ui/input"
 import { TEXT_PRESETS } from "@/lib/constants/mock-editor"
 import { addTextPresetToCanvas } from "@/lib/editor/canvas-actions"
 import { useI18n } from "@/lib/i18n"
@@ -137,6 +138,21 @@ function TextParamsSection() {
       ) : null}
 
       <div className={cn("space-y-2.5", !isText && "opacity-45")}>
+        <div className="space-y-1.5">
+          <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+            {t("editor.text")}
+          </span>
+          <Input
+            value={layer?.type === "text" ? (layer.text ?? "") : ""}
+            disabled={disabled}
+            onChange={(e) => {
+              if (!layer || layer.type !== "text") return
+              updateLayer(layer.id, { text: e.target.value })
+            }}
+            className="h-8 border-white/10 bg-white/[0.04] text-xs"
+          />
+        </div>
+
         <div className="space-y-1.5">
           <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
             {t("editor.font")}

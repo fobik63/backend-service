@@ -4,14 +4,15 @@ import {
   Canvas as FabricCanvas,
   FabricImage,
   FabricObject,
+  BaseFabricObject,
   Group,
+  InteractiveFabricObject,
   IText,
   Line,
   Rect,
   Shadow,
   config as fabricConfig,
   initFilterBackend,
-  util,
   type FabricObjectProps,
 } from "fabric"
 import {
@@ -64,7 +65,11 @@ import {
   useEditorStore,
   type SoftboxSettings,
 } from "@/lib/store/editor-store"
-import type { CanvasLayer, TextLayerStyle } from "@/types/canvas"
+import type {
+  CanvasLayer,
+  FeatureChipDraft,
+  TextLayerStyle,
+} from "@/types/canvas"
 import { DEFAULT_TEXT_STYLE } from "@/types/canvas"
 import { cn } from "@/lib/utils"
 
@@ -80,7 +85,15 @@ type EngineObject = FabricObject & {
   chipPart?: ChipPart
   /** Temporary top-level IText used while editing a chip label. */
   isChipInlineEditor?: boolean
+  /**
+   * Chip groups are authored at CHIP_SOURCE_SCALE× then scaled down.
+   * Layer `scale` is logical; Fabric scaleX/Y = layer.scale / chipSourceScale.
+   */
+  chipSourceScale?: number
 }
+
+/** Author chip geometry at 3×; place on canvas via scaleX/Y so vectors stay sharp when shrunk. */
+const CHIP_SOURCE_SCALE = 3
 
 const GUIDE_STROKE = "rgba(94, 184, 255, 0.92)"
 const GUIDE_STROKE_WIDTH = 1
@@ -106,6 +119,22 @@ function ensureFabricWebGL(): void {
   }
 }
 
+/**
+ * Retina + sharp transforms: disable object bitmap caches that go soft when
+ * badges/icons are scaled down. Fabric's prop is `noScaleCache` (not noScaleReset);
+ * false = regenerate during scale so cache never stays at a low-res snapshot.
+ */
+let fabricQualityDefaultsReady = false
+function ensureFabricQualityDefaults(): void {
+  if (fabricQualityDefaultsReady) return
+  fabricQualityDefaultsReady = true
+  // v6 splits defaults: caching on BaseFabricObject, noScaleCache on interactive.
+  BaseFabricObject.ownDefaults.objectCaching = false
+  InteractiveFabricObject.ownDefaults.noScaleCache = false
+  FabricObject.prototype.objectCaching = false
+  FabricObject.prototype.noScaleCache = false
+}
+
 function ensureCustomProps(): void {
   const keys = [
     "layerId",
@@ -114,6 +143,7 @@ function ensureCustomProps(): void {
     "isSoftbox",
     "chipPart",
     "isChipInlineEditor",
+    "chipSourceScale",
   ]
   const existing = FabricObject.customProperties ?? []
   FabricObject.customProperties = Array.from(new Set([...existing, ...keys]))
@@ -205,6 +235,44 @@ function collectSnapTargets(
   return targets
 }
 
+/**
+ * Keep a dragged object's axis-aligned bounding box inside the artboard.
+ * Only adjusts left/top — never scale/angle — so rotate & scale stay intact.
+ * Uses artboard size (CANVAS_*), not the zoomed viewport (canvas.width/height).
+ */
+function constrainObjectToArtboard(obj: FabricObject): void {
+  const engine = obj as EngineObject
+  if (isSmartGuideObject(obj)) return
+  if (engine.layerRole === "background") return
+  if (engine.isSoftbox || engine.isChipInlineEditor) return
+
+  // Refresh aCoords so getBoundingRect matches the current drag position.
+  obj.setCoords()
+  const br = obj.getBoundingRect()
+  let dx = 0
+  let dy = 0
+
+  if (br.left < 0) {
+    dx = -br.left
+  } else if (br.left + br.width > CANVAS_WIDTH) {
+    dx = CANVAS_WIDTH - (br.left + br.width)
+  }
+
+  if (br.top < 0) {
+    dy = -br.top
+  } else if (br.top + br.height > CANVAS_HEIGHT) {
+    dy = CANVAS_HEIGHT - (br.top + br.height)
+  }
+
+  if (dx === 0 && dy === 0) return
+
+  obj.set({
+    left: (obj.left ?? 0) + dx,
+    top: (obj.top ?? 0) + dy,
+  })
+  obj.setCoords()
+}
+
 function applySmartSnap(
   canvas: FabricCanvas,
   moving: EngineObject,
@@ -224,6 +292,8 @@ function applySmartSnap(
     })
     moving.setCoords()
   }
+  // Snap can nudge past the edge — re-clamp without clearing guides.
+  constrainObjectToArtboard(moving)
   paintSmartGuides(canvas, guides, lastGuideSigRef)
 }
 
@@ -381,17 +451,38 @@ async function loadImage(url: string): Promise<FabricImage> {
     url.startsWith("blob:") ||
     url.startsWith("/")
   // Fabric v6: fromURL returns a Promise (callback form is legacy).
+  let img: FabricImage
   if (isLocal) {
-    return await FabricImage.fromURL(url)
+    img = await FabricImage.fromURL(url)
+  } else {
+    try {
+      img = await FabricImage.fromURL(url, { crossOrigin: "anonymous" })
+    } catch {
+      img = await FabricImage.fromURL(url)
+    }
   }
+  img.set({ imageSmoothing: true, objectCaching: false })
+  return img
+}
+
+/**
+ * Badge IText metrics are wrong if next/font faces are still loading — groups land
+ * in the scene but stay invisible until a settings tweak re-layouts them.
+ */
+async function awaitDocumentFontsReady(): Promise<void> {
+  if (typeof document === "undefined" || !document.fonts?.ready) return
   try {
-    return await FabricImage.fromURL(url, { crossOrigin: "anonymous" })
+    await document.fonts.ready
   } catch {
-    return await FabricImage.fromURL(url)
+    // Font readiness can reject in rare environments; paint with fallbacks.
   }
 }
 
-/** Structural fingerprint — excludes transforms AND softbox (softbox updates in-place). */
+/**
+ * Structural fingerprint — excludes transforms AND softbox (softbox updates in-place).
+ * Chip label/subtitle are patched onto existing Group children; including them here
+ * would rebuild the whole scene on every keystroke and steal input focus.
+ */
 function structureKey(args: {
   layers: CanvasLayer[]
   productPreviewUrl: string | null
@@ -402,17 +493,31 @@ function structureKey(args: {
     productPreviewUrl: args.productPreviewUrl,
     backgroundPreviewUrl: args.backgroundPreviewUrl,
     generationEpoch: args.generationEpoch,
-    layers: args.layers.map((l) => ({
-      id: l.id,
-      type: l.type,
-      visible: l.visible,
-      locked: l.locked,
-      zIndex: l.zIndex,
-      opacity: l.opacity,
-      text: l.text,
-      textStyle: l.textStyle,
-      chip: l.chip,
-    })),
+    layers: args.layers.map((l) => {
+      const chip = l.chip
+      return {
+        id: l.id,
+        type: l.type,
+        visible: l.visible,
+        locked: l.locked,
+        zIndex: l.zIndex,
+        opacity: l.opacity,
+        text: l.text,
+        textStyle: l.textStyle,
+        // Structural chip fields only — content (label/subtitle) syncs in-place.
+        chip: chip
+          ? {
+              bgColor: chip.bgColor,
+              borderRadius: chip.borderRadius,
+              iconId: chip.iconId,
+              variant: chip.variant,
+              textColor: chip.textColor,
+              blur: chip.blur,
+              hasSubtitle: Boolean(chip.subtitle),
+            }
+          : undefined,
+      }
+    }),
   })
 }
 
@@ -495,6 +600,37 @@ function applySoftboxToFabric(
   }
 }
 
+/**
+ * Apply current softbox/lighting from store to the Fabric scene.
+ * Must run on mount + after scene rebuild — not only when a UI slider fires onChange.
+ */
+function applyLightingEffects(
+  canvas: FabricCanvas,
+  softbox: SoftboxSettings = useEditorStore.getState().softbox
+): void {
+  // Transparent artboard so CSS SoftboxLightOverlay wash shows through.
+  canvas.backgroundColor = "rgba(0,0,0,0)"
+  applySoftboxToFabric(canvas, softbox)
+}
+
+/**
+ * Force objects + lighting onto the visible surface after async load / rebuild.
+ * Without this, layers can exist in memory while the artboard stays dark until a slider move.
+ */
+function forceCanvasVisualSync(canvas: FabricCanvas): void {
+  if (!isFabricCanvasAlive(canvas)) return
+  canvas.forEachObject((obj) => {
+    obj.setCoords()
+  })
+  canvas.calcOffset()
+  applyLightingEffects(canvas, useEditorStore.getState().softbox)
+  canvas.requestRenderAll()
+  window.setTimeout(() => {
+    if (!isFabricCanvasAlive(canvas)) return
+    canvas.renderAll()
+  }, 150)
+}
+
 /** Briefly reveal Fabric softbox for toDataURL export, then restore CSS-only live mode. */
 async function withFabricSoftboxVisibleForExport<T>(
   canvas: FabricCanvas,
@@ -522,21 +658,20 @@ async function withFabricSoftboxVisibleForExport<T>(
  * Single live lighting path — CSS wash (under canvas) + soft-light blend (over).
  * Always driven by `softbox` state (drag and idle identical). Stable DOM — never
  * mount/unmount on slider ticks; styles update imperatively via store.subscribe.
+ * `paintKey` forces an immediate re-paint after canvas mount / scene rebuild
+ * (does not wait for a softbox slider onChange).
  */
 function SoftboxLightOverlay({
   frame,
+  paintKey = 0,
 }: {
   frame: FabricViewportFrame | null
+  paintKey?: number
 }) {
   const washRef = useRef<HTMLDivElement>(null)
   const blendRef = useRef<HTMLDivElement>(null)
   const frameRef = useRef(frame)
   const paintOverlayRef = useRef<() => void>(() => {})
-
-  useLayoutEffect(() => {
-    frameRef.current = frame
-    paintOverlayRef.current()
-  }, [frame])
 
   useLayoutEffect(() => {
     const paintOverlay = () => {
@@ -613,6 +748,8 @@ function SoftboxLightOverlay({
     }
 
     paintOverlayRef.current = paintOverlay
+    // Immediate paint on mount from current softbox state — never wait for slider onChange.
+    frameRef.current = frame
     paintOverlay()
     const unsub = useEditorStore.subscribe((state, prev) => {
       if (
@@ -626,7 +763,13 @@ function SoftboxLightOverlay({
     return () => {
       unsub()
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only; frame/paintKey below
   }, [])
+
+  useLayoutEffect(() => {
+    frameRef.current = frame
+    paintOverlayRef.current()
+  }, [frame, paintKey])
 
   return (
     <>
@@ -835,6 +978,7 @@ function buildTextObject(layer: CanvasLayer): IText {
     top: pctToPx(defs.y, CANVAS_HEIGHT),
     originX: "left",
     originY: "top",
+    padding: 0,
     width: pctToPx(defs.width ?? 84, CANVAS_WIDTH),
     scaleX: defs.scale,
     scaleY: defs.scale,
@@ -845,14 +989,17 @@ function buildTextObject(layer: CanvasLayer): IText {
     editable: !layer.locked,
     hasControls: true,
     lockScalingFlip: true,
-    // Cache when idle; Fabric disables cache while editing.
-    objectCaching: true,
+    // Live text stays uncached so scale/edit stays sharp (see ensureFabricQualityDefaults).
+    objectCaching: false,
   })
   applyTextStyle(text, layer.textStyle)
   return markObject(text, layer.id, "infographic") as IText
 }
 
 async function buildChipObject(layer: CanvasLayer): Promise<Group> {
+  // Wait for document fonts + vector icon decode before measuring IText / Group.
+  await awaitDocumentFontsReady()
+
   const chip = layer.chip!
   const defs = layerDefaults(layer)
   const isGlass = chip.variant === "glass"
@@ -862,13 +1009,18 @@ async function buildChipObject(layer: CanvasLayer): Promise<Group> {
       ? "#FFFFFF"
       : chipTextColor(chip.bgColor))
 
-  const padX = isGlass ? 18 : 14
-  const padY = isGlass ? 14 : 10
-  const iconSize = isGlass ? 22 : 18
-  const labelSize = isGlass ? 18 : 16
-  const gap = 10
+  // Geometry at CHIP_SOURCE_SCALE×; group scaleX/Y brings it back to logical size.
+  const hi = CHIP_SOURCE_SCALE
+  const padX = (isGlass ? 18 : 14) * hi
+  const padY = (isGlass ? 14 : 10) * hi
+  const iconSize = (isGlass ? 22 : 18) * hi
+  const labelSize = (isGlass ? 18 : 16) * hi
+  const gap = 10 * hi
+  const radius = (chip.borderRadius ?? (isGlass ? 14 : 10)) * hi
+  // SVG rasterized well above on-canvas icon box (extra 2× before group downscale).
+  const iconSrcPx = Math.max(192, Math.round(iconSize * 2))
 
-  const icon = await loadImage(chipIconDataUrl(chip.iconId, fg, 64))
+  const icon = await loadImage(chipIconDataUrl(chip.iconId, fg, iconSrcPx))
   icon.set({
     originX: "left",
     originY: "center",
@@ -876,123 +1028,322 @@ async function buildChipObject(layer: CanvasLayer): Promise<Group> {
     top: 0,
     selectable: false,
     evented: false,
+    objectCaching: false,
+    imageSmoothing: true,
   })
   icon.scaleToWidth(iconSize)
   ;(icon as EngineObject).chipPart = "icon"
 
   const chipFont = resolveFabricFontFamily("Inter")
+  const textLocked = Boolean(layer.locked)
+  // Text uses left/top origin — center origin shifts the edit selection frame.
+  // Vertical centering is done via top offsets, not originY: "center".
+  // Nested IText is interactive (subTargetCheck) so dblclick can enterEditing.
   const label = new IText(chip.label, {
     left: padX + iconSize + gap,
-    top: chip.subtitle ? -labelSize * 0.35 : 0,
+    top: 0,
     originX: "left",
-    originY: "center",
+    originY: "top",
+    padding: 0,
     fontFamily: chipFont,
     fontSize: labelSize,
     fontWeight: "600",
     fill: fg,
-    selectable: false,
-    evented: false,
-    // Never enterEditing inside a Group — Fabric miscomputes the text
-    // transform matrix (origin/scale). Inline edit uses a detached IText.
-    editable: false,
+    selectable: !textLocked,
+    evented: !textLocked,
+    editable: !textLocked,
+    hasControls: false,
+    lockMovementX: true,
+    lockMovementY: true,
+    objectCaching: false,
   })
   ;(label as EngineObject).chipPart = "label"
+  ;(label as EngineObject).layerId = layer.id
+  ;(label as EngineObject).layerRole = "infographic"
 
+  // Subtitle grows downward only — never upward into the title.
+  const textStackGap = 5 * hi
   const subtitle = chip.subtitle
     ? new IText(chip.subtitle, {
         left: padX + iconSize + gap,
-        top: labelSize * 0.55,
+        top: 0,
         originX: "left",
-        originY: "center",
+        originY: "top",
+        splitByGrapheme: true,
+        padding: 0,
         fontFamily: chipFont,
-        fontSize: Math.max(11, labelSize * 0.72),
+        fontSize: Math.max(11 * hi, labelSize * 0.72),
         fontWeight: "400",
         fill: fg,
         opacity: 0.7,
-        selectable: false,
-        evented: false,
-        editable: false,
+        selectable: !textLocked,
+        evented: !textLocked,
+        editable: !textLocked,
+        hasControls: false,
+        lockMovementX: true,
+        lockMovementY: true,
+        objectCaching: false,
       })
     : null
-  if (subtitle) (subtitle as EngineObject).chipPart = "subtitle"
+  if (subtitle) {
+    ;(subtitle as EngineObject).chipPart = "subtitle"
+    ;(subtitle as EngineObject).layerId = layer.id
+    ;(subtitle as EngineObject).layerRole = "infographic"
+  }
 
   await Promise.resolve()
-  const contentW = Math.max(label.width ?? 80, subtitle?.width ?? 0)
+  if (typeof label.initDimensions === "function") label.initDimensions()
+  if (subtitle && typeof subtitle.initDimensions === "function") {
+    subtitle.initDimensions()
+  }
+
+  const labelH = label.height ?? labelSize
+  const subtitleH = subtitle
+    ? (subtitle.height ?? Math.max(11 * hi, labelSize * 0.72))
+    : 0
+  const contentH =
+    chip.subtitle && subtitle ? labelH + textStackGap + subtitleH : labelH
+  const boxH = contentH + padY * 2
+  const contentTop = -boxH / 2 + padY
+
+  // Stack from the top of the plate so Enter expands downward only.
+  label.set({ originY: "top", top: contentTop })
+  if (chip.subtitle && subtitle) {
+    const titleTop = label.top ?? contentTop
+    subtitle.set({
+      originY: "top",
+      splitByGrapheme: true,
+      top: titleTop + labelH + textStackGap,
+    })
+  }
+
+  const contentW = Math.max(label.width ?? 80 * hi, subtitle?.width ?? 0)
   const boxW = padX + iconSize + gap + contentW + padX
-  const boxH = (chip.subtitle ? labelSize * 2.2 : labelSize) + padY * 2
 
   const bg = new Rect({
     left: 0,
     top: -boxH / 2,
     width: boxW,
     height: boxH,
-    rx: chip.borderRadius,
-    ry: chip.borderRadius,
+    rx: radius,
+    ry: radius,
     fill: chip.bgColor,
     stroke: isGlass ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.1)",
-    strokeWidth: 1,
+    strokeWidth: hi,
     selectable: false,
     evented: false,
+    objectCaching: false,
   })
   ;(bg as EngineObject).chipPart = "bg"
 
   const children: FabricObject[] = [bg, icon, label]
   if (subtitle) children.push(subtitle)
 
+  const placeScale = defs.scale / hi
   const group = new Group(children, {
     left: pctToPx(defs.x, CANVAS_WIDTH),
     top: pctToPx(defs.y, CANVAS_HEIGHT),
     originX: "left",
     originY: "top",
-    scaleX: defs.scale,
-    scaleY: defs.scale,
+    scaleX: placeScale,
+    scaleY: placeScale,
     angle: defs.rotation,
     opacity: layer.opacity,
     selectable: !layer.locked,
     evented: !layer.locked,
     hasControls: true,
     lockScalingFlip: true,
-    subTargetCheck: false,
-    objectCaching: true,
+    // Allow targeting nested IText for on-canvas label editing.
+    subTargetCheck: true,
+    interactive: true,
+    objectCaching: false,
   })
-  return markObject(group, layer.id, "infographic") as Group
+  const marked = markObject(group, layer.id, "infographic")
+  marked.chipSourceScale = hi
+  // Coords before canvas.add — metrics are stable after fonts.ready + icon load.
+  marked.setCoords()
+  return marked as Group
 }
 
-/** Locate the editable chip label IText inside a badge Group. */
-function findChipLabel(group: Group): IText | null {
-  const tagged = group
-    .getObjects()
-    .find((o) => (o as EngineObject).chipPart === "label")
-  if (tagged && tagged.type === "i-text") return tagged as IText
+function chipPartOf(
+  obj: FabricObject,
+  part: ChipPart
+): FabricObject | undefined {
+  return (obj as EngineObject).chipPart === part ? obj : undefined
+}
 
-  // Fallback: first IText child is the label (subtitle is second).
-  const texts = group.getObjects().filter((o) => o.type === "i-text")
-  return (texts[0] as IText | undefined) ?? null
+/** Parent badge Group for a nested chip text child (interactive groups). */
+function chipGroupOf(obj: FabricObject): Group | null {
+  const parent = obj.group ?? obj.parent
+  return parent instanceof Group ? parent : null
+}
+
+function isChipTextPart(obj: FabricObject | undefined): obj is IText & EngineObject {
+  if (!obj || obj.type !== "i-text") return false
+  const part = (obj as EngineObject).chipPart
+  return part === "label" || part === "subtitle"
+}
+
+/** Resolve chip draft for layout metrics (glass padding, etc.). */
+function chipDraftOf(group: Group): FeatureChipDraft | undefined {
+  const layerId = (group as EngineObject).layerId
+  if (!layerId) return undefined
+  return useEditorStore.getState().layers.find((l) => l.id === layerId)?.chip
 }
 
 /**
- * World-space pose of an object (including parent Group scale/angle/origin).
- * Used to spawn a detached IText that lines up with the in-group glyph.
+ * Recalculate badge plate size + relative child coords after text length changes.
+ * Keeps the group canvas center stable (no drift / “falling apart”).
+ *
+ * Fabric v6: `addWithUpdate` → `triggerLayout`.
  */
-function worldPoseFromObject(obj: FabricObject) {
-  const decomposed = util.qrDecompose(obj.calcTransformMatrix())
-  return {
-    left: decomposed.translateX,
-    top: decomposed.translateY,
-    scaleX: decomposed.scaleX,
-    scaleY: decomposed.scaleY,
-    angle: decomposed.angle,
-    skewX: decomposed.skewX,
-    skewY: decomposed.skewY,
+function updateBadgeLayout(group: Group): void {
+  const hi = Math.max(
+    1,
+    (group as EngineObject).chipSourceScale ?? CHIP_SOURCE_SCALE
+  )
+  const chip = chipDraftOf(group)
+  const isGlass = chip?.variant === "glass"
+  const padX = (isGlass ? 18 : 14) * hi
+  const padY = (isGlass ? 14 : 10) * hi
+  const iconSize = (isGlass ? 22 : 18) * hi
+  const labelSize = (isGlass ? 18 : 16) * hi
+  const gap = 10 * hi
+  /** Vertical gap between title and subtitle (≈5px logical). */
+  const textStackGap = 5 * hi
+  const padding = padX * 2 + gap
+
+  const children = group.getObjects()
+  const bg = children.find((o) => chipPartOf(o, "bg")) as Rect | undefined
+  const icon = children.find((o) => chipPartOf(o, "icon"))
+  const label = children.find((o) => chipPartOf(o, "label")) as
+    | IText
+    | undefined
+  const subtitle = children.find((o) => chipPartOf(o, "subtitle")) as
+    | IText
+    | undefined
+
+  // Refresh glyph metrics before measuring (esp. after inline edit / Enter).
+  if (label && typeof label.initDimensions === "function") {
+    label.initDimensions()
   }
+  if (subtitle && typeof subtitle.initDimensions === "function") {
+    subtitle.initDimensions()
+  }
+
+  const textWidth = label?.width ?? 80 * hi
+  const subtitleWidth = subtitle?.width ?? 0
+  const iconWidth =
+    icon && typeof icon.getScaledWidth === "function"
+      ? icon.getScaledWidth()
+      : iconSize
+  const newWidth = Math.max(textWidth, subtitleWidth) + iconWidth + padding
+  const hasSubtitle = Boolean(subtitle)
+
+  const labelH = label?.height ?? labelSize
+  const subtitleH = subtitle
+    ? (subtitle.height ?? Math.max(11 * hi, labelSize * 0.72))
+    : 0
+  // Plate grows with real text height (multi-line Enter expands downward).
+  const contentH = hasSubtitle ? labelH + textStackGap + subtitleH : labelH
+  const boxH = contentH + padY * 2
+  const contentTop = -boxH / 2 + padY
+
+  // Local coords centered on (0,0) — matches Fabric group space after layout.
+  const left0 = -newWidth / 2
+  const textLeft = left0 + padX + iconWidth + gap
+
+  if (bg) {
+    bg.set({
+      originX: "left",
+      originY: "top",
+      left: left0,
+      top: -boxH / 2,
+      width: newWidth,
+      height: boxH,
+    })
+  }
+
+  if (icon) {
+    icon.set({
+      originX: "left",
+      originY: "center",
+      left: left0 + padX,
+      top: 0,
+    })
+  }
+
+  if (label) {
+    label.set({
+      originX: "left",
+      originY: "top",
+      left: textLeft,
+      top: contentTop,
+    })
+    if (hasSubtitle && subtitle) {
+      // Hard top-anchor: subtitle always sits under the title, never overlaps it.
+      const titleTop = label.top ?? contentTop
+      subtitle.set({
+        originX: "left",
+        originY: "top",
+        splitByGrapheme: true,
+        left: textLeft,
+        top: titleTop + labelH + textStackGap,
+      })
+    }
+  }
+
+  // Preserve canvas position while the plate grows/shrinks.
+  const anchor = group.getCenterPoint()
+
+  // Fabric v6 equivalent of addWithUpdate — recompute group bbox + child offsets.
+  const withLegacy = group as Group & { addWithUpdate?: () => void }
+  if (typeof withLegacy.addWithUpdate === "function") {
+    withLegacy.addWithUpdate()
+  } else {
+    group.triggerLayout()
+  }
+  group.setPositionByOrigin(anchor, "center", "center")
+  group.setCoords()
+  group.set("dirty", true)
+  group.canvas?.requestRenderAll()
 }
 
+/**
+ * Update badge label/subtitle on an existing Group — never rebuild the Group.
+ * Resizes the background plate and triggers Fabric layout so handles stay correct.
+ */
+function applyChipContentInPlace(group: Group, chip: FeatureChipDraft): void {
+  const children = group.getObjects()
+  const label = children.find((o) => chipPartOf(o, "label")) as
+    | IText
+    | undefined
+  const subtitle = children.find((o) => chipPartOf(o, "subtitle")) as
+    | IText
+    | undefined
+
+  if (label && label.text !== chip.label) {
+    // Don't clobber in-progress canvas editing.
+    if (!(label as IText).isEditing) {
+      label.set("text", chip.label)
+    }
+  }
+  if (subtitle) {
+    const next = chip.subtitle ?? ""
+    if (subtitle.text !== next && !(subtitle as IText).isEditing) {
+      subtitle.set("text", next)
+    }
+  }
+
+  updateBadgeLayout(group)
+}
+
+/** Remove leftover top-level chip overlay editors from earlier edit sessions. */
 function clearChipInlineEditors(canvas: FabricCanvas) {
   for (const obj of [...canvas.getObjects()]) {
     const engine = obj as EngineObject
     if (!engine.isChipInlineEditor) continue
     if (obj.type === "i-text" && (obj as IText).isEditing) {
-      // Fires editing:exited → finish() persists label + removes editor.
       ;(obj as IText).exitEditing()
     }
     if (canvas.getObjects().includes(obj)) {
@@ -1001,10 +1352,21 @@ function clearChipInlineEditors(canvas: FabricCanvas) {
   }
 }
 
+/**
+ * Sync Fabric DOM offset + object aCoords when entering inline edit.
+ * Stale calcOffset (zoom/fit/layout) makes the blue frame + textarea jump.
+ */
+function syncTextEditingCoords(canvas: FabricCanvas, text: IText) {
+  canvas.calcOffset()
+  text.setCoords()
+}
+
 function objectToLayerPatch(obj: EngineObject): Partial<CanvasLayer> | null {
   if (!obj.layerId || obj.layerRole === "background") return null
 
-  const scaleAvg = ((obj.scaleX ?? 1) + (obj.scaleY ?? 1)) / 2
+  const sourceScale = Math.max(1, obj.chipSourceScale ?? 1)
+  const scaleAvg =
+    (((obj.scaleX ?? 1) + (obj.scaleY ?? 1)) / 2) * sourceScale
   const angle = ((obj.angle ?? 0) % 360 + 360) % 360
 
   if (obj.layerRole === "product") {
@@ -1086,12 +1448,14 @@ function applyTransformFromLayer(obj: EngineObject, layer: CanvasLayer) {
     return
   }
 
+  const sourceScale = Math.max(1, obj.chipSourceScale ?? 1)
+  const placeScale = defs.scale / sourceScale
   obj.set({
     left: pctToPx(defs.x, CANVAS_WIDTH),
     top: pctToPx(defs.y, CANVAS_HEIGHT),
     angle: defs.rotation,
-    scaleX: defs.scale,
-    scaleY: defs.scale,
+    scaleX: placeScale,
+    scaleY: placeScale,
     opacity: layer.opacity,
   })
 }
@@ -1151,6 +1515,8 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
   const [ready, setReady] = useState(false)
   const [sceneError, setSceneError] = useState<string | null>(null)
   const [rebuildNonce, setRebuildNonce] = useState(0)
+  /** Bumped after mount / scene rebuild to force CSS softbox paint immediately. */
+  const [lightingPaintKey, setLightingPaintKey] = useState(0)
 
   const syncViewport = (): FabricViewportFrame | null => {
     const canvas = fabricRef.current
@@ -1211,6 +1577,7 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
 
   useLayoutEffect(() => {
     ensureCustomProps()
+    ensureFabricQualityDefaults()
     ensureFabricWebGL()
     const el = canvasRef.current
     if (!el) return
@@ -1246,8 +1613,9 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
         controlsAboveOverlay: true,
         // Batch adds during rebuild; interactive frames call requestRenderAll.
         renderOnAddRemove: false,
-        // 1080×1440 @dpr2 ≈ 6M px — skip retina buffer for 60 FPS editing.
-        enableRetinaScaling: false,
+        // Device-pixel buffer + smoothing — crisp badges/icons when scaled down.
+        enableRetinaScaling: true,
+        imageSmoothingEnabled: true,
         targetFindTolerance: 6,
         perPixelTargetFind: false,
       })
@@ -1281,6 +1649,12 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
     // Strict Mode remount keeps ready=true after soft teardown — force scene rebuild
     // so product / layers are reattached instead of leaving a blank rectangle.
     setRebuildNonce((n) => n + 1)
+    // Apply lighting from store immediately on canvas mount (not via slider onChange).
+    applyLightingEffects(canvas, useEditorStore.getState().softbox)
+    setLightingPaintKey((n) => n + 1)
+    if (isFabricCanvasAlive(canvas)) {
+      canvas.requestRenderAll()
+    }
 
     // Initial Fit: size to wrapper, zoom so 1080×1440 fits with ~40px padding, center.
     // Host can be 0×0 for a frame (flex layout) — retry until real metrics exist.
@@ -1329,113 +1703,76 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
 
     const enterTextEditing = (text: IText) => {
       if (text.isEditing || text.selectable === false) return
+      // Keep left/top origin while editing — center origin drifts the caret/selection.
+      text.set({
+        originX: "left",
+        originY: "top",
+        padding: 0,
+        objectCaching: false,
+      })
+      const wired = text as IText & { __editCoordsWired?: boolean }
+      if (!wired.__editCoordsWired) {
+        wired.__editCoordsWired = true
+        text.on("editing:entered", () => {
+          canvas.calcOffset()
+          text.setCoords()
+        })
+      }
+      syncTextEditingCoords(canvas, text)
       canvas.setActiveObject(text)
       text.enterEditing()
       text.selectAll()
+      // Re-sync after Fabric mounts the hidden textarea (layout can shift offset).
+      syncTextEditingCoords(canvas, text)
       canvas.requestRenderAll()
     }
 
-    /**
-     * Chip badges stay as Groups (bg + icon + label [+ subtitle]). Fabric's
-     * enterEditing on a nested IText miscomputes the transform when the group
-     * has scale/origin changes — caret and selection drift. Instead: hide the
-     * in-group label, spawn a top-level IText at the label's world matrix
-     * (calcTransformMatrix → qrDecompose), sync text on editing:exited.
-     */
-    const startChipInlineEdit = (target: EngineObject, layer: CanvasLayer) => {
-      if (!layer.chip) return
-      const group =
-        target instanceof Group || target.type === "group"
-          ? (target as Group)
-          : null
-      if (!group) return
-
-      clearChipInlineEditors(canvas)
-
-      const label = findChipLabel(group)
-      if (!label) return
-
-      const pose = worldPoseFromObject(label)
-      const prevVisible = label.visible !== false
-      const prevCaching = group.objectCaching !== false
-
-      // Hide nested glyphs so they don't stack under the floating editor.
-      label.set({ visible: false })
-      group.set({ objectCaching: false })
-      group.dirty = true
-
-      const editor = new IText(label.text ?? layer.chip.label, {
-        left: pose.left,
-        top: pose.top,
-        originX: label.originX,
-        originY: label.originY,
-        scaleX: pose.scaleX,
-        scaleY: pose.scaleY,
-        angle: pose.angle,
-        skewX: pose.skewX,
-        skewY: pose.skewY,
-        fontFamily: label.fontFamily,
-        fontSize: label.fontSize,
-        fontWeight: label.fontWeight,
-        fill: label.fill,
-        editable: true,
-        selectable: true,
-        evented: true,
-        excludeFromExport: true,
+    /** Double-click path for nested chip IText inside an interactive Group. */
+    const enterChipTextEditing = (text: IText) => {
+      if (text.isEditing) return
+      if ((text as IText & { editable?: boolean }).editable === false) return
+      text.set({
+        originX: "left",
+        originY: "top",
+        padding: 0,
         objectCaching: false,
       })
-      ;(editor as EngineObject).isChipInlineEditor = true
-
-      canvas.add(editor)
-      canvas.bringObjectToFront(editor)
-      canvas.setActiveObject(editor)
-      editor.enterEditing()
-      editor.selectAll()
-      canvas.requestRenderAll()
-
-      let settled = false
-      const finish = () => {
-        if (settled) return
-        settled = true
-
-        const next = editor.text?.trim() || layer.chip!.label
-
-        // Restore nested label immediately (scene rebuild follows via store).
-        try {
-          label.set({ text: next, visible: prevVisible })
-          group.set({ objectCaching: prevCaching })
-          group.dirty = true
-        } catch {
-          // Group may already be disposed by a concurrent rebuild.
-        }
-
-        writingStoreRef.current = true
-        beginHistoryTransaction()
-        updateLayer(layer.id, { chip: { ...layer.chip!, label: next } })
-        commitHistoryTransaction()
-
-        editor.off("editing:exited", finish)
-        try {
-          canvas.remove(editor)
-        } catch {
-          // already removed
-        }
-
-        const restored = findByLayerId(canvas, layer.id)
-        if (restored) canvas.setActiveObject(restored)
-
-        canvas.requestRenderAll()
-        queueMicrotask(() => {
-          writingStoreRef.current = false
+      const wired = text as IText & { __editCoordsWired?: boolean }
+      if (!wired.__editCoordsWired) {
+        wired.__editCoordsWired = true
+        text.on("editing:entered", () => {
+          canvas.calcOffset()
+          text.setCoords()
         })
       }
-      editor.on("editing:exited", finish)
+      const group = chipGroupOf(text) as EngineObject | null
+      if (group?.layerId) selectLayer(group.layerId)
+      syncTextEditingCoords(canvas, text)
+      canvas.setActiveObject(text)
+      text.enterEditing()
+      text.selectAll()
+      syncTextEditingCoords(canvas, text)
+      canvas.requestRenderAll()
+    }
+
+    const selectChipLayer = (layer: CanvasLayer) => {
+      if (!layer.chip) return
+      clearChipInlineEditors(canvas)
+      selectLayer(layer.id)
+    }
+
+    const resolveLayerId = (obj: EngineObject | undefined): string | null => {
+      if (!obj || isSmartGuideObject(obj)) return null
+      if (obj.layerId) return obj.layerId
+      const group = chipGroupOf(obj) as EngineObject | null
+      return group?.layerId ?? null
     }
 
     const onSelect = () => {
       const obj = canvas.getActiveObject() as EngineObject | undefined
       if (obj && isSmartGuideObject(obj)) return
-      selectLayer(obj?.layerId ?? null)
+      // Nested chip text still maps to the badge layer for the tools panel.
+      selectLayer(resolveLayerId(obj))
     }
     const onSelectionCleared = () => selectLayer(null)
 
@@ -1444,6 +1781,8 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
       clickEditRef.current.moved = true
       const target = e.target as EngineObject | undefined
       if (!target || isSmartGuideObject(target)) return
+      // Soft canvas-bounds clamp (left/top only) before smart guides.
+      constrainObjectToArtboard(target)
       scheduleGuides(target)
     }
     const onObjectScaling = () => {
@@ -1514,7 +1853,9 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
             return
           }
           if (layer.chip) {
-            startChipInlineEdit(target, layer)
+            // Second click on a badge: keep selection in the right tools panel.
+            // Inline label edit is via double-click (enterEditing on nested IText).
+            selectChipLayer(layer)
             interactingRef.current = false
             return
           }
@@ -1532,7 +1873,22 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
 
     const onTextChanged = (e: { target?: FabricObject }) => {
       const obj = e.target as EngineObject | undefined
-      if (!obj?.layerId || obj.type !== "i-text") return
+      if (!obj) return
+      // Nested badge text: resize plate + re-anchor children as glyphs change.
+      if (isChipTextPart(obj)) {
+        const group = chipGroupOf(obj)
+        if (group) updateBadgeLayout(group)
+        if ((obj as IText).isEditing) {
+          syncTextEditingCoords(canvas, obj as IText)
+        }
+        return
+      }
+      // Refresh selection/control bounds after glyph metrics change.
+      obj.setCoords()
+      canvas.requestRenderAll()
+      if (!obj.layerId || obj.type !== "i-text") return
+      // Overlay chip editors sync on editing:exited, not per keystroke.
+      if (obj.isChipInlineEditor) return
       const text = (obj as IText).text ?? ""
       writingStoreRef.current = true
       updateLayer(obj.layerId, { text })
@@ -1541,20 +1897,81 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
       })
     }
 
-    // Keep dblclick as a fast path for first-time edit.
-    const onMouseDblClick = (opt: { target?: FabricObject }) => {
-      const target = opt.target as EngineObject | undefined
-      if (!target?.layerId || target.layerRole !== "infographic") return
-      const layer = useEditorStore
-        .getState()
-        .layers.find((l) => l.id === target.layerId)
-      if (!layer || layer.locked) return
+    // Dblclick: edit standalone text or nested chip IText in place.
+    const onMouseDblClick = (opt: {
+      target?: FabricObject
+      subTargets?: FabricObject[]
+    }) => {
+      const direct = opt.target as EngineObject | undefined
+      const fromSub = opt.subTargets?.find((t) => t.type === "i-text") as
+        | IText
+        | undefined
+      const textHit =
+        direct?.type === "i-text" ? (direct as IText) : fromSub ?? null
 
-      if (target.type === "i-text") {
-        enterTextEditing(target as IText)
+      if (textHit && isChipTextPart(textHit)) {
+        const layerId = resolveLayerId(textHit as EngineObject)
+        const layer = layerId
+          ? useEditorStore.getState().layers.find((l) => l.id === layerId)
+          : undefined
+        if (!layer || layer.locked) return
+        enterChipTextEditing(textHit)
         return
       }
-      if (layer.chip) startChipInlineEdit(target, layer)
+
+      if (direct?.type === "i-text" && direct.layerRole === "infographic") {
+        const layer = useEditorStore
+          .getState()
+          .layers.find((l) => l.id === direct.layerId)
+        if (!layer || layer.locked) return
+        enterTextEditing(direct as IText)
+        return
+      }
+
+      if (!direct?.layerId || direct.layerRole !== "infographic") return
+      const layer = useEditorStore
+        .getState()
+        .layers.find((l) => l.id === direct.layerId)
+      if (!layer || layer.locked) return
+      if (layer.chip) selectChipLayer(layer)
+    }
+
+    const onTextEditingEntered = (e: { target?: FabricObject }) => {
+      const text = e.target
+      if (!text || text.type !== "i-text") return
+      syncTextEditingCoords(canvas, text as IText)
+    }
+
+    /** Persist chip label/subtitle into Zustand when leaving canvas edit mode. */
+    const onTextEditingExited = (e: { target?: FabricObject }) => {
+      const obj = e.target as EngineObject | undefined
+      if (!isChipTextPart(obj)) return
+
+      const part = obj.chipPart as "label" | "subtitle"
+      const layerId = resolveLayerId(obj)
+      if (!layerId) return
+      const layer = useEditorStore.getState().layers.find((l) => l.id === layerId)
+      if (!layer?.chip) return
+
+      const nextText = (obj as IText).text ?? ""
+      const nextChip: FeatureChipDraft =
+        part === "label"
+          ? { ...layer.chip, label: nextText }
+          : { ...layer.chip, subtitle: nextText || undefined }
+
+      writingStoreRef.current = true
+      updateLayer(layerId, {
+        chip: nextChip,
+        ...(part === "label"
+          ? { name: `Плашка «${nextText || layer.chip.label}»` }
+          : {}),
+      })
+      const group = chipGroupOf(obj)
+      if (group) applyChipContentInPlace(group, nextChip)
+      queueMicrotask(() => {
+        writingStoreRef.current = false
+      })
+      canvas.requestRenderAll()
     }
 
     canvas.on("selection:created", onSelect)
@@ -1568,6 +1985,8 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
     canvas.on("mouse:up", onMouseUp)
     canvas.on("text:changed", onTextChanged)
     canvas.on("mouse:dblclick", onMouseDblClick)
+    canvas.on("text:editing:entered", onTextEditingEntered)
+    canvas.on("text:editing:exited", onTextEditingExited)
 
     /** Delete/Backspace removes the selection unless IText is actively editing. */
     const onCanvasKeyDown = (event: KeyboardEvent) => {
@@ -1605,11 +2024,23 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
       )
       if (targets.length === 0) return
 
-      const layerIds = targets
+      // Nested chip text → delete the whole badge Group, not the child alone.
+      const removeTargets: EngineObject[] = []
+      const seen = new Set<EngineObject>()
+      for (const obj of targets) {
+        const group =
+          isChipTextPart(obj) ? (chipGroupOf(obj) as EngineObject | null) : null
+        const victim = group ?? obj
+        if (seen.has(victim)) continue
+        seen.add(victim)
+        removeTargets.push(victim)
+      }
+
+      const layerIds = removeTargets
         .map((obj) => obj.layerId)
         .filter((id): id is string => Boolean(id))
 
-      for (const obj of targets) {
+      for (const obj of removeTargets) {
         canvas.remove(obj)
       }
       canvas.discardActiveObject()
@@ -1662,6 +2093,8 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
         canvas.off("mouse:up", onMouseUp)
         canvas.off("text:changed", onTextChanged)
         canvas.off("mouse:dblclick", onMouseDblClick)
+        canvas.off("text:editing:entered", onTextEditingEntered)
+        canvas.off("text:editing:exited", onTextEditingExited)
         // Soft teardown: keep Fabric instance + scene objects intact across
         // React Strict Mode effect re-runs. Never dispose() (kills 2d context)
         // and never clear() here — that left a black void because `ready` stayed
@@ -1702,7 +2135,8 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
           existing &&
           (existing instanceof FabricImage || existing.type === "image")
         ) {
-          canvas.requestRenderAll()
+          forceCanvasVisualSync(canvas)
+          setLightingPaintKey((n) => n + 1)
           return
         }
 
@@ -1716,7 +2150,8 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
           again &&
           (again instanceof FabricImage || again.type === "image")
         ) {
-          live.requestRenderAll()
+          forceCanvasVisualSync(live)
+          setLightingPaintKey((n) => n + 1)
           return
         }
 
@@ -1741,9 +2176,9 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
           markObject(img, "layer_product", "product")
           live.add(img)
           live.setActiveObject(img)
-          live.requestRenderAll()
           syncViewportRef.current()
-          live.requestRenderAll()
+          forceCanvasVisualSync(live)
+          setLightingPaintKey((n) => n + 1)
           return
         }
 
@@ -1822,6 +2257,9 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
 
           canvas.requestRenderAll()
           syncViewportRef.current()
+          // Force objects + lighting onto the visible surface after empty-stack init.
+          forceCanvasVisualSync(canvas)
+          setLightingPaintKey((n) => n + 1)
           sceneEpochRef.current += 1
           sceneRecoveriesRef.current = 0
           setSceneError(null)
@@ -1846,62 +2284,86 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
           .filter((l) => l.visible && l.type !== "background")
           .sort((a, b) => a.zIndex - b.zIndex)
 
-        for (const layer of interactive) {
+        const productLayers = interactive.filter(
+          (l) => l.type === "image" || l.id === "layer_product"
+        )
+        const badgeAndTextLayers = interactive.filter(
+          (l) =>
+            !(l.type === "image" || l.id === "layer_product") &&
+            (l.type === "text" || (l.type === "shape" && l.chip))
+        )
+
+        // 1) Product image MUST finish loading before badges/texts are built.
+        //    Otherwise chips/text land in the scene but stay invisible until
+        //    the next user-driven add triggers a re-layout.
+        for (const layer of productLayers) {
           if (cancelled) {
             disposeBuiltObjects(built)
             return
           }
 
-          if (layer.type === "image" || layer.id === "layer_product") {
-            if (
-              productPreviewUrl &&
-              fittedProductUrlRef.current !== productPreviewUrl
-            ) {
-              try {
-                const probe = await loadImage(productPreviewUrl)
-                if (cancelled) {
-                  disposeBuiltObjects(built)
-                  return
-                }
-                // Toast photo-add: 80% of artboard height, centered.
-                const fitted = fitProductPhotoToArtboard(
-                  probe.width || 1,
-                  probe.height || 1
-                )
-                fittedProductUrlRef.current = productPreviewUrl
-                writingStoreRef.current = true
-                syncLayerGeometry(layer.id, {
-                  width: fitted.width,
-                  height: fitted.height,
-                  x: fitted.x,
-                  y: fitted.y,
-                })
-                queueMicrotask(() => {
-                  writingStoreRef.current = false
-                })
-                if (useEditorStore.getState().busyKind === "loading-image") {
-                  setBusyKind("idle")
-                }
-              } catch {
-                if (useEditorStore.getState().busyKind === "loading-image") {
-                  setBusyKind("idle")
-                }
+          if (
+            productPreviewUrl &&
+            fittedProductUrlRef.current !== productPreviewUrl
+          ) {
+            try {
+              const probe = await loadImage(productPreviewUrl)
+              if (cancelled) {
+                disposeBuiltObjects(built)
+                return
+              }
+              // Toast photo-add: 80% of artboard height, centered.
+              const fitted = fitProductPhotoToArtboard(
+                probe.width || 1,
+                probe.height || 1
+              )
+              fittedProductUrlRef.current = productPreviewUrl
+              writingStoreRef.current = true
+              syncLayerGeometry(layer.id, {
+                width: fitted.width,
+                height: fitted.height,
+                x: fitted.x,
+                y: fitted.y,
+              })
+              queueMicrotask(() => {
+                writingStoreRef.current = false
+              })
+              if (useEditorStore.getState().busyKind === "loading-image") {
+                setBusyKind("idle")
+              }
+            } catch {
+              if (useEditorStore.getState().busyKind === "loading-image") {
+                setBusyKind("idle")
               }
             }
+          }
 
-            const latest =
-              useEditorStore.getState().layers.find((l) => l.id === layer.id) ??
-              layer
-            const product = await safeBuildLayer(latest, (l) =>
-              buildProductObject(l, productPreviewUrl)
-            )
-            if (cancelled) {
-              if (product) disposeBuiltObjects([product])
-              disposeBuiltObjects(built)
-              return
-            }
-            if (product) built.push(product)
-            continue
+          const latest =
+            useEditorStore.getState().layers.find((l) => l.id === layer.id) ??
+            layer
+          const product = await safeBuildLayer(latest, (l) =>
+            buildProductObject(l, productPreviewUrl)
+          )
+          if (cancelled) {
+            if (product) disposeBuiltObjects([product])
+            disposeBuiltObjects(built)
+            return
+          }
+          if (product) built.push(product)
+        }
+
+        // 2) Badges/texts only after product bitmap is ready (+ fonts for chips).
+        const hasBadges = badgeAndTextLayers.some(
+          (l) => l.type === "shape" && l.chip
+        )
+        if (hasBadges) {
+          await awaitDocumentFontsReady()
+        }
+
+        for (const layer of badgeAndTextLayers) {
+          if (cancelled) {
+            disposeBuiltObjects(built)
+            return
           }
 
           if (layer.type === "text") {
@@ -1940,8 +2402,32 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
         // Transparent so CSS SoftboxLightOverlay wash is the live studio light.
         // Fallback gray until objects paint (avoids a black flash mid-rebuild).
         canvas.backgroundColor = "#18181b"
-        for (const obj of built) {
+
+        // Preserve z-order from the original interactive sort when committing.
+        const byId = new Map(
+          built.map((obj) => [(obj as EngineObject).layerId ?? "", obj])
+        )
+        const ordered: EngineObject[] = [bg]
+        for (const layer of interactive) {
+          const obj = byId.get(layer.id)
+          if (obj) ordered.push(obj)
+        }
+        // Background is already in `ordered[0]`; drop duplicate if present in built.
+        const commitList = ordered.filter(
+          (obj, i, arr) => arr.indexOf(obj) === i
+        )
+
+        for (const obj of commitList) {
           canvas.add(obj)
+          // Badges + text: force coords right after add so hydrate paint sticks.
+          const role = (obj as EngineObject).layerRole
+          if (
+            role === "infographic" ||
+            (obj instanceof Group &&
+              (obj as EngineObject).chipSourceScale != null)
+          ) {
+            obj.setCoords()
+          }
         }
         // Keep false — interactive frames call requestRenderAll explicitly.
         built.length = 0
@@ -1965,11 +2451,20 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
         }
         // Softbox wash shows through once objects are on the artboard.
         canvas.backgroundColor = "rgba(0,0,0,0)"
-        // Immediate paint after fromURL builds (product / bg / chips).
-        canvas.renderAll()
+        // Explicit offset + double paint — badges can sit in memory until a
+        // later add/transform otherwise (hydrate race after product fromURL).
+        canvas.calcOffset()
+        canvas.requestRenderAll()
+        window.setTimeout(() => {
+          if (!isFabricCanvasAlive(canvas)) return
+          canvas.renderAll()
+        }, 150)
         // Re-apply Fit / zoom after clear/rebuild (Fabric may reset viewport).
         syncViewportRef.current()
-        canvas.renderAll()
+        // Force setCoords + lighting + delayed render — objects can sit in memory
+        // while the artboard stays dark until a manual softbox slider change.
+        forceCanvasVisualSync(canvas)
+        setLightingPaintKey((n) => n + 1)
         sceneEpochRef.current += 1
         sceneRecoveriesRef.current = 0
         setSceneError(null)
@@ -2023,6 +2518,7 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
 
   // Softbox: CSS SoftboxLightOverlay is the live light. Debounced Fabric paint
   // keeps the hidden bitmap export-ready — no visual mode switch on slider commit.
+  // Runs immediately on mount/ready from store softbox — never waits for slider onChange.
   useEffect(() => {
     if (!ready) return
 
@@ -2034,7 +2530,7 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
       try {
         const canvas = fabricRef.current
         if (!isFabricCanvasAlive(canvas)) return
-        applySoftboxToFabric(canvas, useEditorStore.getState().softbox)
+        applyLightingEffects(canvas, useEditorStore.getState().softbox)
       } catch (err) {
         if (process.env.NODE_ENV !== "production") {
           console.error("[fabric-canvas] softbox apply failed", err)
@@ -2049,6 +2545,8 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
         raf = 0
       }
       if (immediate) {
+        // Synchronously apply current lighting, then rAF for a second paint.
+        runApply()
         raf = requestAnimationFrame(runApply)
         return
       }
@@ -2075,9 +2573,9 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
       window.clearTimeout(debounceTimer)
       if (raf) cancelAnimationFrame(raf)
     }
-  }, [ready])
+  }, [ready, lightingPaintKey])
 
-  // Undo / external transform patches → Fabric objects
+  // Undo / external transform patches → Fabric objects (in-place, no Group rebuild)
   useEffect(() => {
     const canvas = fabricRef.current
     if (!canvas || writingStoreRef.current || interactingRef.current) return
@@ -2095,6 +2593,20 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
         }
         applyTextStyle(text, layer.textStyle)
       }
+      // Badge: mutate existing Group children — never rebuild on label/subtitle keystrokes.
+      if (
+        layer.type === "shape" &&
+        layer.chip &&
+        (obj.type === "group" || obj instanceof Group)
+      ) {
+        const group = obj as Group
+        const editingChild = group
+          .getObjects()
+          .some((child) => child.type === "i-text" && (child as IText).isEditing)
+        if (!editingChild) {
+          applyChipContentInPlace(group, layer.chip)
+        }
+      }
     }
     canvas.requestRenderAll()
   }, [layers])
@@ -2108,6 +2620,16 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
       return
     }
     const match = findByLayerId(canvas, selectedLayerId)
+    const active = canvas.getActiveObject() as EngineObject | undefined
+    // Nested chip IText is a valid selection for the badge layer — don't steal it.
+    if (
+      active &&
+      isChipTextPart(active) &&
+      (active.layerId === selectedLayerId ||
+        (chipGroupOf(active) as EngineObject | null)?.layerId === selectedLayerId)
+    ) {
+      return
+    }
     if (match?.selectable && canvas.getActiveObject() !== match) {
       canvas.setActiveObject(match)
       canvas.requestRenderAll()
@@ -2161,7 +2683,7 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
 
         <div className="absolute inset-0">
           {/* Softbox CSS light — always mounted; props update from softbox state. */}
-          <SoftboxLightOverlay frame={artboardFrame} />
+          <SoftboxLightOverlay frame={artboardFrame} paintKey={lightingPaintKey} />
           <canvas ref={canvasRef} className="relative z-[1]" />
         </div>
 
