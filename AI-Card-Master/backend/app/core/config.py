@@ -2333,6 +2333,26 @@ class Settings(BaseSettings):
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
     @property
+    def cors_allow_origin_regex(self) -> str | None:
+        """Allow RFC1918 / loopback frontend origins outside production.
+
+        Lets a phone on the same Wi-Fi open ``http://<LAN-IP>:3000`` and call
+        the API without listing every DHCP address in ALLOWED_ORIGINS.
+        Disabled in production (explicit origins only).
+        """
+
+        if self.app_env == "production":
+            return None
+        return (
+            r"^https?://("
+            r"localhost|127\.0\.0\.1|"
+            r"10\.\d{1,3}\.\d{1,3}\.\d{1,3}|"
+            r"192\.168\.\d{1,3}\.\d{1,3}|"
+            r"172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}"
+            r")(:\d+)?$"
+        )
+
+    @property
     def cors_allow_methods_list(self) -> list[str]:
         """Parse allowed CORS HTTP methods (no wildcards in production)."""
 

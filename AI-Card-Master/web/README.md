@@ -2,7 +2,18 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
-First, run the development server:
+LAN-ready development (PC + phone on the same Wi-Fi):
+
+```bash
+npm run dev
+```
+
+The launcher binds to `0.0.0.0` and prints:
+
+- **Local:** `http://localhost:3000` (PC)
+- **Network:** `http://<your-LAN-IP>:3000` (phone browser)
+
+Also start the API with `--host 0.0.0.0` (see root README) so the phone can reach `:8000`.
 
 ```bash
 npm run dev

@@ -156,6 +156,31 @@ def test_cors_origins_legacy_alias_still_works() -> None:
     assert settings.cors_origins_list == ["https://legacy.example.com"]
 
 
+def test_dev_cors_allows_private_lan_origin_regex() -> None:
+    settings = _settings(APP_ENV="development")
+    pattern = settings.cors_allow_origin_regex
+    assert pattern is not None
+    import re
+
+    compiled = re.compile(pattern)
+    assert compiled.fullmatch("http://192.168.1.13:3000")
+    assert compiled.fullmatch("http://10.0.0.5:3000")
+    assert compiled.fullmatch("http://localhost:3000")
+    assert compiled.fullmatch("https://172.16.0.2:3001")
+    assert compiled.fullmatch("http://8.8.8.8:3000") is None
+
+
+def test_production_cors_disables_lan_origin_regex() -> None:
+    settings = _settings(
+        APP_ENV="production",
+        ADMIN_PANEL_TOKEN_SECRET="a" * 32,
+        PASSWORD_PEPPER="p" * 32,
+        CAPTCHA_BYPASS_WHEN_UNCONFIGURED=False,
+        ALLOWED_ORIGINS="https://app.example.com",
+    )
+    assert settings.cors_allow_origin_regex is None
+
+
 def test_cors_methods_and_headers_are_explicit() -> None:
     settings = _settings()
     assert "*" not in settings.cors_allow_methods_list

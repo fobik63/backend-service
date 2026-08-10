@@ -411,15 +411,18 @@ def _is_routing_not_found(exc: StarletteHTTPException) -> bool:
 
 # CORS: allow only explicitly configured frontend origins (ALLOWED_ORIGINS).
 # Wildcard origins/methods/headers are rejected in production via Settings.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origins_list,
-    allow_credentials=settings.cors_allow_credentials,
-    allow_methods=settings.cors_allow_methods_list,
-    allow_headers=settings.cors_allow_headers_list,
-    expose_headers=settings.cors_expose_headers_list,
-    max_age=600,
-)
+# In non-production, also allow RFC1918 LAN origins (phone on same Wi-Fi).
+_cors_middleware_kwargs: dict[str, object] = {
+    "allow_origins": settings.cors_origins_list,
+    "allow_credentials": settings.cors_allow_credentials,
+    "allow_methods": settings.cors_allow_methods_list,
+    "allow_headers": settings.cors_allow_headers_list,
+    "expose_headers": settings.cors_expose_headers_list,
+    "max_age": 600,
+}
+if settings.cors_allow_origin_regex:
+    _cors_middleware_kwargs["allow_origin_regex"] = settings.cors_allow_origin_regex
+app.add_middleware(CORSMiddleware, **_cors_middleware_kwargs)
 # Security stack (Starlette: last added = outermost).
 # Order: SlowAPI → DeadMans → SecurityHeaders → Cloudflare → PayloadSize
 #        → RequestContext → Great Wall → Sanitization → Idempotency

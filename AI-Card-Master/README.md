@@ -195,7 +195,8 @@ source .venv/bin/activate
 .venv\Scripts\Activate.ps1
 
 pip install fastapi uvicorn pydantic python-multipart
-uvicorn app.main:app --reload
+# Bind 0.0.0.0 so phone on the same Wi-Fi can reach the API via LAN IP.
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ## Upload Example

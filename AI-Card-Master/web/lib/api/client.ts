@@ -44,6 +44,10 @@ export const apiClient = axios.create({
 });
 
 apiClient.interceptors.request.use((config) => {
+  // Re-resolve on each request so phone/LAN opens rewrite localhost → PC IP.
+  config.baseURL =
+    resolveApiBaseUrl(API_BASE_URL) || DEFAULT_API_BASE_URL;
+
   if (typeof window !== "undefined") {
     const token =
       window.localStorage.getItem("access_token") ||
