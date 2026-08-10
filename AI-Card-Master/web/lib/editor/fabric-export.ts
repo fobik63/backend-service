@@ -5,6 +5,7 @@ import {
   CANVAS_WIDTH,
 } from "@/lib/constants/mock-editor"
 import { dataUrlToBlob, downloadBlob } from "@/lib/export/download-blob"
+import type { ExportScale } from "@/lib/store/editor-store"
 
 export type FabricExportSize = {
   width: number
@@ -12,11 +13,25 @@ export type FabricExportSize = {
   label: string
 }
 
-/** Marketplace card presets (3:4). */
+/** Marketplace card presets (native artboard sizes). */
 export const FABRIC_EXPORT_PRESETS: FabricExportSize[] = [
   { width: 1080, height: 1440, label: "1080×1440" },
   { width: 900, height: 1200, label: "900×1200" },
+  { width: 1200, height: 1200, label: "1200×1200" },
+  { width: 1500, height: 2000, label: "1500×2000" },
 ]
+
+export function nativeArtboardExportSize(
+  scale: ExportScale = 1
+): FabricExportSize {
+  const width = Math.round(CANVAS_WIDTH * scale)
+  const height = Math.round(CANVAS_HEIGHT * scale)
+  return {
+    width,
+    height,
+    label: scale === 1 ? `${CANVAS_WIDTH}×${CANVAS_HEIGHT}` : `${scale}×`,
+  }
+}
 
 type FabricExporter = {
   /** Composite all layers to a PNG data URL at native or custom size. */
@@ -58,7 +73,13 @@ export function isFabricExporterReady(): boolean {
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, ms))
+  return new Promise((resolve) => {
+    if (typeof window === "undefined") {
+      setTimeout(resolve, ms)
+      return
+    }
+    window.setTimeout(resolve, ms)
+  })
 }
 
 /** Wait until Fabric has finished a scene rebuild (after page remount). */
@@ -172,16 +193,18 @@ function restoreCanvasAfterExport(
 
 /**
  * Discard selection chrome, hide guides/grid helpers, then rasterize so output
- * matches the requested pixel size (canvas logical size is always 1080×1440).
+ * matches the requested pixel size (canvas logical size is the live artboard).
  */
 export async function fabricCanvasToPngDataUrl(
   canvas: FabricCanvas,
   size: FabricExportSize = FABRIC_EXPORT_PRESETS[0]!
 ): Promise<string> {
   const prepared = prepareCanvasForExport(canvas)
-  const multiplier = size.width / CANVAS_WIDTH
+  const artboardW = CANVAS_WIDTH
+  const artboardH = CANVAS_HEIGHT
+  const multiplier = size.width / Math.max(1, artboardW)
   // Editor may use setZoom/absolutePan for Fit — export always at identity VPT
-  // so left/top/width/height map to the native 1080×1440 artboard.
+  // so left/top/width/height map to the native artboard.
   const transform = canvas.viewportTransform
   const prevVpt: [number, number, number, number, number, number] = transform
     ? [
@@ -204,8 +227,8 @@ export async function fabricCanvasToPngDataUrl(
       enableRetinaScaling: false,
       left: 0,
       top: 0,
-      width: CANVAS_WIDTH,
-      height: CANVAS_HEIGHT,
+      width: artboardW,
+      height: artboardH,
       filter: (obj) => !isExportChrome(obj as FabricObject),
     })
   } finally {
@@ -225,22 +248,20 @@ export async function fabricCanvasToPngBytes(
 }
 
 /**
- * Capture each editor page from the live Fabric canvas at 1080×1440.
+ * Capture each editor page from the live Fabric canvas at native size × scale.
  * Switches pages via the store, waits for remount/rebuild, then restores index.
  */
 export async function captureFabricPagesPngBytes(options: {
   pageCount: number
   getActivePageIndex: () => number
   setActivePageIndex: (index: number) => void
+  /** Export multiplier (2 = retina / Ultra-HD). Default 2. */
+  exportScale?: ExportScale
 }): Promise<Uint8Array[]> {
   const pageCount = Math.max(1, Math.floor(options.pageCount))
   const previousIndex = options.getActivePageIndex()
   const results: Uint8Array[] = []
-  const nativeSize: FabricExportSize = {
-    width: CANVAS_WIDTH,
-    height: CANVAS_HEIGHT,
-    label: "1080×1440",
-  }
+  const exportSize = nativeArtboardExportSize(options.exportScale ?? 2)
 
   try {
     for (let index = 0; index < pageCount; index += 1) {
@@ -259,7 +280,7 @@ export async function captureFabricPagesPngBytes(options: {
         await waitForFabricExportReady({ minEpoch: 1, timeoutMs: 8_000 })
       }
 
-      const bytes = await captureFabricPngBytes(nativeSize)
+      const bytes = await captureFabricPngBytes(exportSize)
       if (!bytes || bytes.byteLength < 2_048) {
         throw new Error(`Failed to capture page ${index + 1} from Fabric canvas`)
       }

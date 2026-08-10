@@ -20,8 +20,14 @@ function EditorPageStrip({ className }: { className?: string }) {
   const activePageIndex = useEditorStore((s) => s.activePageIndex)
   const setActivePageIndex = useEditorStore((s) => s.setActivePageIndex)
   const packSize = useEditorStore((s) => s.packSize)
+  const canvasWidth = useEditorStore((s) => s.canvasWidth)
+  const canvasHeight = useEditorStore((s) => s.canvasHeight)
 
   const count = Math.min(pages.length, packSize)
+  const thumbAspect =
+    canvasWidth > 0 && canvasHeight > 0
+      ? `${canvasWidth} / ${canvasHeight}`
+      : "3 / 4"
 
   return (
     <div
@@ -64,10 +70,11 @@ function EditorPageStrip({ className }: { className?: string }) {
             >
               <div
                 className={cn(
-                  "relative aspect-[3/4] w-full overflow-hidden rounded-md",
+                  "relative w-full overflow-hidden rounded-md",
                   active ? "ring-1 ring-white/25" : "ring-1 ring-white/8"
                 )}
                 style={{
+                  aspectRatio: thumbAspect,
                   background:
                     "linear-gradient(155deg,#1a1a1c 0%,#121214 48%,#0a0a0b 100%)",
                 }}

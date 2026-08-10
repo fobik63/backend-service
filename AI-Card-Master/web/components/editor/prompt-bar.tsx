@@ -329,6 +329,7 @@ function PromptBar({
       commitActivePage()
       const store = useEditorStore.getState()
       const latestPages = store.pages
+      const exportScale = store.exportScale
       const pageSnapshot = latestPages.map((page) =>
         page.map((layer) => ({
           ...layer,
@@ -337,7 +338,7 @@ function PromptBar({
         })),
       )
 
-      // Prefer live Fabric captures (1080×1440, no selection chrome / guides).
+      // Prefer live Fabric captures (artboard × exportScale, no selection chrome).
       let fabricPages: Uint8Array[] | null = null
       try {
         fabricPages = await captureFabricPagesPngBytes({
@@ -345,6 +346,7 @@ function PromptBar({
           getActivePageIndex: () => useEditorStore.getState().activePageIndex,
           setActivePageIndex: (index) =>
             useEditorStore.getState().setActivePageIndex(index),
+          exportScale,
         })
       } catch {
         fabricPages = null
@@ -358,6 +360,8 @@ function PromptBar({
         pages: pageSnapshot,
         softbox: { ...softbox },
         zipBasename: zipTitle,
+        zipFilename: "card_ai_export.zip",
+        exportScale,
         capturePageAtIndex: fabricPages
           ? async (pageIndex) => {
               const hit = fabricPages![pageIndex]

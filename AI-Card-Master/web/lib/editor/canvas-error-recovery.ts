@@ -1,6 +1,7 @@
 import { getActiveFabricCanvas } from "@/lib/editor/fabric-export"
 import {
   DEFAULT_SOFTBOX,
+  DEFAULT_COLOR_GRADE,
   useEditorStore,
 } from "@/lib/store/editor-store"
 import { DEFAULT_TEXT_STYLE, type CanvasLayer } from "@/types/canvas"
@@ -55,6 +56,7 @@ export function recoverCanvasAfterRenderError(layerId?: string | null): void {
   const store = useEditorStore.getState()
 
   store.setSoftbox({ ...DEFAULT_SOFTBOX })
+  store.setColorGrade({ ...DEFAULT_COLOR_GRADE })
 
   const targetId = layerId ?? store.selectedLayerId
   if (targetId) {

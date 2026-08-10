@@ -8,11 +8,13 @@ import {
   Lock,
   RotateCw,
   SlidersHorizontal,
+  Sparkles,
   Type,
 } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 
 import { BadgeParamsSection } from "@/components/editor/badge-tool"
+import { LayerTreePanel } from "@/components/editor/layer-tree"
 import { SliderControl } from "@/components/editor/slider-control"
 import { Button } from "@/components/ui/button"
 import {
@@ -36,9 +38,11 @@ import {
 import { Input } from "@/components/ui/input"
 import { TEXT_PRESETS } from "@/lib/constants/mock-editor"
 import { addTextPresetToCanvas } from "@/lib/editor/canvas-actions"
+import { ensureEditorFontLoaded } from "@/lib/editor/fabric-fonts"
 import { useI18n } from "@/lib/i18n"
 import {
   useEditorStore,
+  type ProductColorGrade,
   type SoftboxSettings,
 } from "@/lib/store/editor-store"
 import {
@@ -53,8 +57,10 @@ import { toast } from "sonner"
 const FONT_CSS: Record<EditorFontFamily, string> = {
   Inter: "var(--font-inter), Inter, sans-serif",
   Montserrat: "var(--font-montserrat), Montserrat, sans-serif",
-  Roboto: "var(--font-roboto), Roboto, sans-serif",
-  "Space Grotesk": "var(--font-space-grotesk), 'Space Grotesk', sans-serif",
+  Unbounded: "var(--font-unbounded), Unbounded, sans-serif",
+  "Cera Pro": "var(--font-cera-pro), 'Cera Pro', sans-serif",
+  Oswald: "var(--font-oswald), Oswald, sans-serif",
+  "Russo One": "var(--font-russo-one), 'Russo One', sans-serif",
 }
 
 function clamp(n: number, min: number, max: number) {
@@ -175,9 +181,17 @@ function TextParamsSection() {
               <DropdownMenuRadioGroup
                 value={style.fontFamily}
                 onValueChange={(v) => {
-                  if (EDITOR_FONT_FAMILIES.includes(v as EditorFontFamily)) {
-                    patchStyle({ fontFamily: v as EditorFontFamily })
+                  if (!EDITOR_FONT_FAMILIES.includes(v as EditorFontFamily)) {
+                    return
                   }
+                  const font = v as EditorFontFamily
+                  void (async () => {
+                    await ensureEditorFontLoaded(font, {
+                      sizePx: style.fontSize,
+                      weight: style.fontWeight,
+                    })
+                    patchStyle({ fontFamily: font })
+                  })()
                 }}
               >
                 {EDITOR_FONT_FAMILIES.map((font) => (
@@ -215,18 +229,14 @@ function SoftboxParamsSection() {
   const { t } = useI18n()
   const softbox = useEditorStore((s) => s.softbox)
   const setSoftbox = useEditorStore((s) => s.setSoftbox)
-  const beginHistoryTransaction = useEditorStore(
-    (s) => s.beginHistoryTransaction,
-  )
+  const beginHistoryTransaction = useEditorStore((s) => s.beginHistoryTransaction)
   const commitHistoryTransaction = useEditorStore(
-    (s) => s.commitHistoryTransaction,
+    (s) => s.commitHistoryTransaction
   )
 
-  // Local slider state for 60fps thumb UI; light layer reads `softbox` from the store.
   const [draft, setDraft] = useState<SoftboxSettings>(softbox)
   const draftRef = useRef(draft)
   const scrubbingRef = useRef(false)
-  const disabled = !draft.enabled
 
   useEffect(() => {
     if (scrubbingRef.current) return
@@ -239,29 +249,11 @@ function SoftboxParamsSection() {
       if (scrubbingRef.current) {
         scrubbingRef.current = false
         const store = useEditorStore.getState()
-        store.setSoftbox({
-          intensity: draftRef.current.intensity,
-          colorTempK: draftRef.current.colorTempK,
-          lightAngle: draftRef.current.lightAngle,
-          softboxDiffusion: draftRef.current.softboxDiffusion,
-          lightElevation: draftRef.current.lightElevation,
-          enabled: draftRef.current.enabled,
-        })
+        store.setSoftbox({ ...draftRef.current })
         store.commitHistoryTransaction()
       }
     }
   }, [])
-
-  const pushDraftToStore = (next: SoftboxSettings) => {
-    setSoftbox({
-      intensity: next.intensity,
-      colorTempK: next.colorTempK,
-      lightAngle: next.lightAngle,
-      softboxDiffusion: next.softboxDiffusion,
-      lightElevation: next.lightElevation,
-      enabled: next.enabled,
-    })
-  }
 
   const beginScrub = () => {
     if (scrubbingRef.current) return
@@ -271,8 +263,7 @@ function SoftboxParamsSection() {
 
   const endScrub = () => {
     if (!scrubbingRef.current) return
-    // Final softbox values already applied on each onChange — only close history.
-    pushDraftToStore(draftRef.current)
+    setSoftbox({ ...draftRef.current })
     scrubbingRef.current = false
     commitHistoryTransaction()
   }
@@ -282,21 +273,18 @@ function SoftboxParamsSection() {
     const next = { ...draftRef.current, ...patch }
     draftRef.current = next
     setDraft(next)
-    // Live light: same softbox state for drag and idle (CSS overlay only).
-    pushDraftToStore(next)
+    setSoftbox({ ...next })
   }
 
-  const tempLabel = (v: number) => {
-    if (v <= 4000) return t("editor.colorTempWarm")
-    if (v >= 5600) return t("editor.colorTempCold")
-    return t("editor.colorTempNeutral")
-  }
+  const disabled = !draft.enabled
+  const intensityPct = clamp(draft.intensity, 0, 100)
+  const spreadPct = clamp(draft.softboxDiffusion, 10, 100)
 
   return (
     <section className="space-y-2.5">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <Lamp className="size-4 text-amber" aria-hidden />
+          <Lamp className="size-4 text-copper" aria-hidden />
           <h3 className="font-heading text-sm font-semibold tracking-tight">
             {t("editor.softboxFull")}
           </h3>
@@ -311,18 +299,18 @@ function SoftboxParamsSection() {
             draftRef.current = next
             setDraft(next)
             beginHistoryTransaction()
-            pushDraftToStore(next)
+            setSoftbox({ enabled })
             commitHistoryTransaction()
           }}
           className={cn(
             "relative h-5 w-9 rounded-full transition-colors",
-            draft.enabled ? "bg-foreground" : "bg-white/15",
+            draft.enabled ? "bg-foreground" : "bg-white/15"
           )}
         >
           <span
             className={cn(
               "absolute top-0.5 left-0.5 size-4 rounded-full bg-white transition-transform",
-              draft.enabled && "translate-x-4",
+              draft.enabled && "translate-x-4"
             )}
           />
           <span className="sr-only">{t("editor.softbox")}</span>
@@ -330,38 +318,6 @@ function SoftboxParamsSection() {
       </div>
 
       <div className={cn("space-y-2.5", disabled && "opacity-45")}>
-        <SliderControl
-          label={t("editor.intensity")}
-          value={draft.intensity}
-          min={0}
-          max={200}
-          unit="%"
-          disabled={disabled}
-          onChange={(intensity) =>
-            patchDraft({ intensity: clamp(intensity, 0, 200) })
-          }
-          onValueCommitted={endScrub}
-        />
-        <SliderControl
-          label={t("editor.colorTemp")}
-          value={draft.colorTempK}
-          min={2700}
-          max={6500}
-          step={50}
-          unit="K"
-          disabled={disabled}
-          formatValue={(v) => `${v}K ${tempLabel(v)}`}
-          onChange={(colorTempK) =>
-            patchDraft({ colorTempK: clamp(colorTempK, 2700, 6500) })
-          }
-          onValueCommitted={endScrub}
-          hint={
-            <div className="flex justify-between">
-              <span>2700 {t("editor.colorTempWarm")}</span>
-              <span>6500 {t("editor.colorTempCold")}</span>
-            </div>
-          }
-        />
         <SliderControl
           label={t("editor.angle")}
           value={draft.lightAngle}
@@ -371,7 +327,7 @@ function SoftboxParamsSection() {
           disabled={disabled}
           onChange={(lightAngle) =>
             patchDraft({
-              lightAngle: ((lightAngle % 360) + 360) % 360,
+              lightAngle: ((Math.round(lightAngle) % 360) + 360) % 360,
             })
           }
           onValueCommitted={endScrub}
@@ -383,19 +339,345 @@ function SoftboxParamsSection() {
           }
         />
         <SliderControl
-          label={t("editor.diffusion")}
-          value={draft.softboxDiffusion}
+          label={t("editor.intensity")}
+          value={intensityPct}
           min={0}
+          max={100}
+          unit="%"
+          disabled={disabled}
+          onChange={(intensity) =>
+            patchDraft({ intensity: clamp(intensity, 0, 100) })
+          }
+          onValueCommitted={endScrub}
+        />
+        <SliderControl
+          label={t("editor.diffusion")}
+          value={spreadPct}
+          min={10}
           max={100}
           unit="%"
           disabled={disabled}
           onChange={(softboxDiffusion) =>
             patchDraft({
-              softboxDiffusion: clamp(softboxDiffusion, 0, 100),
+              softboxDiffusion: clamp(softboxDiffusion, 10, 100),
             })
           }
           onValueCommitted={endScrub}
         />
+        <SliderControl
+          label={t("editor.colorTemp")}
+          value={draft.colorTempK}
+          min={2700}
+          max={6500}
+          step={50}
+          unit="K"
+          disabled={disabled}
+          formatValue={(v) =>
+            `${v}K ${
+              v <= 4000
+                ? t("editor.colorTempWarm")
+                : v >= 5600
+                  ? t("editor.colorTempCold")
+                  : t("editor.colorTempNeutral")
+            }`
+          }
+          onChange={(colorTempK) =>
+            patchDraft({ colorTempK: clamp(colorTempK, 2700, 6500) })
+          }
+          onValueCommitted={endScrub}
+          hint={
+            <div className="flex justify-between">
+              <span>2700 {t("editor.colorTempWarm")}</span>
+              <span>6500 {t("editor.colorTempCold")}</span>
+            </div>
+          }
+        />
+      </div>
+    </section>
+  )
+}
+
+function ColorGradeParamsSection() {
+  const { t } = useI18n()
+  const layers = useEditorStore((s) => s.layers)
+  const selectedLayerId = useEditorStore((s) => s.selectedLayerId)
+  const colorGrade = useEditorStore((s) => s.colorGrade)
+  const backgroundColorGrade = useEditorStore((s) => s.backgroundColorGrade)
+  const setColorGrade = useEditorStore((s) => s.setColorGrade)
+  const setBackgroundColorGrade = useEditorStore(
+    (s) => s.setBackgroundColorGrade
+  )
+  const beginHistoryTransaction = useEditorStore(
+    (s) => s.beginHistoryTransaction,
+  )
+  const commitHistoryTransaction = useEditorStore(
+    (s) => s.commitHistoryTransaction,
+  )
+
+  const selectedLayer = layers.find((l) => l.id === selectedLayerId)
+  const target =
+    selectedLayer?.type === "background" ? "background" : "product"
+  const canEdit =
+    !selectedLayer ||
+    selectedLayer.type === "background" ||
+    selectedLayer.type === "image"
+  const activeColorGrade =
+    target === "background" ? backgroundColorGrade : colorGrade
+  const setActiveColorGrade =
+    target === "background" ? setBackgroundColorGrade : setColorGrade
+
+  const [draft, setDraft] = useState<ProductColorGrade>(activeColorGrade)
+  const draftRef = useRef(draft)
+  const scrubbingRef = useRef(false)
+
+  useEffect(() => {
+    if (scrubbingRef.current) return
+    setDraft(activeColorGrade)
+    draftRef.current = activeColorGrade
+  }, [activeColorGrade])
+
+  useEffect(() => {
+    return () => {
+      if (scrubbingRef.current) {
+        scrubbingRef.current = false
+        const store = useEditorStore.getState()
+        if (target === "background") {
+          store.setBackgroundColorGrade({ ...draftRef.current })
+        } else {
+          store.setColorGrade({ ...draftRef.current })
+        }
+        store.commitHistoryTransaction()
+      }
+    }
+  }, [target])
+
+  const pushDraftToStore = (next: ProductColorGrade) => {
+    setActiveColorGrade({ ...next })
+  }
+
+  const beginScrub = () => {
+    if (scrubbingRef.current) return
+    scrubbingRef.current = true
+    beginHistoryTransaction()
+  }
+
+  const endScrub = () => {
+    if (!scrubbingRef.current) return
+    pushDraftToStore(draftRef.current)
+    scrubbingRef.current = false
+    commitHistoryTransaction()
+  }
+
+  const patchDraft = (patch: Partial<ProductColorGrade>) => {
+    beginScrub()
+    const next = { ...draftRef.current, ...patch }
+    draftRef.current = next
+    setDraft(next)
+    pushDraftToStore(next)
+  }
+
+  const rimDisabled = !draft.rimEnabled
+
+  return (
+    <section className="space-y-2.5">
+      <div className="flex items-center gap-2">
+        <Sparkles className="size-4 text-copper" aria-hidden />
+        <h3 className="font-heading text-sm font-semibold tracking-tight">
+          {target === "background"
+            ? t("editor.colorGradeBackground")
+            : t("editor.colorGradeProduct")}
+        </h3>
+      </div>
+
+      {!canEdit ? (
+        <p className="text-[11px] text-muted-foreground">
+          {t("editor.colorGradeSelectHint")}
+        </p>
+      ) : null}
+
+      <div className={cn("space-y-2.5", !canEdit && "opacity-45")}>
+        <SliderControl
+          label={t("editor.brightness")}
+          value={draft.brightness}
+          min={-1}
+          max={1}
+          step={0.01}
+          disabled={!canEdit}
+          formatValue={(v) => v.toFixed(2)}
+          onChange={(brightness) =>
+            patchDraft({ brightness: clamp(brightness, -1, 1) })
+          }
+          onValueCommitted={endScrub}
+        />
+        <SliderControl
+          label={t("editor.contrast")}
+          value={draft.contrast}
+          min={-1}
+          max={1}
+          step={0.01}
+          disabled={!canEdit}
+          formatValue={(v) => v.toFixed(2)}
+          onChange={(contrast) =>
+            patchDraft({ contrast: clamp(contrast, -1, 1) })
+          }
+          onValueCommitted={endScrub}
+        />
+        <SliderControl
+          label={t("editor.saturation")}
+          value={draft.saturation}
+          min={-1}
+          max={1}
+          step={0.01}
+          disabled={!canEdit}
+          formatValue={(v) => v.toFixed(2)}
+          onChange={(saturation) =>
+            patchDraft({ saturation: clamp(saturation, -1, 1) })
+          }
+          onValueCommitted={endScrub}
+        />
+        <SliderControl
+          label={t("editor.hue")}
+          value={draft.hue}
+          min={-1}
+          max={1}
+          step={0.01}
+          disabled={!canEdit}
+          formatValue={(v) => v.toFixed(2)}
+          onChange={(hue) =>
+            patchDraft({ hue: clamp(hue, -1, 1) })
+          }
+          onValueCommitted={endScrub}
+        />
+        <SliderControl
+          label={t("editor.productTint")}
+          value={draft.temperature}
+          min={-1}
+          max={1}
+          step={0.01}
+          disabled={!canEdit}
+          formatValue={(v) => v.toFixed(2)}
+          onChange={(temperature) =>
+            patchDraft({ temperature: clamp(temperature, -1, 1) })
+          }
+          onValueCommitted={endScrub}
+          hint={
+            <div className="flex justify-between">
+              <span>{t("editor.colorTempCold")}</span>
+              <span>{t("editor.colorTempWarm")}</span>
+            </div>
+          }
+        />
+        <SliderControl
+          label={t("editor.highlights")}
+          value={draft.highlights}
+          min={-1}
+          max={1}
+          step={0.01}
+          disabled={!canEdit}
+          formatValue={(v) => v.toFixed(2)}
+          onChange={(highlights) =>
+            patchDraft({ highlights: clamp(highlights, -1, 1) })
+          }
+          onValueCommitted={endScrub}
+        />
+        <SliderControl
+          label={t("editor.shadowsTone")}
+          value={draft.shadows}
+          min={-1}
+          max={1}
+          step={0.01}
+          disabled={!canEdit}
+          formatValue={(v) => v.toFixed(2)}
+          onChange={(shadows) =>
+            patchDraft({ shadows: clamp(shadows, -1, 1) })
+          }
+          onValueCommitted={endScrub}
+        />
+        <SliderControl
+          label={t("editor.sharpness")}
+          value={draft.sharpness}
+          min={0}
+          max={1}
+          step={0.01}
+          disabled={!canEdit}
+          formatValue={(v) => v.toFixed(2)}
+          onChange={(sharpness) =>
+            patchDraft({ sharpness: clamp(sharpness, 0, 1) })
+          }
+          onValueCommitted={endScrub}
+        />
+
+        {target === "product" ? (
+          <>
+            <div className="flex items-center justify-between gap-2 pt-1">
+              <span className="text-[11px] text-muted-foreground">
+                {t("editor.rimLight")}
+              </span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={draft.rimEnabled}
+                disabled={!canEdit}
+                onClick={() => {
+                  const rimEnabled = !draft.rimEnabled
+                  const next = { ...draftRef.current, rimEnabled }
+                  draftRef.current = next
+                  setDraft(next)
+                  beginHistoryTransaction()
+                  pushDraftToStore(next)
+                  commitHistoryTransaction()
+                }}
+                className={cn(
+                  "relative h-5 w-9 rounded-full transition-colors disabled:pointer-events-none disabled:opacity-50",
+                  draft.rimEnabled ? "bg-foreground" : "bg-white/15",
+                )}
+              >
+                <span
+                  className={cn(
+                    "absolute top-0.5 left-0.5 size-4 rounded-full bg-white transition-transform",
+                    draft.rimEnabled && "translate-x-4",
+                  )}
+                />
+                <span className="sr-only">{t("editor.rimLight")}</span>
+              </button>
+            </div>
+
+            <div className={cn("space-y-2.5", rimDisabled && "opacity-45")}>
+              <SliderControl
+                label={t("editor.rimStrength")}
+                value={draft.rimStrength}
+                min={0}
+                max={100}
+                unit="%"
+                disabled={!canEdit || rimDisabled}
+                onChange={(rimStrength) =>
+                  patchDraft({ rimStrength: clamp(rimStrength, 0, 100) })
+                }
+                onValueCommitted={endScrub}
+              />
+              <label className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+                <span>{t("editor.rimColor")}</span>
+                <input
+                  type="color"
+                  value={draft.rimColor}
+                  disabled={!canEdit || rimDisabled}
+                  onChange={(e) => {
+                    beginHistoryTransaction()
+                    const next = {
+                      ...draftRef.current,
+                      rimColor: e.target.value,
+                    }
+                    draftRef.current = next
+                    setDraft(next)
+                    pushDraftToStore(next)
+                    commitHistoryTransaction()
+                  }}
+                  className="size-7 cursor-pointer rounded border border-white/15 bg-transparent disabled:cursor-not-allowed"
+                />
+              </label>
+            </div>
+          </>
+        ) : null}
       </div>
     </section>
   )
@@ -515,6 +797,8 @@ function LayerParamsSection() {
 
 function EditorSettingsBody() {
   const { t } = useI18n()
+  const safeZoneMask = useEditorStore((s) => s.safeZoneMask)
+  const safeZoneWarnings = useEditorStore((s) => s.safeZoneWarnings)
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -528,7 +812,26 @@ function EditorSettingsBody() {
       </div>
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-3 py-3 pb-12">
-        <TextParamsSection />
+        {safeZoneMask !== "off" && safeZoneWarnings.length > 0 ? (
+          <div
+            className="space-y-1.5 rounded-lg border border-amber-500/35 bg-amber-500/10 px-2.5 py-2"
+            role="alert"
+            aria-live="polite"
+          >
+            {safeZoneWarnings.map((w) => (
+              <p
+                key={w.zoneId}
+                className="text-[11px] leading-snug text-amber-100/95"
+              >
+                {t(`editor.${w.warningKey}`)}
+              </p>
+            ))}
+          </div>
+        ) : null}
+        <LayerTreePanel />
+        <div className="border-t border-white/8 pt-3">
+          <TextParamsSection />
+        </div>
         <div className="border-t border-white/8 pt-3">
           <BadgeParamsSection />
         </div>
@@ -537,6 +840,9 @@ function EditorSettingsBody() {
         </div>
         <div className="border-t border-white/8 pt-3">
           <SoftboxParamsSection />
+        </div>
+        <div className="border-t border-white/8 pt-3">
+          <ColorGradeParamsSection />
         </div>
       </div>
     </div>

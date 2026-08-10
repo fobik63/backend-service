@@ -5,7 +5,7 @@ import type { SoftboxSettings } from "@/lib/store/editor-store"
 /** Full export / idle paint size stays native; scrubbing uses a cheaper bitmap. */
 export const SOFTBOX_PREVIEW_SCALE = 0.25
 /** Coalesce slider → canvas softbox paints (~1 frame @ 60fps). */
-export const SOFTBOX_UPDATE_MS = 24
+export const SOFTBOX_UPDATE_MS = 16
 
 function clamp(n: number, min: number, max: number) {
   return Math.min(max, Math.max(min, n))

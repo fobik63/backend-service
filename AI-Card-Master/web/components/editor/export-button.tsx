@@ -62,7 +62,9 @@ function ExportButton({
   const storePackSize = useEditorStore((s) => s.packSize)
   const storePages = useEditorStore((s) => s.pages)
   const storeSoftbox = useEditorStore((s) => s.softbox)
+  const storeExportScale = useEditorStore((s) => s.exportScale)
   const setStorePackSize = useEditorStore((s) => s.setPackSize)
+  const setExportScale = useEditorStore((s) => s.setExportScale)
 
   /** Editor variant reads/writes shared store; compact keeps local state. */
   const packSize = variant === "editor" ? storePackSize : localPackSize
@@ -81,6 +83,7 @@ function ExportButton({
     try {
       const canvasEl = findEditorExportCanvas()
       const pages = projectPages ?? (variant === "editor" ? storePages : undefined)
+      const exportScale = variant === "editor" ? storeExportScale : 2
 
       let fabricPages: Uint8Array[] | null = null
       if (variant === "editor" && pages?.length) {
@@ -91,6 +94,7 @@ function ExportButton({
             getActivePageIndex: () => useEditorStore.getState().activePageIndex,
             setActivePageIndex: (index) =>
               useEditorStore.getState().setActivePageIndex(index),
+            exportScale,
           })
         } catch {
           fabricPages = null
@@ -106,6 +110,8 @@ function ExportButton({
         pages,
         softbox: projectSoftbox ?? (variant === "editor" ? storeSoftbox : undefined),
         zipBasename: title,
+        zipFilename: "card_ai_export.zip",
+        exportScale,
         capturePageAtIndex: fabricPages
           ? async (pageIndex) => {
               const hit = fabricPages![pageIndex]
@@ -177,7 +183,7 @@ function ExportButton({
   return (
     <div
       className={cn(
-        "inline-flex h-12 overflow-hidden rounded-lg border border-white/12 bg-loft/50",
+        "inline-flex h-9 overflow-hidden rounded-lg border border-white/12 bg-loft/50",
         className
       )}
     >
@@ -235,6 +241,23 @@ function ExportButton({
                   {t("export.packOption", { count: String(size) })}
                 </DropdownMenuRadioItem>
               ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuGroup>
+          <DropdownMenuSeparator />
+          <DropdownMenuGroup>
+            <DropdownMenuLabel>{t("editor.exportScale")}</DropdownMenuLabel>
+            <DropdownMenuRadioGroup
+              value={String(storeExportScale)}
+              onValueChange={(value) =>
+                setExportScale(Number(value) as 1 | 2 | 3)
+              }
+            >
+              <DropdownMenuRadioItem value="2">
+                {t("editor.exportScale2x")}
+              </DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="3">
+                {t("editor.exportScale3x")}
+              </DropdownMenuRadioItem>
             </DropdownMenuRadioGroup>
           </DropdownMenuGroup>
           <DropdownMenuSeparator />

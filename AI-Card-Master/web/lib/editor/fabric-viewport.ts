@@ -1,4 +1,4 @@
-import { Point, type Canvas as FabricCanvas } from "fabric"
+import type { Canvas as FabricCanvas, Point as FabricPoint } from "fabric"
 
 import {
   CANVAS_HEIGHT,
@@ -108,7 +108,8 @@ export function applyFabricZoomView(
 
   canvas.setZoom(zoom)
   // v6 absolutePan: vpt[4] = -point.x → pass -pan to get translate = pan.
-  canvas.absolutePan(new Point(-panX, -panY))
+  // Construct a Point-like value without importing Fabric at module scope (SSR-safe).
+  canvas.absolutePan({ x: -panX, y: -panY } as FabricPoint)
   canvas.calcOffset()
   canvas.requestRenderAll()
 

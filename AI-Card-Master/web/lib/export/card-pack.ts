@@ -106,6 +106,13 @@ export type BuildCardPackOptions = {
   softbox?: SoftboxSettings
   zipBasename?: string
   /**
+   * Fixed archive filename (e.g. `card_ai_export.zip`).
+   * When set, overrides slugified basename.
+   */
+  zipFilename?: string
+  /** PNG export multiplier (2× / 3× for crisp vectors & fonts). */
+  exportScale?: 1 | 2 | 3
+  /**
    * Capture each pack page from the live editor (editable pages).
    * When provided, preferred over offscreen infographic renders.
    */
@@ -435,7 +442,14 @@ function renderEditorPageSnapshot(args: {
       node.style.textAlign = "center"
       if (layer.chip.variant === "glass") {
         node.style.backdropFilter = `blur(${layer.chip.blur ?? 12}px)`
-        node.style.border = "1px solid rgba(255,255,255,.18)"
+        node.style.border = `1px solid ${layer.chip.strokeColor ?? "rgba(255,255,255,.18)"}`
+      } else if (layer.chip.variant === "dark") {
+        node.style.background =
+          "linear-gradient(180deg, #3A3E48 0%, #1A1C22 100%)"
+        node.style.border = `1px solid ${layer.chip.strokeColor ?? "rgba(255,255,255,.08)"}`
+      } else if (layer.chip.variant === "bordered") {
+        node.style.background = "transparent"
+        node.style.border = `${layer.chip.strokeWidth ?? 3}px solid ${layer.chip.strokeColor ?? "#34D399"}`
       }
       const label = document.createElement("span")
       label.textContent = layer.chip.label
@@ -729,7 +743,10 @@ async function downloadCardPackZip(options: BuildCardPackOptions): Promise<void>
   if (!archive || archive.size <= 0) {
     throw new Error("ZIP archive is empty")
   }
-  downloadBlob(archive, `${basename}-pack-${packSize}.zip`)
+  const filename =
+    options.zipFilename?.trim() ||
+    `${basename}-pack-${packSize}.zip`
+  downloadBlob(archive, filename.endsWith(".zip") ? filename : `${filename}.zip`)
 }
 
 function findEditorExportCanvas(): HTMLElement | null {
@@ -754,14 +771,19 @@ async function downloadCurrentCanvasImage(options: {
   canvasEl?: HTMLElement | null
   filename: string
   format?: "png" | "webp"
+  /** Export multiplier (default 2×). */
+  exportScale?: 1 | 2 | 3
 }): Promise<void> {
   const format = options.format ?? "png"
+  const scale = options.exportScale ?? 2
+  const exportW = Math.round(CANVAS_WIDTH * scale)
+  const exportH = Math.round(CANVAS_HEIGHT * scale)
 
-  // Prefer Fabric native export (exact layer composite at 1080×1440).
+  // Prefer Fabric native export (exact layer composite at artboard × scale).
   const fabricBytes = await captureFabricPngBytes({
-    width: CANVAS_WIDTH,
-    height: CANVAS_HEIGHT,
-    label: "1080×1440",
+    width: exportW,
+    height: exportH,
+    label: `${exportW}×${exportH}`,
   })
   if (fabricBytes && fabricBytes.byteLength > 2048) {
     const pngBlob = new Blob([Uint8Array.from(fabricBytes)], {

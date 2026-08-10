@@ -17,22 +17,27 @@ describe("editor document adapters", () => {
       activePageIndex: state.activePageIndex,
       productPreviewUrl: state.productPreviewUrl,
       softbox: state.softbox,
+      colorGrade: state.colorGrade,
+      backgroundColorGrade: state.backgroundColorGrade,
     })
 
     const restored = editorDocumentToState(document)
 
     expect(restored.pages).toHaveLength(state.pages.length)
     expect(
-      restored.pages[0]?.find((layer) => layer.id === "layer_title")?.text
-    ).toBe(
-      state.pages[0]?.find((layer) => layer.id === "layer_title")?.text
-    )
+      restored.pages[0]?.filter((layer) => layer.type === "background")
+    ).toHaveLength(1)
     expect(
-      restored.pages[0]?.find((layer) => layer.id === "layer_badge_eco")?.chip
-    ).toEqual(
-      state.pages[0]?.find((layer) => layer.id === "layer_badge_eco")?.chip
-    )
+      restored.pages[0]?.filter((layer) => layer.type === "image")
+    ).toHaveLength(1)
+    expect(
+      restored.pages[0]?.some(
+        (layer) => layer.type === "text" || layer.type === "shape"
+      )
+    ).toBe(false)
     expect(restored.softbox).toEqual(state.softbox)
+    expect(restored.colorGrade).toEqual(state.colorGrade)
+    expect(restored.backgroundColorGrade).toEqual(state.backgroundColorGrade)
     expect(restored.productPreviewUrl).toBe(state.productPreviewUrl)
   })
 

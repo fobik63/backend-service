@@ -3,8 +3,19 @@
  * During palette scrub: paint fills only — never touch the icon / Zustand.
  */
 
-import { FabricImage, Group, type FabricObject, type Textbox } from "fabric"
+import {
+  FabricImage,
+  Gradient,
+  Group,
+  type FabricObject,
+  type Textbox,
+} from "fabric"
 
+import {
+  resolveChipGradient,
+  resolveChipStrokeColor,
+  resolveChipStrokeWidth,
+} from "@/lib/editor/badge-styles"
 import { getActiveFabricCanvas } from "@/lib/editor/fabric-export"
 import { chipIconDataUrl, chipTextColor } from "@/lib/editor/fabric-icons"
 import type { FeatureChipDraft } from "@/types/canvas"
@@ -67,12 +78,32 @@ function loadHtmlImage(url: string): Promise<HTMLImageElement> {
 
 export function resolveChipForeground(chip: FeatureChipDraft): string {
   const isGlass = chip.variant === "glass"
+  const isDark = chip.variant === "dark"
+  const isBordered = chip.variant === "bordered"
   return (
     chip.textColor ??
-    (isGlass || (chip.blur ?? 0) > 0
+    (isGlass || isDark || isBordered || (chip.blur ?? 0) > 0
       ? "#FFFFFF"
       : chipTextColor(chip.bgColor))
   )
+}
+
+function resolveChipFill(chip: FeatureChipDraft, bg: FabricObject) {
+  const gradientStops = resolveChipGradient(chip)
+  if (gradientStops) {
+    const w = Math.max(1, bg.width ?? 1)
+    const h = Math.max(1, bg.height ?? 1)
+    return new Gradient({
+      type: "linear",
+      gradientUnits: "pixels",
+      coords: { x1: 0, y1: 0, x2: 0, y2: h },
+      colorStops: [
+        { offset: 0, color: gradientStops[0] },
+        { offset: 1, color: gradientStops[1] },
+      ],
+    })
+  }
+  return chip.bgColor
 }
 
 function paintFillsNow(layerId: string, chip: FeatureChipDraft): void {
@@ -81,6 +112,10 @@ function paintFillsNow(layerId: string, chip: FeatureChipDraft): void {
   if (!canvas || !group) return
 
   const fg = resolveChipForeground(chip)
+  const hi = Math.max(
+    1,
+    (group as ChipEngineObject).chipSourceScale ?? CHIP_SOURCE_SCALE
+  )
   const children = group.getObjects()
   const bg = children.find((o) => chipPartOf(o, "bg"))
   const label = children.find((o) => chipPartOf(o, "label")) as
@@ -91,8 +126,18 @@ function paintFillsNow(layerId: string, chip: FeatureChipDraft): void {
     | undefined
 
   let dirty = false
-  if (bg && bg.fill !== chip.bgColor) {
-    bg.set("fill", chip.bgColor)
+  if (bg) {
+    const fill = resolveChipFill(chip, bg)
+    const stroke = resolveChipStrokeColor(chip)
+    const strokeWidth = resolveChipStrokeWidth(chip) * hi
+    const radius = (chip.borderRadius ?? 12) * hi
+    bg.set({
+      fill,
+      stroke,
+      strokeWidth,
+      rx: radius,
+      ry: radius,
+    })
     dirty = true
   }
   if (label && label.fill !== fg) {

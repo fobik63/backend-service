@@ -37,6 +37,11 @@ import {
   addCustomBadge,
   addQuickBadgeById,
 } from "@/lib/editor/canvas-actions"
+import {
+  applyBadgeStylePreset,
+  BADGE_STYLE_PRESETS,
+  type BadgeStylePresetId,
+} from "@/lib/editor/badge-styles"
 import { getActiveFabricCanvas } from "@/lib/editor/fabric-export"
 import {
   applyChipLiveColors,
@@ -516,6 +521,7 @@ function BadgeParamsSection() {
               setLabelDraft(next)
               patchChip({ label: next })
             }}
+            onKeyDown={(e) => e.stopPropagation()}
             className="h-8 border-white/10 bg-white/[0.04] text-xs"
           />
         </div>
@@ -535,8 +541,66 @@ function BadgeParamsSection() {
               setSubtitleDraft(next)
               patchChip({ subtitle: next || undefined })
             }}
+            onKeyDown={(e) => e.stopPropagation()}
             className="h-8 border-white/10 bg-white/[0.04] text-xs"
           />
+        </div>
+
+        <div className="space-y-1.5">
+          <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+            {t("editor.badgeStyles")}
+          </span>
+          <div className="grid grid-cols-2 gap-1.5">
+            {BADGE_STYLE_PRESETS.map((preset) => {
+              const selected = chip?.variant === preset.variant
+              return (
+                <button
+                  key={preset.id}
+                  type="button"
+                  disabled={disabled}
+                  title={preset.label}
+                  onClick={() => {
+                    if (!layer?.chip) return
+                    const next = applyBadgeStylePreset(
+                      chipDraftRef.current ?? layer.chip,
+                      preset.id as BadgeStylePresetId,
+                      {
+                        accentColor:
+                          preset.id === "solidAccent" ||
+                          preset.id === "bordered"
+                            ? layer.chip.bgColor.startsWith("#")
+                              ? layer.chip.bgColor
+                              : undefined
+                            : undefined,
+                      }
+                    )
+                    chipDraftRef.current = next
+                    setBgDraft(next.bgColor)
+                    setTextDraft(
+                      next.textColor ?? contrastTextColor(next.bgColor)
+                    )
+                    setBlurDraft(next.blur ?? 0)
+                    updateLayer(layer.id, { chip: next })
+                    applyChipLiveColors(layer.id, next, { immediate: true })
+                    flushChipLiveIcon(layer.id, next)
+                  }}
+                  className={cn(
+                    "rounded-lg border px-2 py-1.5 text-left text-[10px] leading-tight transition-colors disabled:pointer-events-none",
+                    selected
+                      ? "border-emerald/40 bg-emerald/15 text-foreground"
+                      : "border-white/10 bg-white/[0.03] text-muted-foreground hover:border-white/20 hover:text-foreground"
+                  )}
+                >
+                  <span className="block font-medium text-foreground/90">
+                    {preset.label}
+                  </span>
+                  <span className="mt-0.5 block text-[9px] opacity-70">
+                    {t(`editor.badgeStyleHint.${preset.id}`)}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
         </div>
 
         <ColorSwatchRow
@@ -547,7 +611,12 @@ function BadgeParamsSection() {
           onChange={(bgColor) =>
             scrubChipAppearance({
               bgColor,
-              variant: blurDraft > 0 ? "glass" : "solid",
+              variant:
+                blurDraft > 0
+                  ? "glass"
+                  : chip?.variant === "bordered" || chip?.variant === "dark"
+                    ? chip.variant
+                    : "solid",
             })
           }
           onCommit={endScrub}

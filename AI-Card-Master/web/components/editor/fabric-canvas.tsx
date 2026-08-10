@@ -1,10 +1,12 @@
 "use client"
 
+import * as fabricRuntime from "fabric"
 import {
   Canvas as FabricCanvas,
   FabricImage,
   FabricObject,
   BaseFabricObject,
+  Gradient,
   Group,
   InteractiveFabricObject,
   IText,
@@ -39,12 +41,29 @@ import {
   registerFabricExporter,
   type FabricExportSize,
 } from "@/lib/editor/fabric-export"
-import { resolveFabricFontFamily } from "@/lib/editor/fabric-fonts"
-import { chipIconDataUrl, chipTextColor } from "@/lib/editor/fabric-icons"
+import {
+  BADGE_AUTO_PADDING,
+  badgeTextWidthBarrier,
+  buildBadgeLayoutMetrics,
+  fitBadgeTextboxWidth,
+  layoutBadgeGroup,
+} from "@/lib/editor/badge-layout"
+import {
+  resolveChipGradient,
+  resolveChipStrokeColor,
+  resolveChipStrokeWidth,
+} from "@/lib/editor/badge-styles"
+import {
+  ensureEditorFontLoaded,
+  preloadEditorFonts,
+  resolveFabricFontFamily,
+} from "@/lib/editor/fabric-fonts"
+import { chipIconDataUrl } from "@/lib/editor/fabric-icons"
 import {
   applyChipLiveColors,
   isChipAppearanceScrubbing,
   rememberChipIconFg,
+  resolveChipForeground,
 } from "@/lib/editor/chip-live"
 import {
   applyFabricZoomView,
@@ -60,16 +79,33 @@ import {
   type SmartGuideLine,
 } from "@/lib/editor/smart-guides"
 import {
+  detectSafeZoneCollisions,
+  getSafeZones,
+  ozonSquareFrame,
+  warningsSignature,
+  type SafeZoneMask,
+} from "@/lib/editor/safe-zones"
+import {
   createSoftboxSourceCanvas,
   paintSoftboxInPlace,
   SOFTBOX_UPDATE_MS,
-  softboxLightBlendStyle,
   softboxOverlayStyle,
   clearSoftboxCaches,
 } from "@/lib/editor/softbox"
+import {
+  isLightOverlayObject,
+  syncFabricLightOverlay,
+} from "@/lib/editor/fabric-light-overlay"
+import { constrainObjectToArtboard, clampLayerPctPosition } from "@/lib/editor/artboard-constraints"
+import { applyImageColorGrade } from "@/lib/editor/product-color-grade"
+import {
+  isProductShadowCompanion,
+  PRODUCT_LIGHTING_UPDATE_MS,
+} from "@/lib/editor/product-lighting"
 import { scheduleWhenIdle } from "@/lib/editor/main-thread-yield"
 import {
   useEditorStore,
+  type ProductColorGrade,
   type SoftboxSettings,
 } from "@/lib/store/editor-store"
 import type {
@@ -88,6 +124,14 @@ type EngineObject = FabricObject & {
   layerRole?: LayerRole
   isSmartGuide?: boolean
   isSoftbox?: boolean
+  /** Client-side soft-light radial wash (non-interactive). */
+  isLightOverlay?: boolean
+  /** Contact-shadow ellipse under the product (non-interactive). */
+  isProductAoShadow?: boolean
+  /** Perspective cast-shadow silhouette under the product (non-interactive). */
+  isProductCastShadow?: boolean
+  /** Marketplace safe-zone mask rect (top overlay, non-interactive). */
+  isSafeZoneOverlay?: boolean
   /** Marks a child inside a chip Group (label is the editable part). */
   chipPart?: ChipPart
   /** Temporary top-level IText used while editing a chip label. */
@@ -115,75 +159,6 @@ const CHIP_SOURCE_SCALE = 3
 /** Visual margin before the canvas right edge (logical canvas px). */
 const CHIP_CANVAS_EDGE_MARGIN = 24
 
-/**
- * Max Textbox width in chip source coords: grow with typing until the plate
- * would hit the canvas right edge (or a sane floor for off-canvas groups).
- */
-function chipTextWidthBarrier(args: {
-  hi: number
-  padX: number
-  iconSize: number
-  gap: number
-  groupLeft: number
-  groupScaleX: number
-}): number {
-  const chrome = args.padX * 2 + args.iconSize + args.gap
-  const groupScale = Math.max(0.01, args.groupScaleX)
-  const maxPlateVisual = Math.max(
-    160,
-    CANVAS_WIDTH - args.groupLeft - CHIP_CANVAS_EDGE_MARGIN
-  )
-  const maxPlateSource = maxPlateVisual / groupScale
-  // Keep enough room for a few glyphs even if the badge sits near the right edge.
-  return Math.max(120 * args.hi, maxPlateSource - chrome)
-}
-
-/**
- * Fit Textbox to content width, wrap only after the barrier.
- * Uses word wrap by default; grapheme split only when a run exceeds the barrier
- * (otherwise Fabric wraps the last letter onto a second line — orphan glyph bug).
- */
-function fitChipTextboxWidth(text: Textbox, maxTextWidth: number): number {
-  const minW = Math.max(20, text.minWidth || 20)
-  const raw = text.text ?? ""
-  const hasExplicitNewline = /\r?\n/.test(raw)
-  // Safety pad: width === calcTextWidth() makes Fabric wrap the last glyph.
-  const pad = Math.max(4, Math.ceil((text.fontSize || 16) * 0.12))
-
-  // Measure natural width without wrapping.
-  text.set({ width: Math.max(maxTextWidth, 1e5), splitByGrapheme: false })
-  if (typeof text.initDimensions === "function") text.initDimensions()
-  const natural = Math.ceil(text.calcTextWidth() || minW)
-
-  // Character wrap only when content cannot fit the canvas barrier in one run.
-  const needsGraphemeSplit = natural > maxTextWidth
-  let nextW = Math.min(Math.max(natural + pad, minW), maxTextWidth)
-
-  text.set({
-    width: nextW,
-    splitByGrapheme: needsGraphemeSplit,
-  })
-  ;(text as Textbox & { breakWords?: boolean }).breakWords = true
-  if (typeof text.initDimensions === "function") text.initDimensions()
-
-  // Kill phantom orphan wraps on single-line labels (width still slightly short).
-  if (!hasExplicitNewline && !needsGraphemeSplit) {
-    let guard = 0
-    while (
-      (text.textLines?.length ?? 1) > 1 &&
-      nextW < maxTextWidth &&
-      guard < 12
-    ) {
-      nextW = Math.min(nextW + pad, maxTextWidth)
-      text.set({ width: nextW, splitByGrapheme: false })
-      if (typeof text.initDimensions === "function") text.initDimensions()
-      guard += 1
-    }
-  }
-
-  return nextW
-}
-
 function isChipTextObjectType(type: string | undefined): boolean {
   return type === "textbox" || type === "i-text"
 }
@@ -193,18 +168,55 @@ const GUIDE_STROKE_WIDTH = 1
 
 /**
  * Fabric v6: enableGLFiltering ≈ classic `EnableWebGL`.
- * Cap textureSize at 2048 to avoid OOM on weaker GPUs while accelerating filters.
+ * Use the GPU's MAX_TEXTURE_SIZE (capped at 8192). A hard 2048 cap downsampled
+ * product PNGs through color-grade filters → grainy / toy-like cutouts.
  */
+function resolveGlTextureSize(): number {
+  try {
+    const probe = document.createElement("canvas")
+    const gl =
+      probe.getContext("webgl") || probe.getContext("experimental-webgl")
+    if (gl && "getParameter" in gl) {
+      const max = (gl as WebGLRenderingContext).getParameter(
+        (gl as WebGLRenderingContext).MAX_TEXTURE_SIZE
+      )
+      if (typeof max === "number" && Number.isFinite(max) && max > 0) {
+        return Math.min(Math.floor(max), 8192)
+      }
+    }
+  } catch {
+    // Fall through.
+  }
+  return 4096
+}
+
 let fabricWebGlReady = false
 function ensureFabricWebGL(): void {
   if (fabricWebGlReady || typeof window === "undefined") return
   fabricWebGlReady = true
   try {
+    const fabric = fabricRuntime as unknown as {
+      filterBackend?: unknown
+      WebglFilterBackend?: new (options?: { tileSize?: number }) => unknown
+      WebGLFilterBackend?: new (options?: { tileSize?: number }) => unknown
+    }
+    const textureSize = resolveGlTextureSize()
+    const WebglFilterBackend =
+      fabric.WebglFilterBackend ?? fabric.WebGLFilterBackend
     fabricConfig.configure({
       enableGLFiltering: true,
-      textureSize: 2048,
+      textureSize,
     })
-    initFilterBackend()
+    if (WebglFilterBackend) {
+      fabric.filterBackend = new WebglFilterBackend({ tileSize: textureSize })
+      ;(
+        fabricConfig as unknown as {
+          configure(options: { filterBackend: unknown }): void
+        }
+      ).configure({ filterBackend: fabric.filterBackend })
+    } else {
+      initFilterBackend()
+    }
   } catch (err) {
     if (process.env.NODE_ENV !== "production") {
       console.warn("[fabric-canvas] WebGL filter backend unavailable", err)
@@ -234,6 +246,10 @@ function ensureCustomProps(): void {
     "layerRole",
     "isSmartGuide",
     "isSoftbox",
+    "isLightOverlay",
+    "isProductAoShadow",
+    "isProductCastShadow",
+    "isSafeZoneOverlay",
     "chipPart",
     "isChipInlineEditor",
     "chipSourceScale",
@@ -244,6 +260,115 @@ function ensureCustomProps(): void {
 
 function isSmartGuideObject(obj: FabricObject): boolean {
   return Boolean((obj as EngineObject).isSmartGuide)
+}
+
+function isSafeZoneOverlayObject(obj: FabricObject): boolean {
+  return Boolean((obj as EngineObject).isSafeZoneOverlay)
+}
+
+function clearSafeZoneOverlay(canvas: FabricCanvas): void {
+  const overlays = canvas.getObjects().filter(isSafeZoneOverlayObject)
+  if (overlays.length === 0) return
+  for (const o of overlays) canvas.remove(o)
+}
+
+/**
+ * Non-interactive top overlay: semi-transparent marketplace UI masks.
+ * Always re-added after scene rebuild (`canvas.clear`).
+ */
+function paintSafeZoneOverlay(
+  canvas: FabricCanvas,
+  mask: SafeZoneMask
+): void {
+  const prevRender = canvas.renderOnAddRemove
+  canvas.renderOnAddRemove = false
+  clearSafeZoneOverlay(canvas)
+
+  if (mask === "off") {
+    canvas.renderOnAddRemove = prevRender
+    canvas.requestRenderAll()
+    return
+  }
+
+  if (mask === "ozon") {
+    const frame = ozonSquareFrame()
+    const outline = new Rect({
+      left: frame.left,
+      top: frame.top,
+      width: frame.width,
+      height: frame.height,
+      fill: "rgba(0,0,0,0)",
+      stroke: "rgba(16, 185, 129, 0.55)",
+      strokeWidth: 2,
+      strokeDashArray: [10, 6],
+      selectable: false,
+      evented: false,
+      excludeFromExport: true,
+      hoverCursor: "default",
+      objectCaching: false,
+    })
+    ;(outline as EngineObject).isSafeZoneOverlay = true
+    canvas.add(outline)
+  }
+
+  for (const zone of getSafeZones(mask)) {
+    const rect = new Rect({
+      left: zone.left,
+      top: zone.top,
+      width: zone.width,
+      height: zone.height,
+      fill: zone.fill,
+      stroke: "rgba(255,255,255,0.18)",
+      strokeWidth: 1,
+      selectable: false,
+      evented: false,
+      excludeFromExport: true,
+      hoverCursor: "default",
+      objectCaching: false,
+    })
+    ;(rect as EngineObject).isSafeZoneOverlay = true
+    canvas.add(rect)
+  }
+
+  canvas.renderOnAddRemove = prevRender
+  canvas.requestRenderAll()
+}
+
+function refreshSafeZoneWarnings(canvas: FabricCanvas): void {
+  const state = useEditorStore.getState()
+  const mask = state.safeZoneMask
+  if (mask === "off") {
+    if (state.safeZoneWarnings.length > 0) state.setSafeZoneWarnings([])
+    return
+  }
+
+  const selectedId = state.selectedLayerId
+  if (!selectedId) {
+    if (state.safeZoneWarnings.length > 0) state.setSafeZoneWarnings([])
+    return
+  }
+
+  const layer = state.layers.find((l) => l.id === selectedId)
+  // Warning detector: selected text or badge (chip) only.
+  if (!layer || (layer.type !== "text" && !layer.chip)) {
+    if (state.safeZoneWarnings.length > 0) state.setSafeZoneWarnings([])
+    return
+  }
+
+  const obj = findByLayerId(canvas, selectedId)
+  if (!obj) {
+    if (state.safeZoneWarnings.length > 0) state.setSafeZoneWarnings([])
+    return
+  }
+
+  obj.setCoords()
+  const hits = detectSafeZoneCollisions(
+    mask,
+    boundsFromRect(obj.getBoundingRect())
+  )
+  if (warningsSignature(hits) !== warningsSignature(state.safeZoneWarnings)) {
+    state.setSafeZoneWarnings(hits)
+  }
 }
 
 function clearSmartGuides(canvas: FabricCanvas): void {
@@ -315,6 +440,9 @@ function collectSnapTargets(
     const engine = obj as EngineObject
     if (engine === moving) continue
     if (isSmartGuideObject(obj)) continue
+    if (isSafeZoneOverlayObject(obj)) continue
+    if (isProductShadowCompanion(obj)) continue
+    if (isLightOverlayObject(obj)) continue
     if (engine.layerRole === "background") continue
     if (!engine.layerId) continue
     const bound = obj.getBoundingRect()
@@ -329,44 +457,6 @@ function collectSnapTargets(
 }
 
 /**
- * Keep a dragged object's axis-aligned bounding box inside the artboard.
- * Only adjusts left/top — never scale/angle — so rotate & scale stay intact.
- * Uses artboard size (CANVAS_*), not the zoomed viewport (canvas.width/height).
- */
-function constrainObjectToArtboard(obj: FabricObject): void {
-  const engine = obj as EngineObject
-  if (isSmartGuideObject(obj)) return
-  if (engine.layerRole === "background") return
-  if (engine.isSoftbox || engine.isChipInlineEditor) return
-
-  // Refresh aCoords so getBoundingRect matches the current drag position.
-  obj.setCoords()
-  const br = obj.getBoundingRect()
-  let dx = 0
-  let dy = 0
-
-  if (br.left < 0) {
-    dx = -br.left
-  } else if (br.left + br.width > CANVAS_WIDTH) {
-    dx = CANVAS_WIDTH - (br.left + br.width)
-  }
-
-  if (br.top < 0) {
-    dy = -br.top
-  } else if (br.top + br.height > CANVAS_HEIGHT) {
-    dy = CANVAS_HEIGHT - (br.top + br.height)
-  }
-
-  if (dx === 0 && dy === 0) return
-
-  obj.set({
-    left: (obj.left ?? 0) + dx,
-    top: (obj.top ?? 0) + dy,
-  })
-  obj.setCoords()
-}
-
-/**
  * Soft-clamp scale so the AABB stays inside the artboard.
  * Remembers the last in-bounds scale (+ left/top — corner handles move both)
  * and reverts when the gesture would overflow. Uses artboard size (CANVAS_*),
@@ -375,8 +465,11 @@ function constrainObjectToArtboard(obj: FabricObject): void {
 function constrainScaleToArtboard(obj: FabricObject): void {
   const engine = obj as EngineObject
   if (isSmartGuideObject(obj)) return
+  if (isSafeZoneOverlayObject(obj)) return
   if (engine.layerRole === "background") return
   if (engine.isSoftbox || engine.isChipInlineEditor) return
+  if (engine.isLightOverlay) return
+  if (engine.isProductAoShadow || engine.isProductCastShadow) return
 
   obj.setCoords()
   const rect = obj.getBoundingRect()
@@ -465,12 +558,7 @@ function clampLayerPosition(
   elW: number,
   elH: number
 ): { x: number; y: number } {
-  const maxX = Math.max(0, 100 - Math.max(0, elW))
-  const maxY = Math.max(0, 100 - Math.max(0, elH))
-  return {
-    x: clamp(x, 0, maxX),
-    y: clamp(y, 0, maxY),
-  }
+  return clampLayerPctPosition(x, y, elW, elH)
 }
 
 function layerDefaults(layer: CanvasLayer) {
@@ -564,6 +652,39 @@ function markObject(
   engine.layerId = layerId
   engine.layerRole = layerRole
   return engine
+}
+
+/** Lock transforms + selection for locked layers (and always for background). */
+function interactionLockProps(locked: boolean): Partial<FabricObjectProps> {
+  return {
+    selectable: !locked,
+    evented: !locked,
+    lockMovementX: locked,
+    lockMovementY: locked,
+    lockRotation: locked,
+    lockScalingX: locked,
+    lockScalingY: locked,
+  }
+}
+
+function applyInteractionLocks(obj: FabricObject, locked: boolean): void {
+  obj.set(interactionLockProps(locked))
+}
+
+/** Background must stay at Fabric stack index 0 and remain non-interactive. */
+function pinBackgroundToBottom(canvas: FabricCanvas): void {
+  const bg = canvas
+    .getObjects()
+    .find((o) => (o as EngineObject).layerRole === "background")
+  if (!bg) return
+  const withMove = canvas as FabricCanvas & {
+    moveObjectTo?: (object: FabricObject, index: number) => FabricCanvas
+  }
+  if (typeof withMove.moveObjectTo === "function") {
+    withMove.moveObjectTo(bg, 0)
+  }
+  applyInteractionLocks(bg, true)
+  bg.set({ hoverCursor: "default", subTargetCheck: false })
 }
 
 function findByLayerId(canvas: FabricCanvas, layerId: string) {
@@ -747,12 +868,17 @@ async function awaitDocumentFontsReady(): Promise<void> {
   if (typeof document === "undefined" || !document.fonts?.ready) return
   try {
     await document.fonts.ready
+    await preloadEditorFonts()
     const family = resolveFabricFontFamily("Inter")
     const hi = CHIP_SOURCE_SCALE
     await Promise.all([
+      ensureEditorFontLoaded("Inter", { sizePx: 16 * hi, weight: 600 }),
+      ensureEditorFontLoaded("Inter", { sizePx: 18 * hi, weight: 600 }),
+      ensureEditorFontLoaded("Inter", {
+        sizePx: Math.max(11 * hi, 16 * hi * 0.72),
+        weight: 400,
+      }),
       document.fonts.load(`600 ${16 * hi}px ${family}`),
-      document.fonts.load(`600 ${18 * hi}px ${family}`),
-      document.fonts.load(`400 ${Math.max(11 * hi, 16 * hi * 0.72)}px ${family}`),
     ])
   } catch {
     // Font readiness can reject in rare environments; paint with fallbacks.
@@ -835,6 +961,10 @@ async function commitBadgeGroupsToCanvas(
  * Structural fingerprint — excludes transforms AND softbox (softbox updates in-place).
  * Chip label/subtitle/colors/blur/opacity are patched onto existing objects; including
  * them here would rebuild the whole scene on every color-picker frame (~5fps stutter).
+ *
+ * Text content / textStyle also sync in-place (layers effect + onTextChanged). Including
+ * `text` here rebuilt the canvas on every Backspace, exited IText.isEditing, and the
+ * next Backspace deleted the whole text object via the global hotkey.
  */
 function structureKey(args: {
   layers: CanvasLayer[]
@@ -854,7 +984,8 @@ function structureKey(args: {
         visible: l.visible,
         locked: l.locked,
         zIndex: l.zIndex,
-        text: l.text,
+        // Presence of a text layer (not its content) — content patches in-place.
+        hasText: l.type === "text",
         textStyle: l.textStyle,
         // Structural chip fields only — colors/blur/content sync in-place.
         chip: chip
@@ -881,6 +1012,17 @@ function findSoftboxImage(canvas: FabricCanvas): FabricImage | null {
   const bg = findBackgroundGroup(canvas)
   if (!bg) return null
   const hit = bg.getObjects().find((o) => (o as EngineObject).isSoftbox)
+  return hit instanceof FabricImage ? hit : null
+}
+
+/** AI / imported full-bleed background image inside the background group (if any). */
+function findBackgroundImage(canvas: FabricCanvas): FabricImage | null {
+  const bg = findBackgroundGroup(canvas)
+  if (!bg) return null
+  const hit = bg.getObjects().find((o) => {
+    const object = o as EngineObject
+    return o instanceof FabricImage && !object.isSoftbox
+  })
   return hit instanceof FabricImage ? hit : null
 }
 
@@ -953,16 +1095,87 @@ function applySoftboxToFabric(
 }
 
 /**
- * Apply current softbox/lighting from store to the Fabric scene.
- * Must run on mount + after scene rebuild — not only when a UI slider fires onChange.
+ * Apply softbox wash bitmap (export) + Fabric light overlay (live) + product grade.
+ * Softbox bitmap stays opacity 0 live (CSS wash under canvas owns studio floor).
+ * Live soft-light wash is the Fabric light-overlay Rect (rAF-synced).
  */
 function applyLightingEffects(
   canvas: FabricCanvas,
-  softbox: SoftboxSettings = useEditorStore.getState().softbox
+  softbox: SoftboxSettings = useEditorStore.getState().softbox,
+  colorGrade: ProductColorGrade = useEditorStore.getState().colorGrade,
+  backgroundColorGrade: ProductColorGrade = useEditorStore.getState()
+    .backgroundColorGrade
 ): void {
   // Transparent artboard so CSS SoftboxLightOverlay wash shows through.
   canvas.backgroundColor = "rgba(0,0,0,0)"
   applySoftboxToFabric(canvas, softbox)
+  syncFabricLightOverlay(canvas, softbox)
+  applyProductLighting(canvas, colorGrade, backgroundColorGrade)
+}
+
+function findProductObject(canvas: FabricCanvas): EngineObject | null {
+  return (
+    (canvas
+      .getObjects()
+      .find((o) => (o as EngineObject).layerRole === "product") as
+      | EngineObject
+      | undefined) ?? null
+  )
+}
+
+function disposeShadowCompanion(obj: FabricObject): void {
+  try {
+    void obj.dispose()
+  } catch {
+    // Already detached.
+  }
+}
+
+/** Remove leftover cast / contact AO companions from older sessions. */
+function stripProductShadowCompanions(canvas: FabricCanvas): void {
+  const companions = canvas.getObjects().filter(isProductShadowCompanion)
+  for (const obj of companions) {
+    canvas.remove(obj)
+    disposeShadowCompanion(obj)
+  }
+}
+
+/**
+ * Color-grade filters only — no fabric.Shadow and no companion shadow layers.
+ */
+function applyProductLighting(
+  canvas: FabricCanvas,
+  colorGrade: ProductColorGrade,
+  backgroundColorGrade: ProductColorGrade = useEditorStore.getState()
+    .backgroundColorGrade
+): void {
+  try {
+    if (!isFabricCanvasAlive(canvas)) return
+
+    stripProductShadowCompanions(canvas)
+
+    const product = findProductObject(canvas)
+    if (product) {
+      // Keep product PNG cutout clean (no drop shadow / stroke frame).
+      product.set({ shadow: null, strokeWidth: 0, stroke: undefined, dirty: true })
+
+      if (product.type === "image") {
+        applyImageColorGrade(product as FabricImage, colorGrade)
+      }
+    }
+
+    const background = findBackgroundImage(canvas)
+    if (background) {
+      applyImageColorGrade(background, backgroundColorGrade)
+      findBackgroundGroup(canvas)?.set({ dirty: true, objectCaching: false })
+    }
+
+    canvas.requestRenderAll()
+  } catch (err) {
+    if (process.env.NODE_ENV !== "production") {
+      console.error("[fabric-canvas] product lighting failed", err)
+    }
+  }
 }
 
 /**
@@ -1000,6 +1213,7 @@ async function withFabricSoftboxVisibleForExport<T>(
     canvas.requestRenderAll()
   }
   try {
+    canvas.requestRenderAll()
     return await run()
   } finally {
     if (isFabricCanvasAlive(canvas)) {
@@ -1012,11 +1226,11 @@ async function withFabricSoftboxVisibleForExport<T>(
 }
 
 /**
- * Single live lighting path — CSS wash (under canvas) + soft-light blend (over).
- * Always driven by `softbox` state (drag and idle identical). Stable DOM — never
- * mount/unmount on slider ticks; styles update imperatively via store.subscribe.
- * `paintKey` forces an immediate re-paint after canvas mount / scene rebuild
- * (does not wait for a softbox slider onChange).
+ * Studio floor wash under the Fabric canvas (CSS).
+ * Soft-light key wash is owned by the Fabric light-overlay Rect (not CSS blend),
+ * so we never double-apply soft-light on slider ticks.
+ * Always driven by `softbox` state. Stable DOM — never mount/unmount on slider ticks.
+ * `paintKey` forces an immediate re-paint after canvas mount / scene rebuild.
  */
 function SoftboxLightOverlay({
   frame,
@@ -1026,82 +1240,68 @@ function SoftboxLightOverlay({
   paintKey?: number
 }) {
   const washRef = useRef<HTMLDivElement>(null)
-  const blendRef = useRef<HTMLDivElement>(null)
   const frameRef = useRef(frame)
   const paintOverlayRef = useRef<() => void>(() => {})
 
   useLayoutEffect(() => {
     const paintOverlay = () => {
       const wash = washRef.current
-      const blend = blendRef.current
-      if (!wash || !blend) return
+      if (!wash) return
 
       const state = useEditorStore.getState()
       const f = frameRef.current
       const softbox = state.softbox
 
-      const applyBox = (el: HTMLDivElement) => {
-        if (!f) return
-        el.style.left = `${f.left}px`
-        el.style.top = `${f.top}px`
-        el.style.width = `${f.width}px`
-        el.style.height = `${f.height}px`
-      }
-
-      applyBox(wash)
-      applyBox(blend)
-
-      if (f == null) {
+      if (!f) {
         wash.hidden = true
-        blend.hidden = true
         wash.style.visibility = "hidden"
-        blend.style.visibility = "hidden"
         return
       }
 
+      wash.style.left = `${f.left}px`
+      wash.style.top = `${f.top}px`
+      wash.style.width = `${f.width}px`
+      wash.style.height = `${f.height}px`
+
+      // Studio wash under the transparent Fabric softbox; skip when AI bg covers it.
+      // Soft-light blend is Fabric-only (syncFabricLightOverlay).
       let washStyle: CSSProperties | null = null
-      let blendStyle: CSSProperties | null = null
       try {
-        // Studio wash under the transparent Fabric softbox; skip when AI bg covers it.
         if (!state.backgroundPreviewUrl) {
           washStyle = softboxOverlayStyle(softbox)
         }
-        blendStyle = softboxLightBlendStyle(softbox)
       } catch {
         wash.hidden = true
-        blend.hidden = true
+        wash.style.visibility = "hidden"
         return
       }
 
-      const assignStyle = (el: HTMLDivElement, style: CSSProperties | null) => {
-        if (!style) {
-          el.hidden = true
-          el.style.visibility = "hidden"
-          return
-        }
-        el.hidden = false
-        el.style.visibility = "visible"
-        el.style.transition = "none"
-        el.style.transitionProperty = "none"
-        el.style.animation = "none"
-        el.style.pointerEvents = "none"
-        if (style.backgroundColor != null) {
-          el.style.backgroundColor = String(style.backgroundColor)
-        } else {
-          el.style.backgroundColor = ""
-        }
-        el.style.backgroundImage =
-          style.backgroundImage != null ? String(style.backgroundImage) : ""
-        el.style.opacity = style.opacity != null ? String(style.opacity) : ""
-        el.style.mixBlendMode =
-          style.mixBlendMode != null ? String(style.mixBlendMode) : "normal"
-        el.style.boxShadow =
-          style.boxShadow != null ? String(style.boxShadow) : "none"
-        el.style.filter = style.filter != null ? String(style.filter) : "none"
+      if (!washStyle) {
+        wash.hidden = true
+        wash.style.visibility = "hidden"
+        return
       }
 
-      assignStyle(wash, washStyle)
-      assignStyle(blend, blendStyle)
+      wash.hidden = false
+      wash.style.visibility = "visible"
+      wash.style.transition = "none"
+      wash.style.transitionProperty = "none"
+      wash.style.animation = "none"
+      wash.style.pointerEvents = "none"
+      if (washStyle.backgroundColor != null) {
+        wash.style.backgroundColor = String(washStyle.backgroundColor)
+      } else {
+        wash.style.backgroundColor = ""
+      }
+      wash.style.backgroundImage =
+        washStyle.backgroundImage != null
+          ? String(washStyle.backgroundImage)
+          : ""
+      wash.style.opacity =
+        washStyle.opacity != null ? String(washStyle.opacity) : ""
+      wash.style.mixBlendMode = "normal"
+      wash.style.boxShadow = "none"
+      wash.style.filter = "none"
     }
 
     paintOverlayRef.current = paintOverlay
@@ -1129,30 +1329,15 @@ function SoftboxLightOverlay({
   }, [frame, paintKey])
 
   return (
-    <>
-      <div
-        ref={washRef}
-        aria-hidden
-        hidden
-        data-export-chrome="true"
-        data-softbox-overlay="wash"
-        className="softbox-light-overlay pointer-events-none absolute z-0"
-        style={{ transition: "none", transitionProperty: "none" }}
-      />
-      <div
-        ref={blendRef}
-        aria-hidden
-        hidden
-        data-export-chrome="true"
-        data-softbox-overlay="blend"
-        className="softbox-light-overlay pointer-events-none absolute z-[2]"
-        style={{
-          transition: "none",
-          transitionProperty: "none",
-          mixBlendMode: "soft-light",
-        }}
-      />
-    </>
+    <div
+      ref={washRef}
+      aria-hidden
+      hidden
+      data-export-chrome="true"
+      data-softbox-overlay="wash"
+      className="softbox-light-overlay pointer-events-none absolute z-0"
+      style={{ transition: "none", transitionProperty: "none" }}
+    />
   )
 }
 
@@ -1211,8 +1396,7 @@ async function buildBackgroundLayer(args: {
     top: 0,
     originX: "left",
     originY: "top",
-    selectable: false,
-    evented: false,
+    ...interactionLockProps(true),
     hoverCursor: "default",
     subTargetCheck: false,
     objectCaching: true,
@@ -1239,8 +1423,7 @@ async function buildProductObject(
     top: centerY,
     angle: defs.rotation,
     opacity: layer.opacity,
-    selectable: !layer.locked,
-    evented: !layer.locked,
+    ...interactionLockProps(layer.locked),
     hasControls: true,
     lockScalingFlip: true,
     objectCaching: true,
@@ -1278,6 +1461,10 @@ async function buildProductObject(
         height: nh,
         scaleX: Math.max(0.001, (boxW / nw) * defs.scale),
         scaleY: Math.max(0.001, (boxH / nh) * defs.scale),
+        // Clean PNG cutout — no Fabric shadow / stroke frame under the product.
+        shadow: null,
+        strokeWidth: 0,
+        stroke: undefined,
       })
     } else {
       img.set({
@@ -1286,6 +1473,9 @@ async function buildProductObject(
         top: CANVAS_HEIGHT / 2,
         width: nw,
         height: nh,
+        shadow: null,
+        strokeWidth: 0,
+        stroke: undefined,
       })
       img.scale(Math.max(0.001, photoScale * defs.scale))
     }
@@ -1332,29 +1522,30 @@ function applyTextStyle(text: IText, style: TextLayerStyle | undefined) {
   })
 }
 
-function buildTextObject(layer: CanvasLayer): IText {
-  const defs = layerDefaults(layer)
-  const text = new IText(layer.text ?? "", {
-    left: pctToPx(defs.x, CANVAS_WIDTH),
-    top: pctToPx(defs.y, CANVAS_HEIGHT),
-    originX: "left",
-    originY: "top",
-    padding: 0,
-    width: pctToPx(defs.width ?? 84, CANVAS_WIDTH),
-    scaleX: defs.scale,
-    scaleY: defs.scale,
-    angle: defs.rotation,
-    opacity: layer.opacity,
-    selectable: !layer.locked,
-    evented: !layer.locked,
-    editable: !layer.locked,
-    hasControls: true,
-    lockScalingFlip: true,
-    // Live text stays uncached so scale/edit stays sharp (see ensureFabricQualityDefaults).
-    objectCaching: false,
+async function applyTextStyleWhenReady(
+  text: IText,
+  style: TextLayerStyle | undefined
+): Promise<void> {
+  const ts = style ?? DEFAULT_TEXT_STYLE
+  await ensureEditorFontLoaded(ts.fontFamily, {
+    sizePx: ts.fontSize,
+    weight: ts.fontWeight,
   })
-  applyTextStyle(text, layer.textStyle)
-  return markObject(text, layer.id, "infographic") as IText
+  applyTextStyle(text, ts)
+}
+
+function resolveChipPlateFill(chip: FeatureChipDraft, height: number) {
+  const stops = resolveChipGradient(chip)
+  if (!stops) return chip.bgColor
+  return new Gradient({
+    type: "linear",
+    gradientUnits: "pixels",
+    coords: { x1: 0, y1: 0, x2: 0, y2: Math.max(1, height) },
+    colorStops: [
+      { offset: 0, color: stops[0] },
+      { offset: 1, color: stops[1] },
+    ],
+  })
 }
 
 async function buildChipObject(layer: CanvasLayer): Promise<Group> {
@@ -1363,21 +1554,19 @@ async function buildChipObject(layer: CanvasLayer): Promise<Group> {
 
   const chip = layer.chip!
   const defs = layerDefaults(layer)
-  const isGlass = chip.variant === "glass"
-  const fg =
-    chip.textColor ??
-    (isGlass || (chip.blur ?? 0) > 0
-      ? "#FFFFFF"
-      : chipTextColor(chip.bgColor))
+  const fg = resolveChipForeground(chip)
 
   // Geometry at CHIP_SOURCE_SCALE×; group scaleX/Y brings it back to logical size.
   const hi = CHIP_SOURCE_SCALE
-  const padX = (isGlass ? 18 : 14) * hi
-  const padY = (isGlass ? 14 : 10) * hi
-  const iconSize = (isGlass ? 22 : 18) * hi
-  const labelSize = (isGlass ? 18 : 16) * hi
-  const gap = 10 * hi
-  const radius = (chip.borderRadius ?? (isGlass ? 14 : 10)) * hi
+  const metricsBase = buildBadgeLayoutMetrics({
+    hi,
+    chip,
+    maxTextWidth: 400 * hi,
+  })
+  const { padLeft, padRight, padTop, padBottom, iconSize, textStackGap } =
+    metricsBase
+  const labelSize = (chip.variant === "glass" ? 18 : 16) * hi
+  const radius = (chip.borderRadius ?? (chip.variant === "glass" ? 14 : 10)) * hi
   // SVG rasterized well above on-canvas icon box (extra 2× before group downscale).
   const iconSrcPx = Math.max(192, Math.round(iconSize * 2))
 
@@ -1385,9 +1574,9 @@ async function buildChipObject(layer: CanvasLayer): Promise<Group> {
   // against an empty / half-decoded SVG bitmap on first hydrate.
   const icon = await loadImage(chipIconDataUrl(chip.iconId, fg, iconSrcPx))
   icon.set({
-    originX: "left",
+    originX: "center",
     originY: "center",
-    left: padX,
+    left: 0,
     top: 0,
     selectable: false,
     evented: false,
@@ -1403,19 +1592,19 @@ async function buildChipObject(layer: CanvasLayer): Promise<Group> {
   const textLocked = Boolean(layer.locked)
   const placeScale = defs.scale / hi
   const groupLeft = pctToPx(defs.x, CANVAS_WIDTH)
-  const maxTextWidth = chipTextWidthBarrier({
+  const maxTextWidth = badgeTextWidthBarrier({
     hi,
-    padX,
-    iconSize,
-    gap,
+    padLeft,
+    padRight,
     groupLeft,
     groupScaleX: placeScale,
+    canvasWidth: CANVAS_WIDTH,
+    edgeMargin: CHIP_CANVAS_EDGE_MARGIN,
   })
   // Text uses left/top origin — center origin shifts the edit selection frame.
-  // Vertical centering is done via top offsets, not originY: "center".
   // Nested Textbox is interactive (subTargetCheck) so dblclick can enterEditing.
   const label = new Textbox(chip.label, {
-    left: padX + iconSize + gap,
+    left: padLeft,
     top: 0,
     originX: "left",
     originY: "top",
@@ -1437,13 +1626,12 @@ async function buildChipObject(layer: CanvasLayer): Promise<Group> {
   ;(label as EngineObject).chipPart = "label"
   ;(label as EngineObject).layerId = layer.id
   ;(label as EngineObject).layerRole = "infographic"
-  fitChipTextboxWidth(label, maxTextWidth)
+  fitBadgeTextboxWidth(label, maxTextWidth)
 
   // Subtitle grows downward only — never upward into the title.
-  const textStackGap = 5 * hi
   const subtitle = chip.subtitle
     ? new Textbox(chip.subtitle, {
-        left: padX + iconSize + gap,
+        left: padLeft,
         top: 0,
         originX: "left",
         originY: "top",
@@ -1468,48 +1656,62 @@ async function buildChipObject(layer: CanvasLayer): Promise<Group> {
     ;(subtitle as EngineObject).chipPart = "subtitle"
     ;(subtitle as EngineObject).layerId = layer.id
     ;(subtitle as EngineObject).layerRole = "infographic"
-    fitChipTextboxWidth(subtitle, maxTextWidth)
+    fitBadgeTextboxWidth(subtitle, maxTextWidth)
   }
 
   await Promise.resolve()
 
   // Stack from the top of the plate so Enter expands downward only.
-  // Fit width first (content → canvas barrier), then measure height for the plate.
-  const labelW = fitChipTextboxWidth(label, maxTextWidth)
-  const subtitleW = subtitle ? fitChipTextboxWidth(subtitle, maxTextWidth) : 0
+  const labelW = fitBadgeTextboxWidth(label, maxTextWidth)
+  const subtitleW = subtitle ? fitBadgeTextboxWidth(subtitle, maxTextWidth) : 0
   const labelH = label.height ?? labelSize
   const subtitleH = subtitle
     ? (subtitle.height ?? Math.max(11 * hi, labelSize * 0.72))
     : 0
   const contentH =
     chip.subtitle && subtitle ? labelH + textStackGap + subtitleH : labelH
-  const boxH = contentH + padY * 2
-  const contentTop = -boxH / 2 + padY
+  const boxH = contentH + padTop + padBottom
+  const contentTop = -boxH / 2 + padTop
+  const contentW = Math.min(maxTextWidth, Math.max(labelW, subtitleW, 80 * hi))
+  const boxW = padLeft + contentW + padRight
+  const left0 = -boxW / 2
+  const textLeft = left0 + padLeft
 
-  label.set({ originY: "top", top: contentTop, width: labelW })
+  label.set({
+    originY: "top",
+    left: textLeft,
+    top: contentTop,
+    width: labelW,
+  })
   if (chip.subtitle && subtitle) {
     const titleTop = label.top ?? contentTop
     subtitle.set({
       originY: "top",
+      left: textLeft,
       top: titleTop + labelH + textStackGap,
       width: subtitleW,
     })
   }
 
-  // Plate tracks text width; wraps (and grows down) only at the canvas barrier.
-  const contentW = Math.min(maxTextWidth, Math.max(labelW, subtitleW, 80 * hi))
-  const boxW = padX + iconSize + gap + contentW + padX
+  const stackBottom =
+    chip.subtitle && subtitle
+      ? (subtitle.top ?? contentTop) + subtitleH
+      : contentTop + labelH
+  icon.set({
+    left: left0 + padLeft / 2,
+    top: (contentTop + stackBottom) / 2,
+  })
 
   const bg = new Rect({
-    left: 0,
+    left: left0,
     top: -boxH / 2,
     width: boxW,
     height: boxH,
     rx: radius,
     ry: radius,
-    fill: chip.bgColor,
-    stroke: isGlass ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.1)",
-    strokeWidth: hi,
+    fill: resolveChipPlateFill(chip, boxH),
+    stroke: resolveChipStrokeColor(chip),
+    strokeWidth: resolveChipStrokeWidth(chip) * hi,
     selectable: false,
     evented: false,
     objectCaching: false,
@@ -1528,8 +1730,7 @@ async function buildChipObject(layer: CanvasLayer): Promise<Group> {
     scaleY: placeScale,
     angle: defs.rotation,
     opacity: layer.opacity,
-    selectable: !layer.locked,
-    evented: !layer.locked,
+    ...interactionLockProps(layer.locked),
     hasControls: true,
     lockScalingFlip: true,
     // Allow targeting nested Textbox for on-canvas label editing.
@@ -1576,36 +1777,15 @@ function chipDraftOf(group: Group): FeatureChipDraft | undefined {
  * Recalculate badge plate size + relative child coords after text length changes.
  * Preserves absolute canvas left/top across addWithUpdate / triggerLayout
  * (Fabric otherwise resets the group to 0,0).
+ * While a nested Textbox is being edited, skip addWithUpdate/triggerLayout —
+ * those regroup paths exit editing and make Backspace delete the whole plate.
  */
 function updateBadgeLayout(group: Group): void {
-  // Snapshot BEFORE child mutations — Fabric auto-layout on nested text
-  // `changed` / addWithUpdate can zero the group's canvas left/top.
-  const absoluteLeft = group.left ?? 0
-  const absoluteTop = group.top ?? 0
-
   const hi = Math.max(
     1,
     (group as EngineObject).chipSourceScale ?? CHIP_SOURCE_SCALE
   )
   const chip = chipDraftOf(group)
-  const isGlass = chip?.variant === "glass"
-  const padX = (isGlass ? 18 : 14) * hi
-  const padY = (isGlass ? 14 : 10) * hi
-  const iconSize = (isGlass ? 22 : 18) * hi
-  const labelSize = (isGlass ? 18 : 16) * hi
-  const gap = 10 * hi
-  /** Vertical gap between title and subtitle (≈5px logical). */
-  const textStackGap = 5 * hi
-  const padding = padX * 2 + gap
-  const maxTextWidth = chipTextWidthBarrier({
-    hi,
-    padX,
-    iconSize,
-    gap,
-    groupLeft: absoluteLeft,
-    groupScaleX: group.scaleX ?? 1,
-  })
-
   const children = group.getObjects()
   const bg = children.find((o) => chipPartOf(o, "bg")) as Rect | undefined
   const icon = children.find((o) => chipPartOf(o, "icon"))
@@ -1616,89 +1796,55 @@ function updateBadgeLayout(group: Group): void {
     | Textbox
     | undefined
 
-  // Grow with content; wrap only after hitting the canvas barrier.
-  const textWidth = label ? fitChipTextboxWidth(label, maxTextWidth) : 80 * hi
-  const subtitleWidth = subtitle
-    ? fitChipTextboxWidth(subtitle, maxTextWidth)
-    : 0
+  const editingChild = children.some(
+    (child) =>
+      isChipTextObjectType(child.type) && (child as Textbox).isEditing
+  )
 
-  const iconWidth =
-    icon && typeof icon.getScaledWidth === "function"
-      ? icon.getScaledWidth()
-      : iconSize
-  const newWidth = Math.max(textWidth, subtitleWidth) + iconWidth + padding
-  const hasSubtitle = Boolean(subtitle)
-
-  const labelH = label?.height ?? labelSize
-  const subtitleH = subtitle
-    ? (subtitle.height ?? Math.max(11 * hi, labelSize * 0.72))
-    : 0
-  // Plate grows with real text height (multi-line wrap / Enter expands downward).
-  const contentH = hasSubtitle ? labelH + textStackGap + subtitleH : labelH
-  const boxH = contentH + padY * 2
-  const contentTop = -boxH / 2 + padY
-
-  // Local coords centered on (0,0) — matches Fabric group space after layout.
-  const left0 = -newWidth / 2
-  const textLeft = left0 + padX + iconWidth + gap
-
-  if (bg) {
-    bg.set({
-      originX: "left",
-      originY: "top",
-      left: left0,
-      top: -boxH / 2,
-      width: newWidth,
-      height: boxH,
-    })
-  }
-
-  if (icon) {
-    icon.set({
-      originX: "left",
-      originY: "center",
-      left: left0 + padX,
-      top: 0,
-    })
-  }
-
-  if (label) {
-    label.set({
-      originX: "left",
-      originY: "top",
-      left: textLeft,
-      top: contentTop,
-      width: textWidth,
-    })
-    if (hasSubtitle && subtitle) {
-      // Hard top-anchor: subtitle always sits under the title, never overlaps it.
-      const titleTop = label.top ?? contentTop
-      subtitle.set({
-        originX: "left",
-        originY: "top",
-        left: textLeft,
-        top: titleTop + labelH + textStackGap,
-        width: subtitleWidth,
-      })
-    }
-  }
-
-  // addWithUpdate / triggerLayout can reset the group's canvas left/top to 0.
-  // Restore the absolute position captured at the start of this update.
-  const withLegacy = group as Group & { addWithUpdate?: () => void }
-  if (typeof withLegacy.addWithUpdate === "function") {
-    withLegacy.addWithUpdate()
-  } else {
-    group.triggerLayout()
-  }
-
-  group.set({
-    left: absoluteLeft,
-    top: absoluteTop,
+  const metrics = buildBadgeLayoutMetrics({
+    hi,
+    chip,
+    maxTextWidth: badgeTextWidthBarrier({
+      hi,
+      padLeft: BADGE_AUTO_PADDING.left * hi,
+      padRight: BADGE_AUTO_PADDING.right * hi,
+      groupLeft: group.left ?? 0,
+      groupScaleX: group.scaleX ?? 1,
+      canvasWidth: CANVAS_WIDTH,
+      edgeMargin: CHIP_CANVAS_EDGE_MARGIN,
+    }),
   })
-  group.setCoords()
-  group.set("dirty", true)
-  group.canvas?.requestRenderAll()
+
+  layoutBadgeGroup(
+    group,
+    { bg, icon, label, subtitle },
+    metrics,
+    { skipGroupUpdate: editingChild }
+  )
+}
+
+function buildTextObject(layer: CanvasLayer): IText {
+  const defs = layerDefaults(layer)
+  const text = new IText(layer.text ?? "", {
+    left: pctToPx(defs.x, CANVAS_WIDTH),
+    top: pctToPx(defs.y, CANVAS_HEIGHT),
+    originX: "left",
+    originY: "top",
+    padding: 0,
+    width: pctToPx(defs.width ?? 84, CANVAS_WIDTH),
+    scaleX: defs.scale,
+    scaleY: defs.scale,
+    angle: defs.rotation,
+    opacity: layer.opacity,
+    ...interactionLockProps(layer.locked),
+    editable: !layer.locked,
+    hasControls: true,
+    lockScalingFlip: true,
+    // Live text stays uncached so scale/edit stays sharp (see ensureFabricQualityDefaults).
+    objectCaching: false,
+  })
+  applyTextStyle(text, layer.textStyle)
+  return markObject(text, layer.id, "infographic") as IText
 }
 
 /**
@@ -1752,7 +1898,7 @@ function clearChipInlineEditors(canvas: FabricCanvas) {
  * Sync Fabric DOM offset + object aCoords when entering inline edit.
  * Stale calcOffset (zoom/fit/layout) makes the blue frame + textarea jump.
  */
-function syncTextEditingCoords(canvas: FabricCanvas, text: IText) {
+function syncTextEditingCoords(canvas: FabricCanvas, text: IText | Textbox) {
   canvas.calcOffset()
   text.setCoords()
 }
@@ -1876,6 +2022,7 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
   const busyProgress = useEditorStore((s) => s.busyProgress)
   const setBusyKind = useEditorStore((s) => s.setBusyKind)
   const zoomMode = useEditorStore((s) => s.zoomMode)
+  const safeZoneMask = useEditorStore((s) => s.safeZoneMask)
 
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -2003,6 +2150,8 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
         height: initH,
         preserveObjectStacking: true,
         selection: true,
+        // Shift+click → ActiveSelection (Fabric v6 selectionKey uses *Key names).
+        selectionKey: "shiftKey",
         // Zinc gray — never pure black void while the scene is still loading.
         backgroundColor: "#18181b",
         stopContextMenu: true,
@@ -2103,6 +2252,76 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
       })
     }
 
+    /** Ctrl/Shift + wheel over product → uniform scale (not viewport zoom). */
+    const PRODUCT_WHEEL_SCALE_STEP = 0.08
+    let wheelHistoryTimer = 0
+    let wheelGestureActive = false
+
+    const finishProductWheelGesture = () => {
+      wheelHistoryTimer = 0
+      if (!wheelGestureActive) return
+      wheelGestureActive = false
+      commitHistoryTransaction()
+      interactingRef.current = false
+    }
+
+    const onMouseWheel = (opt: { e: WheelEvent; target?: FabricObject }) => {
+      const e = opt.e
+      if (!e.ctrlKey && !e.metaKey && !e.shiftKey) return
+      if (e.deltaY === 0) return
+
+      const product = findProductObject(canvas)
+      if (!product || product.selectable === false || product.lockScalingX) {
+        return
+      }
+
+      const hit = opt.target as EngineObject | undefined
+      let overProduct = hit?.layerRole === "product"
+      if (!overProduct) {
+        try {
+          const pointer = canvas.getScenePoint(e)
+          product.setCoords()
+          overProduct = Boolean(product.containsPoint(pointer))
+        } catch {
+          overProduct = false
+        }
+      }
+      if (!overProduct) return
+
+      e.preventDefault()
+      e.stopPropagation()
+
+      if (!wheelGestureActive) {
+        wheelGestureActive = true
+        interactingRef.current = true
+        beginHistoryTransaction()
+        if (canvas.getActiveObject() !== product) {
+          canvas.setActiveObject(product)
+          if (product.layerId) selectLayer(product.layerId)
+        }
+      }
+
+      const engine = product as EngineObject
+      engine.lastGoodScaleX = product.scaleX
+      engine.lastGoodScaleY = product.scaleY
+      engine.lastGoodLeft = product.left
+      engine.lastGoodTop = product.top
+
+      const direction = e.deltaY > 0 ? -1 : 1
+      const factor = 1 + direction * PRODUCT_WHEEL_SCALE_STEP
+      product.set({
+        scaleX: Math.max(0.05, (product.scaleX ?? 1) * factor),
+        scaleY: Math.max(0.05, (product.scaleY ?? 1) * factor),
+      })
+      product.setCoords()
+      constrainScaleToArtboard(product)
+      commitTransform(product)
+      canvas.requestRenderAll()
+
+      if (wheelHistoryTimer) window.clearTimeout(wheelHistoryTimer)
+      wheelHistoryTimer = window.setTimeout(finishProductWheelGesture, 280)
+    }
+
     const enterTextEditing = (text: IText) => {
       if (text.isEditing || text.selectable === false) return
       // Keep left/top origin while editing — center origin drifts the caret/selection.
@@ -2123,7 +2342,10 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
       syncTextEditingCoords(canvas, text)
       canvas.setActiveObject(text)
       text.enterEditing()
-      text.selectAll()
+      // Caret at end — selectAll made one Backspace wipe the whole title.
+      const len = text.text?.length ?? 0
+      text.setSelectionStart(len)
+      text.setSelectionEnd(len)
       // Re-sync after Fabric mounts the hidden textarea (layout can shift offset).
       syncTextEditingCoords(canvas, text)
       canvas.requestRenderAll()
@@ -2157,7 +2379,10 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
       syncTextEditingCoords(canvas, text)
       canvas.setActiveObject(text)
       text.enterEditing()
-      text.selectAll()
+      // Caret at end — selectAll made one Backspace wipe the whole label.
+      const len = text.text?.length ?? 0
+      text.setSelectionStart(len)
+      text.setSelectionEnd(len)
       syncTextEditingCoords(canvas, text)
       canvas.requestRenderAll()
     }
@@ -2169,7 +2394,9 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
     }
 
     const resolveLayerId = (obj: EngineObject | undefined): string | null => {
-      if (!obj || isSmartGuideObject(obj)) return null
+      if (!obj || isSmartGuideObject(obj) || isSafeZoneOverlayObject(obj)) {
+        return null
+      }
       if (obj.layerId) return obj.layerId
       const group = chipGroupOf(obj) as EngineObject | null
       return group?.layerId ?? null
@@ -2177,41 +2404,67 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
 
     const onSelect = () => {
       const obj = canvas.getActiveObject() as EngineObject | undefined
-      if (obj && isSmartGuideObject(obj)) return
+      if (obj && (isSmartGuideObject(obj) || isSafeZoneOverlayObject(obj))) return
+      // Shift+click ActiveSelection — highlight the first real layer in the tree.
+      if (obj && (obj.type === "activeSelection" || obj.type === "activeselection")) {
+        const first = (canvas.getActiveObjects() as EngineObject[]).find(
+          (o) => o.layerId && o.layerRole !== "background"
+        )
+        selectLayer(first?.layerId ?? null)
+        refreshSafeZoneWarnings(canvas)
+        return
+      }
       // Nested chip text still maps to the badge layer for the tools panel.
       selectLayer(resolveLayerId(obj))
+      refreshSafeZoneWarnings(canvas)
     }
-    const onSelectionCleared = () => selectLayer(null)
+    const onSelectionCleared = () => {
+      selectLayer(null)
+      refreshSafeZoneWarnings(canvas)
+    }
 
     // Mid-gesture: keep transforms in Fabric only — no Zustand / React updates.
     const onObjectMoving = (e: { target?: FabricObject }) => {
       clickEditRef.current.moved = true
       const target = e.target as EngineObject | undefined
-      if (!target || isSmartGuideObject(target)) return
+      if (!target || isSmartGuideObject(target) || isSafeZoneOverlayObject(target)) {
+        return
+      }
       // Soft canvas-bounds clamp (left/top only) before smart guides.
       constrainObjectToArtboard(target)
       scheduleGuides(target)
+      refreshSafeZoneWarnings(canvas)
     }
     const onObjectScaling = (e: { target?: FabricObject }) => {
       clickEditRef.current.moved = true
       lastGuideSigRef.current = ""
       clearSmartGuides(canvas)
       const target = e.target as EngineObject | undefined
-      if (target && !isSmartGuideObject(target)) {
+      if (
+        target &&
+        !isSmartGuideObject(target) &&
+        !isSafeZoneOverlayObject(target)
+      ) {
         constrainScaleToArtboard(target)
       }
+      refreshSafeZoneWarnings(canvas)
       canvas.requestRenderAll()
     }
-    const onObjectRotating = () => {
+    const onObjectRotating = (e: { target?: FabricObject }) => {
       clickEditRef.current.moved = true
       lastGuideSigRef.current = ""
       clearSmartGuides(canvas)
+      refreshSafeZoneWarnings(canvas)
       canvas.requestRenderAll()
     }
 
     const onMouseDown = (opt: { target?: FabricObject }) => {
       const target = opt.target as EngineObject | undefined
-      if (!target?.layerId || isSmartGuideObject(target)) {
+      if (
+        !target?.layerId ||
+        isSmartGuideObject(target) ||
+        isSafeZoneOverlayObject(target)
+      ) {
         clickEditRef.current = {
           layerId: null,
           wasAlreadySelected: false,
@@ -2236,6 +2489,7 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
       commitTransform(target)
       commitHistoryTransaction()
       interactingRef.current = false
+      refreshSafeZoneWarnings(canvas)
       canvas.requestRenderAll()
     }
 
@@ -2288,7 +2542,24 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
       // Nested badge text: resize plate + re-anchor children as glyphs change.
       if (isChipTextPart(obj)) {
         const group = chipGroupOf(obj)
+        const wasEditing = (obj as Textbox).isEditing === true
+        const selStart = (obj as Textbox).selectionStart
+        const selEnd = (obj as Textbox).selectionEnd
         if (group) updateBadgeLayout(group)
+        // If layout accidentally exited edit mode, restore immediately so the
+        // next Backspace cannot delete the whole badge Group.
+        if (wasEditing && (obj as Textbox).isEditing !== true) {
+          try {
+            canvas.setActiveObject(obj)
+            ;(obj as Textbox).enterEditing()
+            if (typeof selStart === "number" && typeof selEnd === "number") {
+              ;(obj as Textbox).setSelectionStart(selStart)
+              ;(obj as Textbox).setSelectionEnd(selEnd)
+            }
+          } catch {
+            // Fabric may refuse re-entry mid-teardown.
+          }
+        }
         if ((obj as Textbox).isEditing) {
           syncTextEditingCoords(canvas, obj as Textbox)
         }
@@ -2406,76 +2677,18 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
     canvas.on("mouse:down", onMouseDown)
     canvas.on("object:modified", onObjectModified)
     canvas.on("mouse:up", onMouseUp)
+    canvas.on("mouse:wheel", onMouseWheel)
     canvas.on("text:changed", onTextChanged)
     canvas.on("mouse:dblclick", onMouseDblClick)
     canvas.on("text:editing:entered", onTextEditingEntered)
     canvas.on("text:editing:exited", onTextEditingExited)
 
-    /** Delete/Backspace removes the selection unless IText is actively editing. */
-    const onCanvasKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Backspace" && event.key !== "Delete") return
-
-      const domTarget = event.target
-      if (
-        domTarget instanceof HTMLElement &&
-        (domTarget.isContentEditable ||
-          domTarget.tagName === "INPUT" ||
-          domTarget.tagName === "TEXTAREA" ||
-          domTarget.tagName === "SELECT")
-      ) {
-        return
-      }
-
-      const active = canvas.getActiveObject() as
-        | (EngineObject & { isEditing?: boolean })
-        | undefined
-      if (!active) return
-      // While editing text, let Backspace/Delete remove characters.
-      if (active.isEditing === true) return
-      if (isSmartGuideObject(active) || active.layerRole === "background") {
-        return
-      }
-
-      event.preventDefault()
-      event.stopPropagation()
-
-      const targets = (canvas.getActiveObjects() as EngineObject[]).filter(
-        (obj) =>
-          !isSmartGuideObject(obj) &&
-          obj.layerRole !== "background" &&
-          (obj as IText).isEditing !== true
-      )
-      if (targets.length === 0) return
-
-      // Nested chip text → delete the whole badge Group, not the child alone.
-      const removeTargets: EngineObject[] = []
-      const seen = new Set<EngineObject>()
-      for (const obj of targets) {
-        const group =
-          isChipTextPart(obj) ? (chipGroupOf(obj) as EngineObject | null) : null
-        const victim = group ?? obj
-        if (seen.has(victim)) continue
-        seen.add(victim)
-        removeTargets.push(victim)
-      }
-
-      const layerIds = removeTargets
-        .map((obj) => obj.layerId)
-        .filter((id): id is string => Boolean(id))
-
-      for (const obj of removeTargets) {
-        canvas.remove(obj)
-      }
-      canvas.discardActiveObject()
-      canvas.requestRenderAll()
-
-      const { removeLayer } = useEditorStore.getState()
-      for (const id of layerIds) {
-        removeLayer(id)
-      }
+    /** Keep Background pinned at stack index 0 after structural canvas changes. */
+    const onStackChanged = () => {
+      pinBackgroundToBottom(canvas)
     }
-
-    window.addEventListener("keydown", onCanvasKeyDown)
+    canvas.on("object:added", onStackChanged)
+    canvas.on("object:removed", onStackChanged)
 
     registerFabricExporter({
       getCanvas: () => fabricRef.current,
@@ -2496,9 +2709,12 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
     })
 
     return () => {
-      window.removeEventListener("keydown", onCanvasKeyDown)
       if (guideRaf) cancelAnimationFrame(guideRaf)
       if (fitRaf) cancelAnimationFrame(fitRaf)
+      if (wheelHistoryTimer) window.clearTimeout(wheelHistoryTimer)
+      if (wheelGestureActive) {
+        finishProductWheelGesture()
+      }
       ro?.disconnect()
       registerFabricExporter(null)
       clearSoftboxCaches()
@@ -2514,10 +2730,13 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
         canvas.off("mouse:down", onMouseDown)
         canvas.off("object:modified", onObjectModified)
         canvas.off("mouse:up", onMouseUp)
+        canvas.off("mouse:wheel", onMouseWheel)
         canvas.off("text:changed", onTextChanged)
         canvas.off("mouse:dblclick", onMouseDblClick)
         canvas.off("text:editing:entered", onTextEditingEntered)
         canvas.off("text:editing:exited", onTextEditingExited)
+        canvas.off("object:added", onStackChanged)
+        canvas.off("object:removed", onStackChanged)
         // Soft teardown: keep Fabric instance + scene objects intact across
         // React Strict Mode effect re-runs. Never dispose() (kills 2d context)
         // and never clear() here — that left a black void because `ready` stayed
@@ -2894,6 +3113,8 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
           productObj.setCoords()
         }
 
+        pinBackgroundToBottom(canvas)
+
         if (prevSelected) {
           const match = findByLayerId(canvas, prevSelected)
           if (match?.selectable) canvas.setActiveObject(match)
@@ -2937,6 +3158,8 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
         sceneEpochRef.current += 1
         sceneRecoveriesRef.current = 0
         setSceneError(null)
+        paintSafeZoneOverlay(canvas, useEditorStore.getState().safeZoneMask)
+        refreshSafeZoneWarnings(canvas)
         const busy = useEditorStore.getState().busyKind
         if (busy === "generating" || busy === "loading-image") {
           setBusyKind("idle")
@@ -3008,20 +3231,26 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
     return () => window.clearTimeout(timer)
   }, [ready, layers, sceneKey])
 
-  // Softbox: CSS SoftboxLightOverlay is the live light. Debounced + idle Fabric
-  // paint keeps the hidden bitmap export-ready without blocking 3D/UI animations.
-  // Runs on mount/ready from store softbox — never waits for slider onChange.
+  // Softbox wash (CSS floor + export bitmap) + Fabric light overlay (rAF) + color-grade.
+  // Manual canvas product shadows are disabled (NN owns final lighting).
   useEffect(() => {
     if (!ready) return
 
-    let debounceTimer = 0
+    let softboxTimer = 0
     let cancelIdle: (() => void) | null = null
+    let lightOverlayRaf = 0
+    let lightingRaf = 0
+    let lightingTimer = 0
+    let pendingGrade: ProductColorGrade | null = null
+    let pendingBackgroundGrade: ProductColorGrade | null = null
 
-    const runApply = () => {
+    const applySoftboxOnly = () => {
       try {
         const canvas = fabricRef.current
         if (!isFabricCanvasAlive(canvas)) return
-        applyLightingEffects(canvas, useEditorStore.getState().softbox)
+        const state = useEditorStore.getState()
+        canvas.backgroundColor = "rgba(0,0,0,0)"
+        applySoftboxToFabric(canvas, state.softbox)
       } catch (err) {
         if (process.env.NODE_ENV !== "production") {
           console.error("[fabric-canvas] softbox apply failed", err)
@@ -3029,39 +3258,135 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
       }
     }
 
-    const schedule = (immediate: boolean) => {
-      window.clearTimeout(debounceTimer)
+    const applyLightOverlayNow = () => {
+      lightOverlayRaf = 0
+      try {
+        const canvas = fabricRef.current
+        if (!isFabricCanvasAlive(canvas)) return
+        syncFabricLightOverlay(canvas, useEditorStore.getState().softbox)
+        canvas.requestRenderAll()
+      } catch (err) {
+        if (process.env.NODE_ENV !== "production") {
+          console.error("[fabric-canvas] light overlay apply failed", err)
+        }
+      }
+    }
+
+    /** Coalesce softbox slider ticks onto the next animation frame (no setTimeout lag). */
+    const scheduleLightOverlay = (immediate = false) => {
+      if (immediate) {
+        if (lightOverlayRaf) {
+          cancelAnimationFrame(lightOverlayRaf)
+          lightOverlayRaf = 0
+        }
+        applyLightOverlayNow()
+        return
+      }
+      if (lightOverlayRaf) return
+      lightOverlayRaf = requestAnimationFrame(applyLightOverlayNow)
+    }
+
+    const applyProductLightingNow = (
+      grade: ProductColorGrade,
+      backgroundGrade: ProductColorGrade
+    ) => {
+      try {
+        const canvas = fabricRef.current
+        if (!isFabricCanvasAlive(canvas)) return
+        applyProductLighting(canvas, grade, backgroundGrade)
+      } catch (err) {
+        if (process.env.NODE_ENV !== "production") {
+          console.error("[fabric-canvas] product lighting apply failed", err)
+        }
+      }
+    }
+
+    const scheduleSoftbox = (immediate: boolean) => {
+      window.clearTimeout(softboxTimer)
       cancelIdle?.()
       cancelIdle = null
 
       if (immediate) {
-        // First paint soon, but still yield so WebGL/CSS animations keep a frame.
-        cancelIdle = scheduleWhenIdle(runApply, { timeoutMs: 48 })
+        cancelIdle = scheduleWhenIdle(applySoftboxOnly, { timeoutMs: 48 })
         return
       }
 
-      debounceTimer = window.setTimeout(() => {
-        debounceTimer = 0
-        cancelIdle = scheduleWhenIdle(runApply, { timeoutMs: 160 })
+      softboxTimer = window.setTimeout(() => {
+        softboxTimer = 0
+        cancelIdle = scheduleWhenIdle(applySoftboxOnly, { timeoutMs: 160 })
       }, SOFTBOX_UPDATE_MS)
     }
 
-    schedule(true)
+    const flushLighting = () => {
+      lightingRaf = 0
+      const grade =
+        pendingGrade ?? useEditorStore.getState().colorGrade
+      const backgroundGrade =
+        pendingBackgroundGrade ?? useEditorStore.getState().backgroundColorGrade
+      pendingGrade = null
+      pendingBackgroundGrade = null
+      applyProductLightingNow(grade, backgroundGrade)
+    }
+
+    const scheduleLighting = (args: {
+      grade?: ProductColorGrade
+      backgroundGrade?: ProductColorGrade
+      immediate?: boolean
+    }) => {
+      if (args.grade) pendingGrade = args.grade
+      if (args.backgroundGrade) pendingBackgroundGrade = args.backgroundGrade
+
+      if (args.immediate) {
+        window.clearTimeout(lightingTimer)
+        lightingTimer = 0
+        if (lightingRaf) {
+          cancelAnimationFrame(lightingRaf)
+          lightingRaf = 0
+        }
+        flushLighting()
+        return
+      }
+
+      window.clearTimeout(lightingTimer)
+      lightingTimer = window.setTimeout(() => {
+        lightingTimer = 0
+        if (lightingRaf) return
+        lightingRaf = requestAnimationFrame(flushLighting)
+      }, PRODUCT_LIGHTING_UPDATE_MS)
+    }
+
+    // First paint: softbox bitmap (idle) + light overlay (rAF) + product grade.
+    scheduleSoftbox(true)
+    scheduleLightOverlay(true)
+    scheduleLighting({
+      grade: useEditorStore.getState().colorGrade,
+      backgroundGrade: useEditorStore.getState().backgroundColorGrade,
+      immediate: true,
+    })
 
     const unsub = useEditorStore.subscribe((state, prev) => {
       if (
-        state.softbox === prev.softbox &&
-        state.backgroundPreviewUrl === prev.backgroundPreviewUrl
+        state.softbox !== prev.softbox ||
+        state.backgroundPreviewUrl !== prev.backgroundPreviewUrl
       ) {
-        return
+        scheduleSoftbox(false)
+        scheduleLightOverlay(false)
       }
-      schedule(false)
+      if (state.colorGrade !== prev.colorGrade) {
+        scheduleLighting({ grade: state.colorGrade })
+      }
+      if (state.backgroundColorGrade !== prev.backgroundColorGrade) {
+        scheduleLighting({ backgroundGrade: state.backgroundColorGrade })
+      }
     })
 
     return () => {
       unsub()
-      window.clearTimeout(debounceTimer)
+      window.clearTimeout(softboxTimer)
+      window.clearTimeout(lightingTimer)
       cancelIdle?.()
+      if (lightOverlayRaf) cancelAnimationFrame(lightOverlayRaf)
+      if (lightingRaf) cancelAnimationFrame(lightingRaf)
     }
   }, [ready, lightingPaintKey])
 
@@ -3073,17 +3398,25 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
     if (isChipAppearanceScrubbing()) return
 
     for (const layer of layers) {
-      if (!layer.visible || layer.type === "background") continue
+      if (layer.type === "background") {
+        pinBackgroundToBottom(canvas)
+        continue
+      }
+      if (!layer.visible) continue
       const obj = findByLayerId(canvas, layer.id)
       if (!obj) continue
       if (obj.type === "i-text" && (obj as IText).isEditing) continue
+      applyInteractionLocks(obj, layer.locked)
+      if (layer.type === "text" && obj.type === "i-text") {
+        ;(obj as IText).editable = !layer.locked
+      }
       applyTransformFromLayer(obj, layer)
       if (layer.type === "text" && obj.type === "i-text") {
         const text = obj as IText
         if (text.text !== (layer.text ?? "")) {
           text.set("text", layer.text ?? "")
         }
-        applyTextStyle(text, layer.textStyle)
+        void applyTextStyleWhenReady(text, layer.textStyle)
       }
       // Badge: mutate existing Group children — never rebuild on label/subtitle keystrokes.
       if (
@@ -3131,6 +3464,19 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
       canvas.requestRenderAll()
     }
   }, [selectedLayerId])
+
+  // Marketplace safe-zone mask: paint non-interactive overlay + AABB warnings.
+  useEffect(() => {
+    const canvas = fabricRef.current
+    if (!canvas || !ready) return
+    paintSafeZoneOverlay(canvas, safeZoneMask)
+  }, [safeZoneMask, ready])
+
+  useEffect(() => {
+    const canvas = fabricRef.current
+    if (!canvas || !ready) return
+    refreshSafeZoneWarnings(canvas)
+  }, [safeZoneMask, ready, selectedLayerId])
 
   useEffect(() => {
     const canvas = fabricRef.current

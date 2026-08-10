@@ -1,7 +1,11 @@
 import { z } from "zod"
 
 import { CANVAS_HEIGHT, CANVAS_WIDTH } from "@/lib/constants/mock-editor"
-import type { SoftboxSettings } from "@/lib/store/editor-store"
+import type {
+  ProductColorGrade,
+  SoftboxSettings,
+} from "@/lib/store/editor-store"
+import { DEFAULT_COLOR_GRADE } from "@/lib/store/editor-store"
 import type {
   BadgeLayerDTO,
   CanvasLayerDTO,
@@ -9,6 +13,7 @@ import type {
   EditorDocumentDTO,
   EditorLayerDTO,
 } from "@/types/api"
+import { normalizeEditorFontFamily } from "@/lib/editor/fabric-fonts"
 import {
   DEFAULT_TEXT_STYLE,
   type CanvasLayer,
@@ -17,7 +22,11 @@ import {
 
 const textStyleSchema = z
   .object({
-    font_family: z.enum(["Inter", "Montserrat", "Roboto", "Space Grotesk"]),
+    font_family: z
+      .string()
+      .min(1)
+      .max(64)
+      .transform((value) => normalizeEditorFontFamily(value)),
     font_size: z.number().int().min(1).max(512),
     font_weight: z.number().int().min(100).max(900),
     color: z.string().min(1).max(64),
@@ -38,9 +47,11 @@ const chipSchema = z
     bg_color: z.string().min(1).max(128),
     border_radius: z.number().min(0).max(256),
     icon_id: z.string().min(1).max(128),
-    variant: z.enum(["solid", "glass"]),
+    variant: z.enum(["solid", "glass", "dark", "bordered"]),
     text_color: z.string().min(1).max(64).nullish(),
     blur: z.number().min(0).max(128),
+    stroke_color: z.string().min(1).max(64).nullish(),
+    stroke_width: z.number().min(0).max(32).nullish(),
   })
   .strict()
 
@@ -87,6 +98,26 @@ const softboxSchema = z
     color_temp_k: z.number().int().min(2700).max(6500),
     intensity: z.number().min(0).max(200),
     softbox_diffusion: z.number().min(0).max(100),
+    shadow_opacity: z.number().min(0).max(100).default(70),
+    shadow_blur: z.number().min(0).max(100).default(22),
+    ao_force: z.number().min(0).max(100).default(55),
+    auto_shadow_tint: z.boolean().default(false),
+  })
+  .passthrough()
+
+const colorGradeSchema = z
+  .object({
+    brightness: z.number().min(-1).max(1),
+    contrast: z.number().min(-1).max(1),
+    saturation: z.number().min(-1).max(1),
+    hue: z.number().min(-1).max(1).default(0),
+    temperature: z.number().min(-1).max(1),
+    highlights: z.number().min(-1).max(1),
+    shadows: z.number().min(-1).max(1),
+    sharpness: z.number().min(0).max(1).default(0),
+    rim_enabled: z.boolean(),
+    rim_color: z.string().min(1).max(32),
+    rim_strength: z.number().min(0).max(100),
   })
   .strict()
 
@@ -109,6 +140,8 @@ const editorDocumentSchema = z
     product_preview_url: z.string().min(1).max(2048).nullish(),
     background_preview_url: z.string().min(1).max(2048).nullish(),
     softbox: softboxSchema,
+    color_grade: colorGradeSchema.optional(),
+    background_color_grade: colorGradeSchema.optional(),
   })
   .strict()
   .superRefine((document, context) => {
@@ -195,6 +228,8 @@ function toEditorLayer(layer: CanvasLayer): EditorLayerDTO {
         variant: chip?.variant ?? "solid",
         text_color: chip?.textColor ?? null,
         blur: chip?.blur ?? 0,
+        stroke_color: chip?.strokeColor ?? null,
+        stroke_width: chip?.strokeWidth ?? null,
       },
     }
   }
@@ -250,6 +285,8 @@ function fromEditorLayer(layer: EditorLayerDTO): CanvasLayer {
         variant: layer.chip.variant,
         textColor: layer.chip.text_color ?? undefined,
         blur: layer.chip.blur,
+        strokeColor: layer.chip.stroke_color ?? undefined,
+        strokeWidth: layer.chip.stroke_width ?? undefined,
       },
     }
   }
@@ -362,12 +399,7 @@ function fromCanvasLayerDTO(layer: CanvasLayerDTO): CanvasLayer {
       text: layer.text,
       textStyle: {
         ...DEFAULT_TEXT_STYLE,
-        fontFamily:
-          layer.font_family === "Montserrat" ||
-          layer.font_family === "Roboto" ||
-          layer.font_family === "Space Grotesk"
-            ? layer.font_family
-            : "Inter",
+        fontFamily: normalizeEditorFontFamily(layer.font_family),
         fontSize: layer.font_size,
         fontWeight: Number(layer.font_weight) || 400,
         color: layer.color_hex,
@@ -416,7 +448,14 @@ export function createEditorDocument(params: {
   productPreviewUrl: string | null
   backgroundPreviewUrl?: string | null
   softbox: SoftboxSettings
+  colorGrade?: ProductColorGrade
+  backgroundColorGrade?: ProductColorGrade
 }): EditorDocumentDTO {
+  const grade = params.colorGrade ?? DEFAULT_COLOR_GRADE
+  const backgroundGrade = params.backgroundColorGrade ?? {
+    ...DEFAULT_COLOR_GRADE,
+    rimEnabled: false,
+  }
   const document: EditorDocumentDTO = {
     version: 1,
     pages: params.pages.map((layers, index) => ({
@@ -434,6 +473,36 @@ export function createEditorDocument(params: {
       color_temp_k: params.softbox.colorTempK,
       intensity: params.softbox.intensity,
       softbox_diffusion: params.softbox.softboxDiffusion,
+      shadow_opacity: params.softbox.shadowOpacity,
+      shadow_blur: params.softbox.shadowBlur,
+      ao_force: params.softbox.aoForce,
+      auto_shadow_tint: params.softbox.autoShadowTint,
+    },
+    color_grade: {
+      brightness: grade.brightness,
+      contrast: grade.contrast,
+      saturation: grade.saturation,
+      hue: grade.hue,
+      temperature: grade.temperature,
+      highlights: grade.highlights,
+      shadows: grade.shadows,
+      sharpness: grade.sharpness,
+      rim_enabled: grade.rimEnabled,
+      rim_color: grade.rimColor,
+      rim_strength: grade.rimStrength,
+    },
+    background_color_grade: {
+      brightness: backgroundGrade.brightness,
+      contrast: backgroundGrade.contrast,
+      saturation: backgroundGrade.saturation,
+      hue: backgroundGrade.hue,
+      temperature: backgroundGrade.temperature,
+      highlights: backgroundGrade.highlights,
+      shadows: backgroundGrade.shadows,
+      sharpness: backgroundGrade.sharpness,
+      rim_enabled: backgroundGrade.rimEnabled,
+      rim_color: backgroundGrade.rimColor,
+      rim_strength: backgroundGrade.rimStrength,
     },
   }
   return editorDocumentSchema.parse(document) as EditorDocumentDTO
@@ -457,8 +526,12 @@ export function editorDocumentToState(document: EditorDocumentDTO): {
   productPreviewUrl: string | null
   backgroundPreviewUrl: string | null
   softbox: SoftboxSettings
+  colorGrade: ProductColorGrade
+  backgroundColorGrade: ProductColorGrade
 } {
   const parsed = parseEditorDocument(document)
+  const grade = parsed.color_grade
+  const backgroundGrade = parsed.background_color_grade
   return {
     pages: parsed.pages.map((page) => page.layers.map(fromEditorLayer)),
     activePageIndex: parsed.active_page_index,
@@ -471,7 +544,41 @@ export function editorDocumentToState(document: EditorDocumentDTO): {
       colorTempK: parsed.softbox.color_temp_k,
       intensity: parsed.softbox.intensity,
       softboxDiffusion: parsed.softbox.softbox_diffusion,
+      shadowOpacity: parsed.softbox.shadow_opacity ?? 70,
+      shadowBlur: parsed.softbox.shadow_blur ?? 22,
+      aoForce: parsed.softbox.ao_force ?? 55,
+      autoShadowTint: parsed.softbox.auto_shadow_tint ?? false,
     },
+    colorGrade: grade
+      ? {
+          brightness: grade.brightness,
+          contrast: grade.contrast,
+          saturation: grade.saturation,
+          hue: grade.hue ?? 0,
+          temperature: grade.temperature,
+          highlights: grade.highlights,
+          shadows: grade.shadows,
+          sharpness: grade.sharpness ?? 0,
+          rimEnabled: grade.rim_enabled,
+          rimColor: grade.rim_color,
+          rimStrength: grade.rim_strength,
+        }
+      : { ...DEFAULT_COLOR_GRADE },
+    backgroundColorGrade: backgroundGrade
+      ? {
+          brightness: backgroundGrade.brightness,
+          contrast: backgroundGrade.contrast,
+          saturation: backgroundGrade.saturation,
+          hue: backgroundGrade.hue ?? 0,
+          temperature: backgroundGrade.temperature,
+          highlights: backgroundGrade.highlights,
+          shadows: backgroundGrade.shadows,
+          sharpness: backgroundGrade.sharpness ?? 0,
+          rimEnabled: backgroundGrade.rim_enabled,
+          rimColor: backgroundGrade.rim_color,
+          rimStrength: backgroundGrade.rim_strength,
+        }
+      : { ...DEFAULT_COLOR_GRADE, rimEnabled: false },
   }
 }
 
@@ -482,6 +589,8 @@ export function tryEditorDocumentToState(document: unknown): {
   productPreviewUrl: string | null
   backgroundPreviewUrl: string | null
   softbox: SoftboxSettings
+  colorGrade: ProductColorGrade
+  backgroundColorGrade: ProductColorGrade
 } | null {
   const parsed = tryParseEditorDocument(document)
   if (!parsed) return null

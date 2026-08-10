@@ -7,7 +7,8 @@ function lanDevOrigins(): string[] {
   const hosts: string[] = [];
   for (const addrs of Object.values(os.networkInterfaces())) {
     for (const addr of addrs ?? []) {
-      const family = addr.family;
+      // Node historically used numeric family (4/6); current typings are strings.
+      const family = addr.family as string | number;
       const isV4 = family === "IPv4" || family === 4;
       if (!isV4 || addr.internal) continue;
       hosts.push(addr.address);

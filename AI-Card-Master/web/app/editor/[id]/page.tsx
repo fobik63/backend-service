@@ -23,7 +23,8 @@ function resolveProductData(id: string): EditorProductData | null {
         marketplace: project.marketplace,
         status: project.status,
         previewImage: project.previewImage,
-        productImage: project.productImage ?? project.previewImage,
+        // Cutout only — never use full marketplace preview (badges baked into PNG).
+        productImage: project.productImage,
       }
     }
   }

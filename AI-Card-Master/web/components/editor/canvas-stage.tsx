@@ -9,6 +9,7 @@ import {
   CanvasToolbar,
 } from "@/components/editor/canvas-toolbar"
 import { EditorCanvas } from "@/components/editor/canvas"
+import { FormatSelector } from "@/components/editor/format-selector"
 import { EditorPageStrip } from "@/components/editor/page-strip"
 import { CanvasErrorBoundary } from "@/components/editor/canvas-error-boundary"
 import { Button } from "@/components/ui/button"
@@ -30,6 +31,7 @@ import { useI18n } from "@/lib/i18n"
 import {
   useEditorStore,
   type EditorZoomMode,
+  type SafeZoneMask,
 } from "@/lib/store/editor-store"
 import { cn } from "@/lib/utils"
 
@@ -37,6 +39,12 @@ const ZOOM_OPTIONS: { mode: EditorZoomMode; label: string }[] = [
   { mode: "50", label: "50%" },
   { mode: "100", label: "100%" },
   { mode: "fit", label: "Fit" },
+]
+
+const SAFE_ZONE_OPTIONS: { mode: SafeZoneMask; labelKey: "safeZoneOff" | "safeZoneWb" | "safeZoneOzon" }[] = [
+  { mode: "off", labelKey: "safeZoneOff" },
+  { mode: "wb", labelKey: "safeZoneWb" },
+  { mode: "ozon", labelKey: "safeZoneOzon" },
 ]
 
 function resolveZoomScale(
@@ -52,12 +60,15 @@ function CanvasQuickBar() {
   const { t } = useI18n()
   const zoomMode = useEditorStore((s) => s.zoomMode)
   const setZoomMode = useEditorStore((s) => s.setZoomMode)
+  const safeZoneMask = useEditorStore((s) => s.safeZoneMask)
+  const setSafeZoneMask = useEditorStore((s) => s.setSafeZoneMask)
   const canUndo = useEditorStore((s) => s.canUndo)
   const undo = useEditorStore((s) => s.undo)
   const layers = useEditorStore((s) => s.layers)
   const selectedLayerId = useEditorStore((s) => s.selectedLayerId)
   const updateLayer = useEditorStore((s) => s.updateLayer)
   const activePageIndex = useEditorStore((s) => s.activePageIndex)
+  const exportScale = useEditorStore((s) => s.exportScale)
   const [exporting, setExporting] = useState(false)
 
   const selected = layers.find((l) => l.id === selectedLayerId)
@@ -82,6 +93,7 @@ function CanvasQuickBar() {
         canvasEl: findEditorExportCanvas(),
         filename: `${safe}-page-${activePageIndex + 1}.png`,
         format: "png",
+        exportScale,
       })
       toast.success(
         t("editor.downloadCurrentSuccess", {
@@ -98,7 +110,8 @@ function CanvasQuickBar() {
 
   return (
     <div className="flex shrink-0 flex-col gap-2 border-b border-white/8 px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
-      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5">
+        <FormatSelector />
         <p className="min-w-0 truncate text-xs text-muted-foreground">
           {t("editor.canvas")}{" "}
           <span className="font-mono text-foreground/80">
@@ -133,6 +146,34 @@ function CanvasQuickBar() {
               onClick={() => setZoomMode(opt.mode)}
             >
               {opt.label}
+            </Button>
+          ))}
+        </div>
+
+        <div
+          className="inline-flex max-w-full items-center gap-0.5 overflow-x-auto rounded-lg border border-white/10 bg-loft-surface p-0.5"
+          role="group"
+          aria-label={t("editor.safeZone")}
+        >
+          {SAFE_ZONE_OPTIONS.map((opt) => (
+            <Button
+              key={opt.mode}
+              type="button"
+              size="xs"
+              variant={safeZoneMask === opt.mode ? "secondary" : "ghost"}
+              className={cn(
+                "shrink-0 px-2",
+                safeZoneMask === opt.mode && "bg-white/10 text-foreground",
+                opt.mode === "wb" &&
+                  safeZoneMask === "wb" &&
+                  "bg-fuchsia-500/20 text-fuchsia-100",
+                opt.mode === "ozon" &&
+                  safeZoneMask === "ozon" &&
+                  "bg-emerald-500/20 text-emerald-100",
+              )}
+              onClick={() => setSafeZoneMask(opt.mode)}
+            >
+              {t(`editor.${opt.labelKey}`)}
             </Button>
           ))}
         </div>

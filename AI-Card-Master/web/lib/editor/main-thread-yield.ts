@@ -17,27 +17,36 @@ export function scheduleWhenIdle(
     task()
   }
 
-  if (typeof window !== "undefined" && "requestIdleCallback" in window) {
-    idleId = window.requestIdleCallback(run, { timeout: timeoutMs })
-  } else if (typeof window !== "undefined") {
-    // Yield at least one frame so compositor animations are not starved.
-    rafId = window.requestAnimationFrame(() => {
-      timeoutId = window.setTimeout(run, 0)
-    })
-  } else {
+  if (typeof window === "undefined") {
     task()
+    return () => {
+      cancelled = true
+    }
+  }
+
+  const win = window as Window & {
+    requestIdleCallback?: (
+      callback: IdleRequestCallback,
+      opts?: IdleRequestOptions
+    ) => number
+    cancelIdleCallback?: (handle: number) => void
+  }
+
+  if (typeof win.requestIdleCallback === "function") {
+    idleId = win.requestIdleCallback(run, { timeout: timeoutMs })
+  } else {
+    // Yield at least one frame so compositor animations are not starved.
+    rafId = win.requestAnimationFrame(() => {
+      timeoutId = win.setTimeout(run, 0)
+    })
   }
 
   return () => {
     cancelled = true
-    if (
-      idleId &&
-      typeof window !== "undefined" &&
-      "cancelIdleCallback" in window
-    ) {
-      window.cancelIdleCallback(idleId)
+    if (idleId && typeof win.cancelIdleCallback === "function") {
+      win.cancelIdleCallback(idleId)
     }
-    if (rafId) window.cancelAnimationFrame(rafId)
-    if (timeoutId) window.clearTimeout(timeoutId)
+    if (rafId) win.cancelAnimationFrame(rafId)
+    if (timeoutId) win.clearTimeout(timeoutId)
   }
 }

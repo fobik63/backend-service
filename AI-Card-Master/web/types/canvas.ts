@@ -3,8 +3,10 @@ export type CanvasLayerType = "image" | "text" | "shape" | "background"
 export type EditorFontFamily =
   | "Inter"
   | "Montserrat"
-  | "Roboto"
-  | "Space Grotesk"
+  | "Unbounded"
+  | "Cera Pro"
+  | "Oswald"
+  | "Russo One"
 
 export type TextLayerStyle = {
   fontFamily: EditorFontFamily
@@ -20,14 +22,15 @@ export type TextLayerStyle = {
   shadowOffsetY: number
 }
 
-export type FeatureChipVariant = "solid" | "glass"
+/** Plate look — UI presets map 1:1 onto these variants. */
+export type FeatureChipVariant = "solid" | "glass" | "dark" | "bordered"
 
 export type FeatureChipDraft = {
   label: string
   bgColor: string
   borderRadius: number
   iconId: string
-  /** `glass` = frosted translucent plate (backdrop-blur). */
+  /** Plate style preset variant. */
   variant?: FeatureChipVariant
   /** Optional second line under the main label. */
   subtitle?: string
@@ -35,6 +38,10 @@ export type FeatureChipDraft = {
   textColor?: string
   /** Backdrop blur in px for glassmorphism (0 = none). */
   blur?: number
+  /** Plate outline color (glass rim / bordered). */
+  strokeColor?: string
+  /** Plate outline width in logical px. */
+  strokeWidth?: number
 }
 
 export type CanvasLayer = {
@@ -87,8 +94,10 @@ export const DEFAULT_TEXT_STYLE: TextLayerStyle = {
 export const EDITOR_FONT_FAMILIES: EditorFontFamily[] = [
   "Inter",
   "Montserrat",
-  "Roboto",
-  "Space Grotesk",
+  "Unbounded",
+  "Cera Pro",
+  "Oswald",
+  "Russo One",
 ]
 
 export const FONT_WEIGHT_OPTIONS = [

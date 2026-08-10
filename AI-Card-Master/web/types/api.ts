@@ -83,6 +83,10 @@ export type StudioLightDTO = {
   color_temp_k?: number
   intensity?: number
   softbox_diffusion?: number
+  shadow_opacity?: number
+  shadow_blur?: number
+  ao_force?: number
+  auto_shadow_tint?: boolean
 }
 
 export type EditorSoftboxDTO = {
@@ -92,10 +96,34 @@ export type EditorSoftboxDTO = {
   color_temp_k: number
   intensity: number
   softbox_diffusion: number
+  shadow_opacity: number
+  shadow_blur: number
+  ao_force: number
+  auto_shadow_tint: boolean
+}
+
+export type EditorColorGradeDTO = {
+  brightness: number
+  contrast: number
+  saturation: number
+  hue?: number
+  temperature: number
+  highlights: number
+  shadows: number
+  sharpness?: number
+  rim_enabled: boolean
+  rim_color: string
+  rim_strength: number
 }
 
 export type EditorTextStyleDTO = {
-  font_family: "Inter" | "Montserrat" | "Roboto" | "Space Grotesk"
+  font_family:
+    | "Inter"
+    | "Montserrat"
+    | "Unbounded"
+    | "Cera Pro"
+    | "Oswald"
+    | "Russo One"
   font_size: number
   font_weight: number
   color: string
@@ -114,9 +142,11 @@ export type EditorChipDTO = {
   bg_color: string
   border_radius: number
   icon_id: string
-  variant: "solid" | "glass"
+  variant: "solid" | "glass" | "dark" | "bordered"
   text_color?: string | null
   blur: number
+  stroke_color?: string | null
+  stroke_width?: number | null
 }
 
 export type EditorLayerBaseDTO = {
@@ -158,6 +188,10 @@ export type EditorDocumentDTO = {
   product_preview_url?: string | null
   background_preview_url?: string | null
   softbox: EditorSoftboxDTO
+  /** Optional for backward-compatible documents. */
+  color_grade?: EditorColorGradeDTO
+  /** Optional for backward-compatible documents. */
+  background_color_grade?: EditorColorGradeDTO
 }
 
 export type SavedDesignDTO = {

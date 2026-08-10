@@ -66,6 +66,7 @@ describe("editor history", () => {
       pages: current.pages,
       activePageIndex: 0,
       softbox: current.softbox,
+      colorGrade: current.colorGrade,
       productPreviewUrl: current.productPreviewUrl,
       backgroundPreviewUrl: current.backgroundPreviewUrl,
       packSize: current.packSize,
@@ -79,7 +80,7 @@ describe("editor history", () => {
   it("applies generation result as a single undo step", () => {
     const before = useEditorStore.getState()
     const nextLayers = before.layers.map((layer) =>
-      layer.id === "p0_title" ? { ...layer, text: "Generated" } : layer
+      layer.id === "p0_product" ? { ...layer, scale: 1.25 } : layer
     )
 
     useEditorStore.getState().applyGenerationResult({
@@ -90,16 +91,16 @@ describe("editor history", () => {
 
     expect(useEditorStore.getState().history.past).toHaveLength(1)
     expect(
-      useEditorStore.getState().layers.find((l) => l.id === "p0_title")?.text
-    ).toBe("Generated")
+      useEditorStore.getState().layers.find((l) => l.id === "p0_product")?.scale
+    ).toBe(1.25)
     expect(useEditorStore.getState().backgroundPreviewUrl).toBe(
       "/projects/cream-sage-mist.png"
     )
 
     useEditorStore.getState().undo()
     expect(
-      useEditorStore.getState().layers.find((l) => l.id === "p0_title")?.text
-    ).toBe(before.layers.find((l) => l.id === "p0_title")?.text)
+      useEditorStore.getState().layers.find((l) => l.id === "p0_product")?.scale
+    ).toBe(before.layers.find((l) => l.id === "p0_product")?.scale)
     expect(useEditorStore.getState().backgroundPreviewUrl).toBe(
       before.backgroundPreviewUrl
     )
@@ -126,13 +127,13 @@ describe("editor history", () => {
       brand: "BrandX",
       description: "Source description",
     })
-    // Canvas headline prefers brand over full product title.
+    // Clean templates have no default title text — meta only until user adds one.
     expect(
-      state.layers.find((layer) => layer.id === "p0_title")?.text
-    ).toBe("BrandX")
+      state.layers.some((layer) => layer.type === "text" || layer.type === "shape")
+    ).toBe(false)
   })
 
-  it("updates canvas title from parse even without images", () => {
+  it("updates product meta from parse even without images", () => {
     useEditorStore.getState().applyParsedProduct({
       images: [],
       title: "Long marketplace title",
@@ -143,16 +144,15 @@ describe("editor history", () => {
 
     const state = useEditorStore.getState()
     expect(state.productMeta.title).toBe("Long marketplace title")
+    expect(state.productMeta.brand).toBe("Aura")
     expect(state.productMeta.description).toBe(
       "Hydrating cream for dry skin"
     )
-    expect(
-      state.layers.find((layer) => layer.id === "p0_title")?.text
-    ).toBe("Aura")
-    expect(state.canUndo).toBe(true)
+    // No title layer on clean pack → meta-only update, no history push.
+    expect(state.canUndo).toBe(false)
   })
 
-  it("falls back to product title when brand is empty", () => {
+  it("stores product title in meta when brand is empty", () => {
     useEditorStore.getState().applyParsedProduct({
       images: [],
       title: "Sage Mist Cream",
@@ -161,11 +161,8 @@ describe("editor history", () => {
       description: "",
     })
 
-    expect(
-      useEditorStore
-        .getState()
-        .layers.find((layer) => layer.id === "p0_title")?.text
-    ).toBe("Sage Mist Cream")
+    expect(useEditorStore.getState().productMeta.title).toBe("Sage Mist Cream")
+    expect(useEditorStore.getState().productMeta.brand).toBe("")
   })
 
   it("blank reset clears layers and history", () => {
@@ -185,5 +182,52 @@ describe("editor history", () => {
     expect(state.history.future).toHaveLength(0)
     expect(state.canUndo).toBe(false)
     expect(state.canRedo).toBe(false)
+  })
+
+  it("reorders layers from top→bottom list and keeps background at zIndex 0", () => {
+    useEditorStore.getState().addLayer({
+      id: "p0_extra_text",
+      type: "text",
+      name: "Текст",
+      visible: true,
+      locked: false,
+      opacity: 1,
+      zIndex: 2,
+      x: 10,
+      y: 10,
+      width: 40,
+      scale: 1,
+      rotation: 0,
+      text: "Sample",
+    })
+
+    const before = useEditorStore.getState().layers
+    const bg = before.find((l) => l.type === "background")
+    const interactive = before
+      .filter((l) => l.type !== "background")
+      .sort((a, b) => b.zIndex - a.zIndex)
+    expect(bg).toBeDefined()
+    expect(interactive.length).toBeGreaterThan(1)
+
+    // Move former top layer to the bottom of the interactive stack.
+    const reordered = [
+      ...interactive.slice(1).map((l) => l.id),
+      interactive[0]!.id,
+      bg!.id,
+    ]
+    useEditorStore.getState().reorderLayers(reordered)
+
+    const after = useEditorStore.getState().layers
+    const bgAfter = after.find((l) => l.type === "background")
+    expect(bgAfter?.zIndex).toBe(0)
+    expect(bgAfter?.locked).toBe(true)
+
+    const topId = interactive[1]?.id ?? interactive[0]!.id
+    const bottomId = interactive[0]!.id
+    const topZ = after.find((l) => l.id === topId)?.zIndex ?? -1
+    const bottomZ = after.find((l) => l.id === bottomId)?.zIndex ?? -1
+    expect(topZ).toBeGreaterThan(bottomZ)
+    expect(bottomZ).toBeGreaterThan(0)
+    expect(useEditorStore.getState().canUndo).toBe(true)
   })
 })

@@ -3,12 +3,13 @@
 import { ArrowLeft, Loader2, Save, Upload } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { useEffect, useState, type MouseEvent } from "react"
+import { useEffect, useRef, useState, type MouseEvent } from "react"
 import { toast } from "sonner"
 
 import { BrandLogo } from "@/components/dashboard/brand-logo"
 import { EditorAiPanel } from "@/components/editor/ai-panel"
 import { EditorCanvasStage } from "@/components/editor/canvas-stage"
+import { ExportButton } from "@/components/editor/export-button"
 import { ImportPublishDialog } from "@/components/editor/import-publish-dialog"
 import { EditorSettingsPanel } from "@/components/editor/settings-panel"
 import { ErrorBoundary } from "@/components/error-boundary"
@@ -25,6 +26,11 @@ import {
 import { getActiveFabricCanvas } from "@/lib/editor/fabric-export"
 import { useI18n } from "@/lib/i18n"
 import { useChipColorsFromBackground } from "@/lib/editor/use-chip-bg-palette"
+import { useEditorHotkeys } from "@/lib/editor/use-editor-hotkeys"
+import {
+  discardEditorSessionDraft,
+  useEditorSessionDraft,
+} from "@/lib/editor/use-editor-session-draft"
 import { useEditorStore } from "@/lib/store/editor-store"
 import { cn } from "@/lib/utils"
 import type { EditorProductData } from "@/types/editor"
@@ -75,14 +81,14 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
   const setBusyKind = useEditorStore((s) => s.setBusyKind)
   const setProductPreviewUrl = useEditorStore((s) => s.setProductPreviewUrl)
   const busyKind = useEditorStore((s) => s.busyKind)
-  const undo = useEditorStore((s) => s.undo)
-  const redo = useEditorStore((s) => s.redo)
   const layers = useEditorStore((s) => s.layers)
   const pages = useEditorStore((s) => s.pages)
   const activePageIndex = useEditorStore((s) => s.activePageIndex)
   const productPreviewUrl = useEditorStore((s) => s.productPreviewUrl)
   const backgroundPreviewUrl = useEditorStore((s) => s.backgroundPreviewUrl)
   const softbox = useEditorStore((s) => s.softbox)
+  const colorGrade = useEditorStore((s) => s.colorGrade)
+  const backgroundColorGrade = useEditorStore((s) => s.backgroundColorGrade)
   const [saving, setSaving] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [remoteDesign, setRemoteDesign] = useState<{
@@ -97,35 +103,54 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
       projectId
     )
+  /** Avoid re-wiping a restored IndexedDB draft when productData deps churn. */
+  const bootstrappedProjectRef = useRef<string | null>(null)
 
   useChipColorsFromBackground()
+  useEditorHotkeys()
+
+  /** Gate Fabric until this projectId is fully hydrated (no cross-project flash). */
+  const surfaceReady =
+    hydrateStatus === "ready" &&
+    (!isSavedDesignId || remoteDesign?.id === projectId)
+
+  // IndexedDB autosave (1s debounce) + restore for new / sandbox sessions.
+  useEditorSessionDraft({
+    projectId,
+    canRestore: surfaceReady,
+    preferRemote: isSavedDesignId,
+  })
 
   useEffect(() => {
     const controller = new AbortController()
-    const cutout = productData?.productImage ?? productData?.previewImage ?? null
+    const cutout = productData?.productImage ?? null
     const isNewCard = projectId === "new"
 
     // New card: wipe Zustand + Fabric so prior project layers/history cannot linger.
     if (isNewCard) {
-      reset({ blank: true })
-      setProjectId(projectId)
-      queueMicrotask(() => {
-        if (!controller.signal.aborted) {
-          setRemoteDesign(null)
-          setHydrateStatus("ready")
+      if (bootstrappedProjectRef.current !== projectId) {
+        bootstrappedProjectRef.current = projectId
+        reset({ blank: true })
+        setProjectId(projectId)
+        queueMicrotask(() => {
+          if (!controller.signal.aborted) {
+            setRemoteDesign(null)
+            setHydrateStatus("ready")
+          }
+        })
+        const canvas = getActiveFabricCanvas()
+        if (canvas) {
+          canvas.clear()
+          canvas.backgroundColor = "#18181b"
+          canvas.requestRenderAll()
         }
-      })
-      const canvas = getActiveFabricCanvas()
-      if (canvas) {
-        canvas.clear()
-        canvas.backgroundColor = "#18181b"
-        canvas.requestRenderAll()
       }
       return () => controller.abort()
     }
 
     // UUID designs: blank shell until remote doc restores (never flash mock pack).
     if (isSavedDesignId) {
+      bootstrappedProjectRef.current = projectId
       reset({ blank: true })
       setProjectId(projectId)
       setHydrateStatus("loading")
@@ -157,6 +182,8 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
             pages: [restoredLayers],
             activePageIndex: 0,
             softbox: useEditorStore.getState().softbox,
+            colorGrade: useEditorStore.getState().colorGrade,
+            backgroundColorGrade: useEditorStore.getState().backgroundColorGrade,
             productPreviewUrl: design.preview_url ?? cutout,
             backgroundPreviewUrl: design.canvas.background_image_url ?? null,
             packSize: 1,
@@ -185,10 +212,15 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
     }
 
     // Sandbox / non-UUID ids: local mock pack is fine.
-    reset()
-    setProjectId(projectId)
-    setHydrateStatus("ready")
-    if (cutout) setProductPreviewUrl(cutout)
+    if (bootstrappedProjectRef.current !== projectId) {
+      bootstrappedProjectRef.current = projectId
+      reset()
+      setProjectId(projectId)
+      setHydrateStatus("ready")
+      if (cutout) setProductPreviewUrl(cutout)
+    } else if (cutout && !useEditorStore.getState().productPreviewUrl) {
+      setProductPreviewUrl(cutout)
+    }
 
     return () => controller.abort()
   }, [
@@ -203,47 +235,11 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
     setProjectId,
   ])
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      const target = event.target
-      if (
-        target instanceof HTMLElement &&
-        (target.isContentEditable ||
-          target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA" ||
-          target.tagName === "SELECT")
-      ) {
-        return
-      }
-      if (!(event.ctrlKey || event.metaKey) || event.altKey) return
-      const key = event.key.toLowerCase()
-      if (key === "y") {
-        event.preventDefault()
-        redo()
-        return
-      }
-      if (key !== "z") return
-      event.preventDefault()
-      if (event.shiftKey) {
-        redo()
-      } else {
-        undo()
-      }
-    }
-    window.addEventListener("keydown", onKeyDown)
-    return () => window.removeEventListener("keydown", onKeyDown)
-  }, [redo, undo])
-
   const title =
     remoteDesign?.id === projectId
       ? remoteDesign.title
       : (productData?.title ?? `Проект ${projectId}`)
   const isSaving = saving || busyKind === "saving"
-
-  /** Gate Fabric until this projectId is fully hydrated (no cross-project flash). */
-  const surfaceReady =
-    hydrateStatus === "ready" &&
-    (!isSavedDesignId || remoteDesign?.id === projectId)
 
   /** Avoid mounting canvas/prompt until product payload + editor store are ready. */
   const canRenderEditorSurface =
@@ -263,6 +259,8 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
         productPreviewUrl,
         backgroundPreviewUrl,
         softbox,
+        colorGrade,
+        backgroundColorGrade,
       })
       const saved = await saveDesign({
         id:
@@ -280,7 +278,10 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
       })
       setProjectId(saved.id)
       setRemoteDesign({ id: saved.id, title: saved.title })
+      // Remote is source of truth after successful save — drop local drafts.
+      await discardEditorSessionDraft(projectId)
       if (saved.id !== projectId) {
+        await discardEditorSessionDraft(saved.id)
         router.replace(`/editor/${saved.id}`)
       }
       toast.success(t("editor.saved"))
@@ -348,6 +349,13 @@ function EditorWorkspace({ projectId, productData }: EditorWorkspaceProps) {
           >
             <Upload className="size-4" aria-hidden />
           </Button>
+
+          <ExportButton
+            className="hidden h-9 sm:inline-flex"
+            projectTitle={title}
+            variant="editor"
+            disabled={!canRenderEditorSurface}
+          />
 
           <GlassButton
             type="button"

@@ -17,6 +17,10 @@ const BASE: SoftboxSettings = {
   colorTempK: 5500,
   intensity: 100,
   softboxDiffusion: 65,
+  shadowOpacity: 70,
+  shadowBlur: 22,
+  aoForce: 55,
+  autoShadowTint: false,
 }
 
 function mock2dContext(canvas: HTMLCanvasElement) {

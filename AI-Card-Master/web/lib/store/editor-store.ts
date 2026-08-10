@@ -7,19 +7,37 @@ import {
   DEFAULT_PRODUCT_CUTOUT,
   defaultSelectedLayerId,
   FEATURE_CHIP_BG_PRESETS,
+  syncCanvasDimensions,
 } from "@/lib/constants/mock-editor"
 import {
   DEFAULT_CHIP_AUTO_APPEARANCE,
   type ChipAutoAppearance,
 } from "@/lib/editor/extract-bg-colors"
 import {
+  DEFAULT_ARTBOARD_FORMAT_ID,
+  DEFAULT_ARTBOARD_HEIGHT,
+  DEFAULT_ARTBOARD_WIDTH,
+  getArtboardPreset,
+  smartScalePages,
+  type ArtboardFormatId,
+} from "@/lib/editor/format-presets"
+import {
   clampPackSize,
   PRESET_PACK_SIZES,
   type PackSize,
 } from "@/lib/export/card-pack"
+import { applyTreeOrder } from "@/lib/editor/layer-meta"
+import type {
+  SafeZoneMask,
+  SafeZoneWarning,
+} from "@/lib/editor/safe-zones"
 import type { CanvasLayer } from "@/types/canvas"
 
+export type { ArtboardFormatId }
+export type ExportScale = 1 | 2 | 3
+
 export type EditorZoomMode = "50" | "100" | "fit"
+export type { SafeZoneMask, SafeZoneWarning }
 
 export const PACK_SIZE_OPTIONS: PackSize[] = PRESET_PACK_SIZES
 
@@ -47,10 +65,43 @@ export type SoftboxSettings = {
   lightElevation: number
   /** Color temperature in Kelvin (2700 warm – 6500 cold). */
   colorTempK: number
-  /** Intensity as percent 0–200 (API multiplier ×100). */
+  /** Softbox wash intensity as percent 0–200 (API multiplier ×100). */
   intensity: number
-  /** Softbox diffusion / shadow softness 0–100%. */
+  /** Softbox wash diffusion 0–100%. */
   softboxDiffusion: number
+  /** Dual-shadow layer opacity 0–100%. */
+  shadowOpacity: number
+  /** Cast projection blur in px (0–100), baked via ctx.filter. */
+  shadowBlur: number
+  /** Contact / AO force under the product base 0–100%. */
+  aoForce: number
+  /** Sample darkest background pixel for shadow tint (mixed with dark tone). */
+  autoShadowTint: boolean
+}
+
+/** Client-side Fabric Image.filters grade for the product cutout. */
+export type ProductColorGrade = {
+  /** Brightness −1…1. */
+  brightness: number
+  /** Contrast −1…1. */
+  contrast: number
+  /** Saturation −1…1. */
+  saturation: number
+  /** Hue rotation −1…1 (Fabric HueRotation radians domain). */
+  hue: number
+  /** Product tint −1 (cold) … 1 (warm), independent of softbox Kelvin. */
+  temperature: number
+  /** Highlights −1…1. */
+  highlights: number
+  /** Shadows −1…1. */
+  shadows: number
+  /** Sharpen convolution amount 0…1. */
+  sharpness: number
+  /** Rim / edge glow to separate dark product from dark bg. */
+  rimEnabled: boolean
+  rimColor: string
+  /** Rim strength 0…100%. */
+  rimStrength: number
 }
 
 type EditorBusyKind = "idle" | "generating" | "saving" | "removing-bg" | "loading-image"
@@ -59,10 +110,15 @@ type EditorSnapshot = {
   pages: CanvasLayer[][]
   activePageIndex: number
   softbox: SoftboxSettings
+  colorGrade: ProductColorGrade
+  backgroundColorGrade: ProductColorGrade
   productPreviewUrl: string | null
   /** AI-generated (or imported) full-bleed background for canvas layer 1. */
   backgroundPreviewUrl: string | null
   packSize: PackSize
+  artboardFormatId: ArtboardFormatId
+  canvasWidth: number
+  canvasHeight: number
 }
 
 type EditorHistory = {
@@ -70,8 +126,19 @@ type EditorHistory = {
   future: EditorSnapshot[]
 }
 
-export type EditorProjectState = EditorSnapshot & {
+export type EditorProjectState = {
   projectId: string
+  pages: CanvasLayer[][]
+  activePageIndex: number
+  softbox: SoftboxSettings
+  colorGrade: ProductColorGrade
+  backgroundColorGrade?: ProductColorGrade
+  productPreviewUrl: string | null
+  backgroundPreviewUrl: string | null
+  packSize: PackSize
+  artboardFormatId?: ArtboardFormatId
+  canvasWidth?: number
+  canvasHeight?: number
 }
 
 const HISTORY_LIMIT = 50
@@ -93,10 +160,24 @@ function snapshotOf(state: EditorSnapshot): EditorSnapshot {
     pages: clonePages(state.pages),
     activePageIndex: state.activePageIndex,
     softbox: { ...state.softbox },
+    colorGrade: { ...state.colorGrade },
+    backgroundColorGrade: { ...state.backgroundColorGrade },
     productPreviewUrl: state.productPreviewUrl,
     backgroundPreviewUrl: state.backgroundPreviewUrl,
     packSize: state.packSize,
+    artboardFormatId: state.artboardFormatId,
+    canvasWidth: state.canvasWidth,
+    canvasHeight: state.canvasHeight,
   }
+}
+
+function applyArtboardDimensions(
+  width: number,
+  height: number,
+  formatId: ArtboardFormatId
+): void {
+  syncCanvasDimensions(width, height)
+  void formatId
 }
 
 function pushPast(
@@ -172,7 +253,15 @@ type EditorState = {
    */
   toolsPanelFocus: { field: "badgeLabel"; nonce: number } | null
   zoomMode: EditorZoomMode
+  /** Marketplace UI safe-zone mask over the artboard (UI-only, not in undo). */
+  safeZoneMask: SafeZoneMask
+  /** Live AABB overlap warnings for the selected text/badge vs the active mask. */
+  safeZoneWarnings: SafeZoneWarning[]
   softbox: SoftboxSettings
+  /** Fabric filters grade for the product PNG cutout. */
+  colorGrade: ProductColorGrade
+  /** Fabric filters grade for the AI/imported background image. */
+  backgroundColorGrade: ProductColorGrade
   /** Local product preview (blob / CDN URL) shown on canvas. */
   productPreviewUrl: string | null
   /** AI / studio background image under the product cutout (layer 1). */
@@ -192,6 +281,14 @@ type EditorState = {
   productMeta: EditorProductMeta
   /** How many photos to generate in the card pack (1–20). */
   packSize: PackSize
+  /** Active marketplace artboard preset. */
+  artboardFormatId: ArtboardFormatId
+  /** Live artboard width in CSS/export pixels. */
+  canvasWidth: number
+  /** Live artboard height in CSS/export pixels. */
+  canvasHeight: number
+  /** Client-side ZIP / PNG export multiplier (1× / 2× / 3×). */
+  exportScale: ExportScale
   busyKind: EditorBusyKind
   /** 0–100 while generating; null when idle / indeterminate. */
   busyProgress: number | null
@@ -209,6 +306,14 @@ type EditorState = {
   /** Focus a tools-panel input (badge label). */
   requestToolsPanelFocus: (field: "badgeLabel") => void
   setZoomMode: (mode: EditorZoomMode) => void
+  setSafeZoneMask: (mask: SafeZoneMask) => void
+  setSafeZoneWarnings: (warnings: SafeZoneWarning[]) => void
+  /**
+   * Switch marketplace format: resize artboard + smart-scale layers so
+   * backgrounds/elements stay proportional.
+   */
+  setArtboardFormat: (formatId: ArtboardFormatId) => void
+  setExportScale: (scale: ExportScale) => void
   updateLayer: (id: string, patch: Partial<CanvasLayer>) => void
   replaceActivePage: (layers: CanvasLayer[]) => void
   /**
@@ -222,7 +327,14 @@ type EditorState = {
   }) => void
   addLayer: (layer: CanvasLayer) => void
   removeLayer: (id: string) => void
+  /**
+   * Reorder layers from a top→bottom id list (Layer Tree DnD).
+   * Background is forced to zIndex 0 and cannot rise above other layers.
+   */
+  reorderLayers: (orderedIdsTopFirst: string[]) => void
   setSoftbox: (patch: Partial<SoftboxSettings>) => void
+  setColorGrade: (patch: Partial<ProductColorGrade>) => void
+  setBackgroundColorGrade: (patch: Partial<ProductColorGrade>) => void
   setProductPreviewUrl: (url: string | null) => void
   setBackgroundPreviewUrl: (url: string | null) => void
   /** Replace chip color presets + auto appearance (from bg extraction). */
@@ -274,6 +386,40 @@ export const DEFAULT_SOFTBOX: SoftboxSettings = {
   colorTempK: 5500,
   intensity: 100,
   softboxDiffusion: 65,
+  shadowOpacity: 70,
+  shadowBlur: 22,
+  aoForce: 55,
+  autoShadowTint: false,
+}
+
+export const DEFAULT_COLOR_GRADE: ProductColorGrade = {
+  brightness: 0,
+  contrast: 0,
+  saturation: 0,
+  hue: 0,
+  temperature: 0,
+  highlights: 0,
+  shadows: 0,
+  sharpness: 0,
+  rimEnabled: true,
+  rimColor: "#f5f7fb",
+  rimStrength: 0,
+}
+
+function colorGradesEqual(left: ProductColorGrade, right: ProductColorGrade): boolean {
+  return (
+    left.brightness === right.brightness &&
+    left.contrast === right.contrast &&
+    left.saturation === right.saturation &&
+    left.hue === right.hue &&
+    left.temperature === right.temperature &&
+    left.highlights === right.highlights &&
+    left.shadows === right.shadows &&
+    left.sharpness === right.sharpness &&
+    left.rimEnabled === right.rimEnabled &&
+    left.rimColor === right.rimColor &&
+    left.rimStrength === right.rimStrength
+  )
 }
 
 const INITIAL_PACK_SIZE: PackSize = 5
@@ -289,7 +435,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   flashLayerId: null,
   toolsPanelFocus: null,
   zoomMode: "fit",
+  safeZoneMask: "off",
+  safeZoneWarnings: [],
   softbox: DEFAULT_SOFTBOX,
+  colorGrade: { ...DEFAULT_COLOR_GRADE },
+  backgroundColorGrade: { ...DEFAULT_COLOR_GRADE, rimEnabled: false },
   productPreviewUrl: DEFAULT_PRODUCT_CUTOUT,
   backgroundPreviewUrl: null,
   chipBgPresets: [...FEATURE_CHIP_BG_PRESETS],
@@ -298,6 +448,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   importGalleryUrls: [],
   productMeta: { ...EMPTY_PRODUCT_META },
   packSize: INITIAL_PACK_SIZE,
+  artboardFormatId: DEFAULT_ARTBOARD_FORMAT_ID,
+  canvasWidth: DEFAULT_ARTBOARD_WIDTH,
+  canvasHeight: DEFAULT_ARTBOARD_HEIGHT,
+  exportScale: 2,
   busyKind: "idle",
   busyProgress: null,
   aiStudioBusy: false,
@@ -314,6 +468,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       Math.max(0, pages.length - 1)
     )
     const layers = pages[activePageIndex] ?? []
+    const formatId = project.artboardFormatId ?? DEFAULT_ARTBOARD_FORMAT_ID
+    const preset = getArtboardPreset(formatId)
+    const canvasWidth = project.canvasWidth ?? preset.width
+    const canvasHeight = project.canvasHeight ?? preset.height
+    applyArtboardDimensions(canvasWidth, canvasHeight, formatId)
     set((state) => ({
       projectId: project.projectId,
       pages,
@@ -321,12 +480,21 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       layers,
       selectedLayerId: defaultSelectedLayerId(layers),
       flashLayerId: null,
-      softbox: { ...project.softbox },
+      softbox: { ...DEFAULT_SOFTBOX, ...project.softbox },
+      colorGrade: { ...(project.colorGrade ?? DEFAULT_COLOR_GRADE) },
+      backgroundColorGrade: {
+        ...DEFAULT_COLOR_GRADE,
+        rimEnabled: false,
+        ...(project.backgroundColorGrade ?? {}),
+      },
       productPreviewUrl: project.productPreviewUrl,
       backgroundPreviewUrl: project.backgroundPreviewUrl ?? null,
       importGalleryUrls: [],
       productMeta: { ...EMPTY_PRODUCT_META },
       packSize,
+      artboardFormatId: formatId,
+      canvasWidth,
+      canvasHeight,
       // Force Fabric scene rebuild even if layer ids collide with prior project.
       generationEpoch: state.generationEpoch + 1,
       busyKind: "idle",
@@ -373,20 +541,68 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       },
     })),
   setZoomMode: (mode) => set({ zoomMode: mode }),
+  setSafeZoneMask: (mask) =>
+    set({
+      safeZoneMask: mask,
+      safeZoneWarnings: [],
+    }),
+  setSafeZoneWarnings: (warnings) => set({ safeZoneWarnings: warnings }),
+  setArtboardFormat: (formatId) =>
+    set((state) => {
+      if (state.artboardFormatId === formatId) return state
+      const preset = getArtboardPreset(formatId)
+      const from = { width: state.canvasWidth, height: state.canvasHeight }
+      const to = { width: preset.width, height: preset.height }
+      const synced = syncActivePage(
+        state.pages,
+        state.activePageIndex,
+        state.layers
+      )
+      const pages = smartScalePages(synced, from, to)
+      const layers = pages[state.activePageIndex] ?? []
+      applyArtboardDimensions(preset.width, preset.height, formatId)
+      const history = pushPast(state.history, snapshotOf(state))
+      return {
+        artboardFormatId: formatId,
+        canvasWidth: preset.width,
+        canvasHeight: preset.height,
+        pages,
+        layers,
+        selectedLayerId:
+          state.selectedLayerId &&
+          layers.some((layer) => layer.id === state.selectedLayerId)
+            ? state.selectedLayerId
+            : defaultSelectedLayerId(layers),
+        safeZoneMask: preset.safeZone,
+        safeZoneWarnings: [],
+        generationEpoch: state.generationEpoch + 1,
+        history,
+        canUndo: true,
+        canRedo: false,
+      }
+    }),
+  setExportScale: (scale) =>
+    set({
+      exportScale: scale === 3 ? 3 : scale === 1 ? 1 : 2,
+    }),
   updateLayer: (id, patch) =>
     set((state) => {
       const layers = state.layers.map((layer) => {
         if (layer.id !== id) return layer
+        const nextPatch =
+          layer.type === "background"
+            ? { ...patch, locked: true, zIndex: 0 }
+            : patch
         return {
           ...layer,
-          ...patch,
+          ...nextPatch,
           textStyle:
-            patch.textStyle !== undefined
-              ? { ...layer.textStyle, ...patch.textStyle }
+            nextPatch.textStyle !== undefined
+              ? { ...layer.textStyle, ...nextPatch.textStyle }
               : layer.textStyle,
           chip:
-            patch.chip !== undefined
-              ? { ...layer.chip, ...patch.chip }
+            nextPatch.chip !== undefined
+              ? { ...layer.chip, ...nextPatch.chip }
               : layer.chip,
         }
       })
@@ -443,14 +659,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   addLayer: (layer) =>
     set((state) => {
       const layers = [...state.layers, layer]
-      const history = pushPast(state.history, snapshotOf(state))
+      const history = state.historyTransaction
+        ? state.history
+        : pushPast(state.history, snapshotOf(state))
       return {
         layers,
         pages: syncActivePage(state.pages, state.activePageIndex, layers),
         selectedLayerId: layer.id,
         history,
-        canUndo: true,
-        canRedo: false,
+        canUndo: history.past.length > 0,
+        canRedo: state.historyTransaction ? state.canRedo : false,
       }
     }),
   removeLayer: (id) =>
@@ -462,13 +680,37 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         state.selectedLayerId === id
           ? defaultSelectedLayerId(layers)
           : state.selectedLayerId
-      const history = pushPast(state.history, snapshotOf(state))
+      const history = state.historyTransaction
+        ? state.history
+        : pushPast(state.history, snapshotOf(state))
       return {
         layers,
         pages: syncActivePage(state.pages, state.activePageIndex, layers),
         selectedLayerId,
         flashLayerId:
           state.flashLayerId === id ? null : state.flashLayerId,
+        history,
+        canUndo: history.past.length > 0,
+        canRedo: state.historyTransaction ? state.canRedo : false,
+      }
+    }),
+  reorderLayers: (orderedIdsTopFirst) =>
+    set((state) => {
+      const layers = applyTreeOrder(state.layers, orderedIdsTopFirst)
+      const unchanged = layers.every((layer, index) => {
+        const prev = state.layers[index]
+        return (
+          prev &&
+          prev.id === layer.id &&
+          prev.zIndex === layer.zIndex &&
+          prev.locked === layer.locked
+        )
+      })
+      if (unchanged && layers.length === state.layers.length) return state
+      const history = pushPast(state.history, snapshotOf(state))
+      return {
+        layers,
+        pages: syncActivePage(state.pages, state.activePageIndex, layers),
         history,
         canUndo: true,
         canRedo: false,
@@ -483,7 +725,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         next.lightElevation === state.softbox.lightElevation &&
         next.colorTempK === state.softbox.colorTempK &&
         next.intensity === state.softbox.intensity &&
-        next.softboxDiffusion === state.softbox.softboxDiffusion
+        next.softboxDiffusion === state.softbox.softboxDiffusion &&
+        next.shadowOpacity === state.softbox.shadowOpacity &&
+        next.shadowBlur === state.softbox.shadowBlur &&
+        next.aoForce === state.softbox.aoForce &&
+        next.autoShadowTint === state.softbox.autoShadowTint
       ) {
         return state
       }
@@ -492,6 +738,38 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         : pushPast(state.history, snapshotOf(state))
       return {
         softbox: next,
+        history,
+        canUndo: history.past.length > 0,
+        canRedo: state.historyTransaction ? state.canRedo : false,
+      }
+    }),
+  setColorGrade: (patch) =>
+    set((state) => {
+      const next = { ...state.colorGrade, ...patch }
+      if (colorGradesEqual(next, state.colorGrade)) {
+        return state
+      }
+      const history = state.historyTransaction
+        ? state.history
+        : pushPast(state.history, snapshotOf(state))
+      return {
+        colorGrade: next,
+        history,
+        canUndo: history.past.length > 0,
+        canRedo: state.historyTransaction ? state.canRedo : false,
+      }
+    }),
+  setBackgroundColorGrade: (patch) =>
+    set((state) => {
+      const next = { ...state.backgroundColorGrade, ...patch }
+      if (colorGradesEqual(next, state.backgroundColorGrade)) {
+        return state
+      }
+      const history = state.historyTransaction
+        ? state.history
+        : pushPast(state.history, snapshotOf(state))
+      return {
+        backgroundColorGrade: next,
         history,
         canUndo: history.past.length > 0,
         canRedo: state.historyTransaction ? state.canRedo : false,
@@ -731,6 +1009,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         Math.max(0, pages.length - 1)
       )
       const layers = pages[activePageIndex] ?? []
+      applyArtboardDimensions(
+        previous.canvasWidth,
+        previous.canvasHeight,
+        previous.artboardFormatId
+      )
       const history: EditorHistory = {
         past: state.history.past.slice(0, -1),
         future: [current, ...state.history.future].slice(0, HISTORY_LIMIT),
@@ -742,9 +1025,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         selectedLayerId: defaultSelectedLayerId(layers),
         flashLayerId: null,
         softbox: { ...previous.softbox },
+        colorGrade: { ...previous.colorGrade },
+        backgroundColorGrade: { ...previous.backgroundColorGrade },
         productPreviewUrl: previous.productPreviewUrl,
         backgroundPreviewUrl: previous.backgroundPreviewUrl,
         packSize: previous.packSize,
+        artboardFormatId: previous.artboardFormatId,
+        canvasWidth: previous.canvasWidth,
+        canvasHeight: previous.canvasHeight,
+        generationEpoch: state.generationEpoch + 1,
         history,
         historyTransaction: null,
         canUndo: history.past.length > 0,
@@ -762,6 +1051,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         Math.max(0, pages.length - 1)
       )
       const layers = pages[activePageIndex] ?? []
+      applyArtboardDimensions(
+        next.canvasWidth,
+        next.canvasHeight,
+        next.artboardFormatId
+      )
       const history: EditorHistory = {
         past: [...state.history.past, current].slice(-HISTORY_LIMIT),
         future: state.history.future.slice(1),
@@ -773,9 +1067,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         selectedLayerId: defaultSelectedLayerId(layers),
         flashLayerId: null,
         softbox: { ...next.softbox },
+        colorGrade: { ...next.colorGrade },
+        backgroundColorGrade: { ...next.backgroundColorGrade },
         productPreviewUrl: next.productPreviewUrl,
         backgroundPreviewUrl: next.backgroundPreviewUrl,
         packSize: next.packSize,
+        artboardFormatId: next.artboardFormatId,
+        canvasWidth: next.canvasWidth,
+        canvasHeight: next.canvasHeight,
+        generationEpoch: state.generationEpoch + 1,
         history,
         historyTransaction: null,
         canUndo: true,
@@ -792,6 +1092,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       ? Array.from({ length: INITIAL_PACK_SIZE }, () => [] as CanvasLayer[])
       : buildDefaultPackPages(INITIAL_PACK_SIZE)
     const layers = pages[0] ?? []
+    applyArtboardDimensions(
+      DEFAULT_ARTBOARD_WIDTH,
+      DEFAULT_ARTBOARD_HEIGHT,
+      DEFAULT_ARTBOARD_FORMAT_ID
+    )
     set((state) => ({
       pages,
       activePageIndex: 0,
@@ -799,7 +1104,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       selectedLayerId: blank ? null : defaultSelectedLayerId(layers),
       flashLayerId: null,
       zoomMode: "fit",
+      safeZoneMask: "off",
+      safeZoneWarnings: [],
       softbox: DEFAULT_SOFTBOX,
+      colorGrade: { ...DEFAULT_COLOR_GRADE },
+      backgroundColorGrade: { ...DEFAULT_COLOR_GRADE, rimEnabled: false },
       productPreviewUrl: blank ? null : DEFAULT_PRODUCT_CUTOUT,
       backgroundPreviewUrl: null,
       chipBgPresets: [...FEATURE_CHIP_BG_PRESETS],
@@ -809,6 +1118,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       importGalleryUrls: [],
       productMeta: { ...EMPTY_PRODUCT_META },
       packSize: INITIAL_PACK_SIZE,
+      artboardFormatId: DEFAULT_ARTBOARD_FORMAT_ID,
+      canvasWidth: DEFAULT_ARTBOARD_WIDTH,
+      canvasHeight: DEFAULT_ARTBOARD_HEIGHT,
+      exportScale: 2,
       busyKind: "idle",
       busyProgress: null,
       aiStudioBusy: false,

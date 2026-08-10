@@ -1,15 +1,8 @@
-/** Trigger a browser file download from a Blob. */
+import { saveAs } from "file-saver"
+
+/** Trigger a browser file download from a Blob (FileSaver.js). */
 function downloadBlob(blob: Blob, filename: string): void {
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement("a")
-  anchor.href = url
-  anchor.download = filename
-  anchor.rel = "noopener"
-  document.body.appendChild(anchor)
-  anchor.click()
-  anchor.remove()
-  // Delay revoke so Chromium finishes the download handshake.
-  window.setTimeout(() => URL.revokeObjectURL(url), 2_000)
+  saveAs(blob, filename)
 }
 
 const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] as const

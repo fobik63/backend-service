@@ -107,6 +107,8 @@ export function addBadgeToCanvas(opts: {
   subtitle?: string
   textColor?: string
   blur?: number
+  strokeColor?: string
+  strokeWidth?: number
 }): { label: string; created: boolean } {
   const existing = findExistingBadge(opts.label)
   if (existing) {
@@ -143,6 +145,8 @@ export function addBadgeToCanvas(opts: {
       subtitle: opts.subtitle,
       textColor: opts.textColor,
       blur,
+      strokeColor: opts.strokeColor,
+      strokeWidth: opts.strokeWidth,
     },
   })
 

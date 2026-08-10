@@ -70,23 +70,9 @@ export const MOCK_SEO_RESULT: MockSeoResult = {
     "результат ухода без тяжёлых отдушек и ощущения липкости на коже.",
 }
 
-/** Deep-cloned editor layers: product cutout + SEO-style title/subtitle + feature badges. */
+/** Deep-cloned clean editor layers: background + product cutout only. */
 export function getMockGenerateLayers(): CanvasLayer[] {
-  return structuredClone(MOCK_EDITOR_LAYERS).map((layer) => {
-    if (layer.id === "layer_title") {
-      return {
-        ...layer,
-        text: "Sage Mist",
-      }
-    }
-    if (layer.id === "layer_subtitle") {
-      return {
-        ...layer,
-        text: "Крем для рук · SEO-карточка",
-      }
-    }
-    return layer
-  })
+  return structuredClone(MOCK_EDITOR_LAYERS)
 }
 
 export function delay(ms: number): Promise<void> {
