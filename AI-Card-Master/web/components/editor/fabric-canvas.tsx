@@ -11,6 +11,7 @@ import {
   Line,
   Rect,
   Shadow,
+  Textbox,
   config as fabricConfig,
   initFilterBackend,
   type FabricObjectProps,
@@ -103,6 +104,81 @@ type EngineObject = FabricObject & {
 
 /** Author chip geometry at 3×; place on canvas via scaleX/Y so vectors stay sharp when shrunk. */
 const CHIP_SOURCE_SCALE = 3
+/** Visual margin before the canvas right edge (logical canvas px). */
+const CHIP_CANVAS_EDGE_MARGIN = 24
+
+/**
+ * Max Textbox width in chip source coords: grow with typing until the plate
+ * would hit the canvas right edge (or a sane floor for off-canvas groups).
+ */
+function chipTextWidthBarrier(args: {
+  hi: number
+  padX: number
+  iconSize: number
+  gap: number
+  groupLeft: number
+  groupScaleX: number
+}): number {
+  const chrome = args.padX * 2 + args.iconSize + args.gap
+  const groupScale = Math.max(0.01, args.groupScaleX)
+  const maxPlateVisual = Math.max(
+    160,
+    CANVAS_WIDTH - args.groupLeft - CHIP_CANVAS_EDGE_MARGIN
+  )
+  const maxPlateSource = maxPlateVisual / groupScale
+  // Keep enough room for a few glyphs even if the badge sits near the right edge.
+  return Math.max(120 * args.hi, maxPlateSource - chrome)
+}
+
+/**
+ * Fit Textbox to content width, wrap only after the barrier.
+ * Uses word wrap by default; grapheme split only when a run exceeds the barrier
+ * (otherwise Fabric wraps the last letter onto a second line — orphan glyph bug).
+ */
+function fitChipTextboxWidth(text: Textbox, maxTextWidth: number): number {
+  const minW = Math.max(20, text.minWidth || 20)
+  const raw = text.text ?? ""
+  const hasExplicitNewline = /\r?\n/.test(raw)
+  // Safety pad: width === calcTextWidth() makes Fabric wrap the last glyph.
+  const pad = Math.max(4, Math.ceil((text.fontSize || 16) * 0.12))
+
+  // Measure natural width without wrapping.
+  text.set({ width: Math.max(maxTextWidth, 1e5), splitByGrapheme: false })
+  if (typeof text.initDimensions === "function") text.initDimensions()
+  const natural = Math.ceil(text.calcTextWidth() || minW)
+
+  // Character wrap only when content cannot fit the canvas barrier in one run.
+  const needsGraphemeSplit = natural > maxTextWidth
+  let nextW = Math.min(Math.max(natural + pad, minW), maxTextWidth)
+
+  text.set({
+    width: nextW,
+    splitByGrapheme: needsGraphemeSplit,
+  })
+  ;(text as Textbox & { breakWords?: boolean }).breakWords = true
+  if (typeof text.initDimensions === "function") text.initDimensions()
+
+  // Kill phantom orphan wraps on single-line labels (width still slightly short).
+  if (!hasExplicitNewline && !needsGraphemeSplit) {
+    let guard = 0
+    while (
+      (text.textLines?.length ?? 1) > 1 &&
+      nextW < maxTextWidth &&
+      guard < 12
+    ) {
+      nextW = Math.min(nextW + pad, maxTextWidth)
+      text.set({ width: nextW, splitByGrapheme: false })
+      if (typeof text.initDimensions === "function") text.initDimensions()
+      guard += 1
+    }
+  }
+
+  return nextW
+}
+
+function isChipTextObjectType(type: string | undefined): boolean {
+  return type === "textbox" || type === "i-text"
+}
 
 const GUIDE_STROKE = "rgba(94, 184, 255, 0.92)"
 const GUIDE_STROKE_WIDTH = 1
@@ -562,14 +638,95 @@ function bringEngineObjectToFront(
 /**
  * Badge IText metrics are wrong if next/font faces are still loading — groups land
  * in the scene but stay invisible until a settings tweak re-layouts them.
+ * `document.fonts.ready` alone is not enough: next/font faces may still be idle
+ * until explicitly requested via `fonts.load` for the canvas-measured sizes.
  */
 async function awaitDocumentFontsReady(): Promise<void> {
   if (typeof document === "undefined" || !document.fonts?.ready) return
   try {
     await document.fonts.ready
+    const family = resolveFabricFontFamily("Inter")
+    const hi = CHIP_SOURCE_SCALE
+    await Promise.all([
+      document.fonts.load(`600 ${16 * hi}px ${family}`),
+      document.fonts.load(`600 ${18 * hi}px ${family}`),
+      document.fonts.load(`400 ${Math.max(11 * hi, 16 * hi * 0.72)}px ${family}`),
+    ])
   } catch {
     // Font readiness can reject in rare environments; paint with fallbacks.
   }
+}
+
+function isBadgeGroupObject(obj: FabricObject): boolean {
+  return (
+    obj instanceof Group && (obj as EngineObject).chipSourceScale != null
+  )
+}
+
+/** True when store has visible chips/text that are missing from Fabric. */
+function canvasMissingInfographicLayers(
+  canvas: FabricCanvas,
+  layers: CanvasLayer[]
+): boolean {
+  for (const layer of layers) {
+    if (!layer.visible || layer.type === "background") continue
+    if (layer.type === "image" || layer.id === "layer_product") continue
+    if (layer.type === "text" || (layer.type === "shape" && layer.chip)) {
+      if (!findByLayerId(canvas, layer.id)) return true
+    }
+  }
+  return false
+}
+
+/**
+ * Commit pre-built badge Groups onto the canvas ONLY after fonts are paint-ready.
+ * Forces dirty/coords + deferred renderAll so hydrate paint sticks on first entry.
+ */
+async function commitBadgeGroupsToCanvas(
+  canvas: FabricCanvas,
+  badges: FabricObject[]
+): Promise<void> {
+  if (badges.length === 0) return
+
+  await awaitDocumentFontsReady()
+  if (!isFabricCanvasAlive(canvas)) return
+
+  for (const badgeGroup of badges) {
+    if (badgeGroup instanceof Group) {
+      for (const child of badgeGroup.getObjects()) {
+        if (isChipTextObjectType(child.type)) {
+          const text = child as Textbox
+          if (typeof text.initDimensions === "function") {
+            text.initDimensions()
+          }
+        }
+        child.set({ dirty: true })
+        child.setCoords()
+      }
+    }
+    badgeGroup.set({ dirty: true })
+    badgeGroup.setCoords()
+    canvas.add(badgeGroup)
+    bringEngineObjectToFront(canvas, badgeGroup)
+  }
+
+  // Layout after fonts.load — glyph metrics are stable; skip if group already correct.
+  for (const badgeGroup of badges) {
+    if (!isBadgeGroupObject(badgeGroup)) continue
+    updateBadgeLayout(badgeGroup as Group)
+  }
+
+  canvas.calcOffset()
+  canvas.requestRenderAll()
+
+  window.setTimeout(() => {
+    if (!isFabricCanvasAlive(canvas)) return
+    canvas.forEachObject((obj) => {
+      obj.set({ dirty: true })
+      obj.setCoords()
+    })
+    canvas.renderAll()
+  }, 200)
 }
 
 /**
@@ -1096,7 +1253,7 @@ function buildTextObject(layer: CanvasLayer): IText {
 }
 
 async function buildChipObject(layer: CanvasLayer): Promise<Group> {
-  // Wait for document fonts + vector icon decode before measuring IText / Group.
+  // Wait for document fonts + vector icon decode before measuring Textbox / Group.
   await awaitDocumentFontsReady()
 
   const chip = layer.chip!
@@ -1139,10 +1296,20 @@ async function buildChipObject(layer: CanvasLayer): Promise<Group> {
 
   const chipFont = resolveFabricFontFamily("Inter")
   const textLocked = Boolean(layer.locked)
+  const placeScale = defs.scale / hi
+  const groupLeft = pctToPx(defs.x, CANVAS_WIDTH)
+  const maxTextWidth = chipTextWidthBarrier({
+    hi,
+    padX,
+    iconSize,
+    gap,
+    groupLeft,
+    groupScaleX: placeScale,
+  })
   // Text uses left/top origin — center origin shifts the edit selection frame.
   // Vertical centering is done via top offsets, not originY: "center".
-  // Nested IText is interactive (subTargetCheck) so dblclick can enterEditing.
-  const label = new IText(chip.label, {
+  // Nested Textbox is interactive (subTargetCheck) so dblclick can enterEditing.
+  const label = new Textbox(chip.label, {
     left: padX + iconSize + gap,
     top: 0,
     originX: "left",
@@ -1159,20 +1326,22 @@ async function buildChipObject(layer: CanvasLayer): Promise<Group> {
     lockMovementX: true,
     lockMovementY: true,
     objectCaching: false,
+    width: maxTextWidth,
+    splitByGrapheme: false,
   })
   ;(label as EngineObject).chipPart = "label"
   ;(label as EngineObject).layerId = layer.id
   ;(label as EngineObject).layerRole = "infographic"
+  fitChipTextboxWidth(label, maxTextWidth)
 
   // Subtitle grows downward only — never upward into the title.
   const textStackGap = 5 * hi
   const subtitle = chip.subtitle
-    ? new IText(chip.subtitle, {
+    ? new Textbox(chip.subtitle, {
         left: padX + iconSize + gap,
         top: 0,
         originX: "left",
         originY: "top",
-        splitByGrapheme: true,
         padding: 0,
         fontFamily: chipFont,
         fontSize: Math.max(11 * hi, labelSize * 0.72),
@@ -1186,20 +1355,23 @@ async function buildChipObject(layer: CanvasLayer): Promise<Group> {
         lockMovementX: true,
         lockMovementY: true,
         objectCaching: false,
+        width: maxTextWidth,
+        splitByGrapheme: false,
       })
     : null
   if (subtitle) {
     ;(subtitle as EngineObject).chipPart = "subtitle"
     ;(subtitle as EngineObject).layerId = layer.id
     ;(subtitle as EngineObject).layerRole = "infographic"
+    fitChipTextboxWidth(subtitle, maxTextWidth)
   }
 
   await Promise.resolve()
-  if (typeof label.initDimensions === "function") label.initDimensions()
-  if (subtitle && typeof subtitle.initDimensions === "function") {
-    subtitle.initDimensions()
-  }
 
+  // Stack from the top of the plate so Enter expands downward only.
+  // Fit width first (content → canvas barrier), then measure height for the plate.
+  const labelW = fitChipTextboxWidth(label, maxTextWidth)
+  const subtitleW = subtitle ? fitChipTextboxWidth(subtitle, maxTextWidth) : 0
   const labelH = label.height ?? labelSize
   const subtitleH = subtitle
     ? (subtitle.height ?? Math.max(11 * hi, labelSize * 0.72))
@@ -1209,18 +1381,18 @@ async function buildChipObject(layer: CanvasLayer): Promise<Group> {
   const boxH = contentH + padY * 2
   const contentTop = -boxH / 2 + padY
 
-  // Stack from the top of the plate so Enter expands downward only.
-  label.set({ originY: "top", top: contentTop })
+  label.set({ originY: "top", top: contentTop, width: labelW })
   if (chip.subtitle && subtitle) {
     const titleTop = label.top ?? contentTop
     subtitle.set({
       originY: "top",
-      splitByGrapheme: true,
       top: titleTop + labelH + textStackGap,
+      width: subtitleW,
     })
   }
 
-  const contentW = Math.max(label.width ?? 80 * hi, subtitle?.width ?? 0)
+  // Plate tracks text width; wraps (and grows down) only at the canvas barrier.
+  const contentW = Math.min(maxTextWidth, Math.max(labelW, subtitleW, 80 * hi))
   const boxW = padX + iconSize + gap + contentW + padX
 
   const bg = new Rect({
@@ -1242,9 +1414,8 @@ async function buildChipObject(layer: CanvasLayer): Promise<Group> {
   const children: FabricObject[] = [bg, icon, label]
   if (subtitle) children.push(subtitle)
 
-  const placeScale = defs.scale / hi
   const group = new Group(children, {
-    left: pctToPx(defs.x, CANVAS_WIDTH),
+    left: groupLeft,
     top: pctToPx(defs.y, CANVAS_HEIGHT),
     originX: "left",
     originY: "top",
@@ -1256,7 +1427,7 @@ async function buildChipObject(layer: CanvasLayer): Promise<Group> {
     evented: !layer.locked,
     hasControls: true,
     lockScalingFlip: true,
-    // Allow targeting nested IText for on-canvas label editing.
+    // Allow targeting nested Textbox for on-canvas label editing.
     subTargetCheck: true,
     interactive: true,
     objectCaching: false,
@@ -1282,8 +1453,8 @@ function chipGroupOf(obj: FabricObject): Group | null {
   return parent instanceof Group ? parent : null
 }
 
-function isChipTextPart(obj: FabricObject | undefined): obj is IText & EngineObject {
-  if (!obj || obj.type !== "i-text") return false
+function isChipTextPart(obj: FabricObject | undefined): obj is Textbox & EngineObject {
+  if (!obj || !isChipTextObjectType(obj.type)) return false
   const part = (obj as EngineObject).chipPart
   return part === "label" || part === "subtitle"
 }
@@ -1320,27 +1491,31 @@ function updateBadgeLayout(group: Group): void {
   /** Vertical gap between title and subtitle (≈5px logical). */
   const textStackGap = 5 * hi
   const padding = padX * 2 + gap
+  const maxTextWidth = chipTextWidthBarrier({
+    hi,
+    padX,
+    iconSize,
+    gap,
+    groupLeft: absoluteLeft,
+    groupScaleX: group.scaleX ?? 1,
+  })
 
   const children = group.getObjects()
   const bg = children.find((o) => chipPartOf(o, "bg")) as Rect | undefined
   const icon = children.find((o) => chipPartOf(o, "icon"))
   const label = children.find((o) => chipPartOf(o, "label")) as
-    | IText
+    | Textbox
     | undefined
   const subtitle = children.find((o) => chipPartOf(o, "subtitle")) as
-    | IText
+    | Textbox
     | undefined
 
-  // Refresh glyph metrics before measuring (esp. after inline edit / Enter).
-  if (label && typeof label.initDimensions === "function") {
-    label.initDimensions()
-  }
-  if (subtitle && typeof subtitle.initDimensions === "function") {
-    subtitle.initDimensions()
-  }
+  // Grow with content; wrap only after hitting the canvas barrier.
+  const textWidth = label ? fitChipTextboxWidth(label, maxTextWidth) : 80 * hi
+  const subtitleWidth = subtitle
+    ? fitChipTextboxWidth(subtitle, maxTextWidth)
+    : 0
 
-  const textWidth = label?.width ?? 80 * hi
-  const subtitleWidth = subtitle?.width ?? 0
   const iconWidth =
     icon && typeof icon.getScaledWidth === "function"
       ? icon.getScaledWidth()
@@ -1352,7 +1527,7 @@ function updateBadgeLayout(group: Group): void {
   const subtitleH = subtitle
     ? (subtitle.height ?? Math.max(11 * hi, labelSize * 0.72))
     : 0
-  // Plate grows with real text height (multi-line Enter expands downward).
+  // Plate grows with real text height (multi-line wrap / Enter expands downward).
   const contentH = hasSubtitle ? labelH + textStackGap + subtitleH : labelH
   const boxH = contentH + padY * 2
   const contentTop = -boxH / 2 + padY
@@ -1387,6 +1562,7 @@ function updateBadgeLayout(group: Group): void {
       originY: "top",
       left: textLeft,
       top: contentTop,
+      width: textWidth,
     })
     if (hasSubtitle && subtitle) {
       // Hard top-anchor: subtitle always sits under the title, never overlaps it.
@@ -1394,9 +1570,9 @@ function updateBadgeLayout(group: Group): void {
       subtitle.set({
         originX: "left",
         originY: "top",
-        splitByGrapheme: true,
         left: textLeft,
         top: titleTop + labelH + textStackGap,
+        width: subtitleWidth,
       })
     }
   }
@@ -1426,21 +1602,21 @@ function updateBadgeLayout(group: Group): void {
 function applyChipContentInPlace(group: Group, chip: FeatureChipDraft): void {
   const children = group.getObjects()
   const label = children.find((o) => chipPartOf(o, "label")) as
-    | IText
+    | Textbox
     | undefined
   const subtitle = children.find((o) => chipPartOf(o, "subtitle")) as
-    | IText
+    | Textbox
     | undefined
 
   if (label && label.text !== chip.label) {
     // Don't clobber in-progress canvas editing.
-    if (!(label as IText).isEditing) {
+    if (!(label as Textbox).isEditing) {
       label.set("text", chip.label)
     }
   }
   if (subtitle) {
     const next = chip.subtitle ?? ""
-    if (subtitle.text !== next && !(subtitle as IText).isEditing) {
+    if (subtitle.text !== next && !(subtitle as Textbox).isEditing) {
       subtitle.set("text", next)
     }
   }
@@ -1843,7 +2019,7 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
       canvas.requestRenderAll()
     }
 
-    /** Double-click path for nested chip IText inside an interactive Group. */
+    /** Double-click path for nested chip Textbox inside an interactive Group. */
     const enterChipTextEditing = (text: IText) => {
       if (text.isEditing) return
       if ((text as IText & { editable?: boolean }).editable === false) return
@@ -2003,8 +2179,8 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
       if (isChipTextPart(obj)) {
         const group = chipGroupOf(obj)
         if (group) updateBadgeLayout(group)
-        if ((obj as IText).isEditing) {
-          syncTextEditingCoords(canvas, obj as IText)
+        if ((obj as Textbox).isEditing) {
+          syncTextEditingCoords(canvas, obj as Textbox)
         }
         return
       }
@@ -2022,17 +2198,17 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
       })
     }
 
-    // Dblclick: edit standalone text or nested chip IText in place.
+    // Dblclick: edit standalone text or nested chip Textbox in place.
     const onMouseDblClick = (opt: {
       target?: FabricObject
       subTargets?: FabricObject[]
     }) => {
       const direct = opt.target as EngineObject | undefined
-      const fromSub = opt.subTargets?.find((t) => t.type === "i-text") as
-        | IText
-        | undefined
+      const fromSub = opt.subTargets?.find((t) =>
+        isChipTextObjectType(t.type)
+      ) as Textbox | undefined
       const textHit =
-        direct?.type === "i-text" ? (direct as IText) : fromSub ?? null
+        isChipTextObjectType(direct?.type) ? (direct as Textbox) : fromSub ?? null
 
       if (textHit && isChipTextPart(textHit)) {
         const layerId = resolveLayerId(textHit as EngineObject)
@@ -2063,7 +2239,7 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
 
     const onTextEditingEntered = (e: { target?: FabricObject }) => {
       const text = e.target
-      if (!text || text.type !== "i-text") return
+      if (!text || !isChipTextObjectType(text.type)) return
       syncTextEditingCoords(canvas, text as IText)
     }
 
@@ -2078,7 +2254,7 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
       const layer = useEditorStore.getState().layers.find((l) => l.id === layerId)
       if (!layer?.chip) return
 
-      const nextText = (obj as IText).text ?? ""
+      const nextText = (obj as Textbox).text ?? ""
       const nextChip: FeatureChipDraft =
         part === "label"
           ? { ...layer.chip, label: nextText }
@@ -2335,27 +2511,45 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
     }
   }, [ready, productPreviewUrl])
 
-  // Rebuild 3-layer scene when structure changes (not on pure transforms)
+  // Rebuild 3-layer scene when structure changes (not on pure transforms).
+  // CRITICAL: do NOT depend on `layers` directly — syncLayerGeometry during product
+  // fit used to cancel this effect mid-flight; sceneKeyRef was already stamped, so
+  // the retry early-returned and badges never landed on Fabric (store-only ghost).
   useEffect(() => {
     const canvas = fabricRef.current
     if (!canvas || !ready) return
     const buildKey = `${sceneKey}#${rebuildNonce}`
-    // Empty layer stack must still clear leftover Fabric objects.
+    const storeLayers = useEditorStore.getState().layers
+
+    // Skip only when this key was FULLY committed AND every chip/text is on canvas.
     if (
       sceneKeyRef.current === buildKey &&
       canvas.getObjects().length > 0 &&
-      layers.length > 0
+      storeLayers.length > 0 &&
+      !canvasMissingInfographicLayers(canvas, storeLayers)
     ) {
       return
     }
-    sceneKeyRef.current = buildKey
 
     let cancelled = false
     const built: EngineObject[] = []
 
     const rebuild = async () => {
+      // Always read fresh layers — geometry may change without a new sceneKey.
+      const layersNow = useEditorStore.getState().layers
+      const productUrl = useEditorStore.getState().productPreviewUrl
+      const backgroundUrl = useEditorStore.getState().backgroundPreviewUrl
+      /** Defer store writes until after Fabric commit so we never cancel ourselves. */
+      let pendingProductFit: {
+        id: string
+        width: number
+        height: number
+        x: number
+        y: number
+      } | null = null
+
       try {
-        if (layers.length === 0) {
+        if (layersNow.length === 0) {
           if (cancelled) return
           clearChipInlineEditors(canvas)
           canvas.renderOnAddRemove = false
@@ -2365,10 +2559,9 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
           canvas.discardActiveObject()
 
           // Keep product visible even before layers hydrate (UUID design load).
-          const previewUrl = productPreviewUrl
-          if (previewUrl) {
+          if (productUrl) {
             try {
-              const img = await loadImage(previewUrl)
+              const img = await loadImage(productUrl)
               if (cancelled || !isFabricCanvasAlive(fabricRef.current)) return
               const nw = Math.max(1, img.width || 1)
               const nh = Math.max(1, img.height || 1)
@@ -2392,14 +2585,16 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
             }
           }
 
+          if (cancelled || !isFabricCanvasAlive(canvas)) return
           canvas.requestRenderAll()
           syncViewportRef.current()
-          // Force objects + lighting onto the visible surface after empty-stack init.
           forceCanvasVisualSync(canvas)
           setLightingPaintKey((n) => n + 1)
           sceneEpochRef.current += 1
           sceneRecoveriesRef.current = 0
           setSceneError(null)
+          // Stamp only after a finished empty-stack paint.
+          sceneKeyRef.current = buildKey
           const busy = useEditorStore.getState().busyKind
           if (busy === "generating" || busy === "loading-image") {
             setBusyKind("idle")
@@ -2409,7 +2604,7 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
 
         const bg = await buildBackgroundLayer({
           softbox: useEditorStore.getState().softbox,
-          backgroundPreviewUrl,
+          backgroundPreviewUrl: backgroundUrl,
         })
         if (cancelled) {
           disposeBuiltObjects([bg])
@@ -2417,7 +2612,7 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
         }
         built.push(bg)
 
-        const interactive = layers
+        const interactive = layersNow
           .filter((l) => l.visible && l.type !== "background")
           .sort((a, b) => a.zIndex - b.zIndex)
 
@@ -2431,40 +2626,40 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
         )
 
         // 1) Product image MUST finish loading before badges/texts are built.
-        //    Otherwise chips/text land in the scene but stay invisible until
-        //    the next user-driven add triggers a re-layout.
         for (const layer of productLayers) {
           if (cancelled) {
             disposeBuiltObjects(built)
             return
           }
 
-          if (
-            productPreviewUrl &&
-            fittedProductUrlRef.current !== productPreviewUrl
-          ) {
+          let buildLayer = layer
+          if (productUrl && fittedProductUrlRef.current !== productUrl) {
             try {
-              const probe = await loadImage(productPreviewUrl)
+              const probe = await loadImage(productUrl)
               if (cancelled) {
                 disposeBuiltObjects(built)
                 return
               }
-              // Toast photo-add: 80% of artboard height, centered.
               const fitted = fitProductPhotoToArtboard(
                 probe.width || 1,
                 probe.height || 1
               )
-              fittedProductUrlRef.current = productPreviewUrl
-              writingStoreRef.current = true
-              syncLayerGeometry(layer.id, {
+              fittedProductUrlRef.current = productUrl
+              pendingProductFit = {
+                id: layer.id,
                 width: fitted.width,
                 height: fitted.height,
                 x: fitted.x,
                 y: fitted.y,
-              })
-              queueMicrotask(() => {
-                writingStoreRef.current = false
-              })
+              }
+              // Use fitted geometry for this build without touching Zustand yet.
+              buildLayer = {
+                ...layer,
+                width: fitted.width,
+                height: fitted.height,
+                x: fitted.x,
+                y: fitted.y,
+              }
               if (useEditorStore.getState().busyKind === "loading-image") {
                 setBusyKind("idle")
               }
@@ -2473,13 +2668,14 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
                 setBusyKind("idle")
               }
             }
+          } else {
+            buildLayer =
+              useEditorStore.getState().layers.find((l) => l.id === layer.id) ??
+              layer
           }
 
-          const latest =
-            useEditorStore.getState().layers.find((l) => l.id === layer.id) ??
-            layer
-          const product = await safeBuildLayer(latest, (l) =>
-            buildProductObject(l, productPreviewUrl)
+          const product = await safeBuildLayer(buildLayer, (l) =>
+            buildProductObject(l, productUrl)
           )
           if (cancelled) {
             if (product) disposeBuiltObjects([product])
@@ -2536,7 +2732,6 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
         const prevSelected = useEditorStore.getState().selectedLayerId
         canvas.renderOnAddRemove = false
         canvas.clear()
-        // Transparent so CSS SoftboxLightOverlay wash is the live studio light.
         // Fallback gray until objects paint (avoids a black flash mid-rebuild).
         canvas.backgroundColor = "#18181b"
 
@@ -2549,30 +2744,34 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
           const obj = byId.get(layer.id)
           if (obj) ordered.push(obj)
         }
-        // Background is already in `ordered[0]`; drop duplicate if present in built.
         const commitList = ordered.filter(
           (obj, i, arr) => arr.indexOf(obj) === i
         )
 
+        // Split commit: background/product/text first; badges ONLY after fonts+assets.
+        const badgeCommitList: FabricObject[] = []
+        const baseCommitList: FabricObject[] = []
         for (const obj of commitList) {
-          const role = (obj as EngineObject).layerRole
-          const isBadgeOrText =
-            role === "infographic" ||
-            (obj instanceof Group &&
-              (obj as EngineObject).chipSourceScale != null)
-
-          if (isBadgeOrText) {
-            // Force Z + paint after hydrate: dirty/coords before add, then front.
-            obj.set({ dirty: true })
-            obj.setCoords()
-            canvas.add(obj)
-            bringEngineObjectToFront(canvas, obj)
+          if (isBadgeGroupObject(obj)) {
+            badgeCommitList.push(obj)
           } else {
-            canvas.add(obj)
+            baseCommitList.push(obj)
           }
         }
-        // Keep false — interactive frames call requestRenderAll explicitly.
+
+        for (const obj of baseCommitList) {
+          canvas.add(obj)
+          const role = (obj as EngineObject).layerRole
+          if (role === "infographic") {
+            obj.set({ dirty: true })
+            obj.setCoords()
+            bringEngineObjectToFront(canvas, obj)
+          }
+        }
         built.length = 0
+
+        await commitBadgeGroupsToCanvas(canvas, badgeCommitList)
+        if (cancelled || !isFabricCanvasAlive(canvas)) return
 
         const productObj =
           findByLayerId(canvas, "layer_product") ??
@@ -2591,44 +2790,38 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
         } else if (productObj?.selectable) {
           canvas.setActiveObject(productObj)
         }
-        // Softbox wash shows through once objects are on the artboard.
         canvas.backgroundColor = "rgba(0,0,0,0)"
-        // Re-apply Fit / zoom after clear/rebuild (Fabric may reset viewport).
         syncViewportRef.current()
-        // Guaranteed post-hydrate paint: fonts may settle after fromURL/add,
-        // leaving chips in memory but invisible until a manual icon tweak.
-        await awaitDocumentFontsReady()
-        if (cancelled || !isFabricCanvasAlive(canvas)) return
-        // Remeasure chip IText now that document fonts are actually ready.
-        canvas.forEachObject((obj) => {
-          if (
-            obj instanceof Group &&
-            (obj as EngineObject).chipSourceScale != null
-          ) {
-            for (const child of obj.getObjects()) {
-              if (child.type === "i-text") {
-                const text = child as IText
-                if (typeof text.initDimensions === "function") {
-                  text.initDimensions()
-                }
-              }
-            }
-            updateBadgeLayout(obj)
-          }
-        })
-        canvas.calcOffset()
-        canvas.requestRenderAll()
-        window.setTimeout(() => {
-          if (!isFabricCanvasAlive(canvas)) return
-          canvas.forEachObject((obj) => {
-            obj.set({ dirty: true })
-            obj.setCoords()
-          })
-          canvas.renderAll()
-        }, 200)
-        // Force setCoords + lighting + delayed render — objects can sit in memory
-        // while the artboard stays dark until a manual softbox slider change.
         forceCanvasVisualSync(canvas)
+
+        // Persist deferred product fit AFTER Fabric commit (safe for store→effect).
+        if (pendingProductFit) {
+          writingStoreRef.current = true
+          syncLayerGeometry(pendingProductFit.id, {
+            width: pendingProductFit.width,
+            height: pendingProductFit.height,
+            x: pendingProductFit.x,
+            y: pendingProductFit.y,
+          })
+          queueMicrotask(() => {
+            writingStoreRef.current = false
+          })
+        }
+
+        // Stamp success only when chips from the store are actually on Fabric.
+        const finalLayers = useEditorStore.getState().layers
+        if (!canvasMissingInfographicLayers(canvas, finalLayers)) {
+          sceneKeyRef.current = buildKey
+        } else {
+          // Incomplete commit — force another pass (capped via sceneRecoveriesRef).
+          sceneKeyRef.current = ""
+          if (sceneRecoveriesRef.current < 5) {
+            sceneRecoveriesRef.current += 1
+            setRebuildNonce((n) => n + 1)
+          }
+          return
+        }
+
         setLightingPaintKey((n) => n + 1)
         sceneEpochRef.current += 1
         sceneRecoveriesRef.current = 0
@@ -2643,6 +2836,7 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
         if (process.env.NODE_ENV !== "production") {
           console.error("[fabric-canvas] scene rebuild failed", err)
         }
+        sceneKeyRef.current = ""
         if (sceneRecoveriesRef.current >= 3) {
           setSceneError(
             err instanceof Error
@@ -2652,7 +2846,6 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
           return
         }
         sceneRecoveriesRef.current += 1
-        // Silent recover: reset selected layer + softbox, then rebuild — no crash plate.
         recoverCanvasAfterRenderError(
           useEditorStore.getState().selectedLayerId
         )
@@ -2673,13 +2866,36 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
     ready,
     sceneKey,
     rebuildNonce,
-    layers,
     productPreviewUrl,
     backgroundPreviewUrl,
-    updateLayer,
     syncLayerGeometry,
     setBusyKind,
   ])
+
+  // Self-heal: store has chips but Fabric lost them (race / cancelled hydrate).
+  // Debounced so it does not fight an in-flight rebuild from the same tick.
+  useEffect(() => {
+    if (!ready) return
+    const timer = window.setTimeout(() => {
+      const canvas = fabricRef.current
+      if (!isFabricCanvasAlive(canvas)) return
+      if (layers.length === 0) return
+      if (!canvasMissingInfographicLayers(canvas, layers)) {
+        sceneRecoveriesRef.current = 0
+        return
+      }
+      if (sceneRecoveriesRef.current >= 5) return
+      sceneRecoveriesRef.current += 1
+      if (process.env.NODE_ENV !== "production") {
+        console.warn(
+          "[fabric-canvas] chips missing on canvas — forcing scene rebuild"
+        )
+      }
+      sceneKeyRef.current = ""
+      setRebuildNonce((n) => n + 1)
+    }, 350)
+    return () => window.clearTimeout(timer)
+  }, [ready, layers, sceneKey])
 
   // Softbox: CSS SoftboxLightOverlay is the live light. Debounced Fabric paint
   // keeps the hidden bitmap export-ready — no visual mode switch on slider commit.
@@ -2767,7 +2983,10 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
         const group = obj as Group
         const editingChild = group
           .getObjects()
-          .some((child) => child.type === "i-text" && (child as IText).isEditing)
+          .some(
+            (child) =>
+              isChipTextObjectType(child.type) && (child as Textbox).isEditing
+          )
         if (!editingChild) {
           applyChipContentInPlace(group, layer.chip)
         }
@@ -2786,7 +3005,7 @@ function EditorFabricCanvasImpl({ scale }: { scale: number }) {
     }
     const match = findByLayerId(canvas, selectedLayerId)
     const active = canvas.getActiveObject() as EngineObject | undefined
-    // Nested chip IText is a valid selection for the badge layer — don't steal it.
+    // Nested chip Textbox is a valid selection for the badge layer — don't steal it.
     if (
       active &&
       isChipTextPart(active) &&
