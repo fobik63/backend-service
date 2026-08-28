@@ -13,7 +13,12 @@ from typing import Any
 import httpx
 from pydantic import ValidationError
 
-from app.core.prompt_safety import fence_untrusted_text, harden_system_prompt
+from app.core.prompt_safety import (
+    LlmOutputLeakError,
+    ensure_llm_output_safe,
+    fence_untrusted_text,
+    harden_system_prompt,
+)
 from app.domain.seo_text import (
     DESCRIPTION_TARGET_MAX_CHARS,
     DESCRIPTION_TARGET_MIN_CHARS,
@@ -135,6 +140,12 @@ class OpenAiSeoTextClient:
             raise SeoTextUpstreamError("Unexpected OpenAI response shape.") from exc
         if not isinstance(content, str) or not content.strip():
             raise SeoTextUpstreamError("OpenAI returned empty text.")
+        try:
+            ensure_llm_output_safe(content)
+        except LlmOutputLeakError as exc:
+            raise SeoTextUpstreamError(
+                "Model output rejected by safety filter."
+            ) from exc
 
         usage = _parse_usage(body.get("usage"))
         parsed = _parse_seo_content(content, request=request)

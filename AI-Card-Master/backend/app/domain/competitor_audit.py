@@ -28,6 +28,7 @@ from pydantic import (
     model_validator,
 )
 
+from app.core.prompt_safety import fence_untrusted_text
 from app.domain.zero_hallucination import (
     ZeroHallucinationCrossCheck,
     reliability_pct_from_confidence,
@@ -525,18 +526,40 @@ def build_competitor_deep_analysis_prompt(
     ]
     price_before = _kopecks_to_rub(card.price_before_discount_kopecks)
     price_after = _kopecks_to_rub(card.price_after_discount_kopecks)
-    title = (card.title or card.article).strip()
+    title_raw = (card.title or card.article).strip()
+    description_raw = (card.description or "")[:6000]
+    specs_raw = "\n".join(specs_lines)
 
     return (
         f"Аудит карточки конкурента.\n"
         f"article={card.article}\n"
         f"marketplace={card.marketplace.value}\n"
-        f"title={title}\n"
+        f"title={fence_untrusted_text(title_raw, label='competitor_title', max_length=2000)}\n"
         f"price_before_rub={price_before}\n"
         f"price_after_rub={price_after}\n"
         f"images_attached={image_count} (первое = главный слайд)\n"
-        f"description:\n{(card.description or '')[:6000]}\n"
-        f"specs:\n" + ("\n".join(specs_lines) if specs_lines else "(нет)") + "\n"
+        "description:\n"
+        + (
+            fence_untrusted_text(
+                description_raw,
+                label="competitor_description",
+                max_length=8000,
+            )
+            if description_raw.strip()
+            else "(нет)"
+        )
+        + "\n"
+        "specs:\n"
+        + (
+            fence_untrusted_text(
+                specs_raw,
+                label="competitor_specs",
+                max_length=12_000,
+            )
+            if specs_lines
+            else "(нет)"
+        )
+        + "\n"
         f"reviews_low_1_3_stars ({len(card.reviews_low)}):\n"
         + ("\n---\n".join(low_texts) if low_texts else "(нет негативных)")
         + "\n"
@@ -699,11 +722,31 @@ def _review_texts_for_prompt(reviews: list[CompetitorReview]) -> list[str]:
         parts: list[str] = [f"rating={review.rating}"]
         body = (review.text or "").strip()
         if body:
-            parts.append(body[:1500])
+            parts.append(
+                fence_untrusted_text(
+                    body[:1500],
+                    label="review_text",
+                    max_length=2000,
+                )
+            )
         if review.pros:
-            parts.append(f"pros: {review.pros[:500]}")
+            parts.append(
+                "pros: "
+                + fence_untrusted_text(
+                    review.pros[:500],
+                    label="review_pros",
+                    max_length=800,
+                )
+            )
         if review.cons:
-            parts.append(f"cons: {review.cons[:500]}")
+            parts.append(
+                "cons: "
+                + fence_untrusted_text(
+                    review.cons[:500],
+                    label="review_cons",
+                    max_length=800,
+                )
+            )
         if len(parts) > 1:
             texts.append(" | ".join(parts))
     return texts

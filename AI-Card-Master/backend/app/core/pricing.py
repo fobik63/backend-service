@@ -49,6 +49,7 @@ class CoinHoldStatus(StrEnum):
     HELD = "held"
     CAPTURED = "captured"
     REFUNDED = "refunded"
+    PARTIALLY_SETTLED = "partially_settled"
 
 
 # --- Tariff registry (Pricing Matrix) -----------------------------------------
@@ -441,9 +442,12 @@ class BillingService:
             id=uuid4(),
             user_id=user_id,
             amount=int(amount),
+            remaining_amount=int(amount),
+            captured_amount=0,
             status=CoinHoldStatus.HELD.value,
             service_type=(service_type.strip().lower() if service_type else None),
             reference_id=reference_id,
+            idempotency_key=cleaned_key,
         )
         self._session.add(hold)
 
@@ -511,14 +515,20 @@ class BillingService:
             return status
         if status is CoinHoldStatus.REFUNDED:
             return status
+        if status is CoinHoldStatus.PARTIALLY_SETTLED:
+            return status
         if status is not CoinHoldStatus.HELD:
             raise PricingValidationError(
                 f"Coin hold {transaction_id} has unexpected status {hold.status!r}."
             )
 
         now = datetime.now(UTC)
+        remaining = int(getattr(hold, "remaining_amount", hold.amount) or 0)
+        captured = int(getattr(hold, "captured_amount", 0) or 0)
         if success:
             hold.status = CoinHoldStatus.CAPTURED.value
+            hold.captured_amount = captured + remaining
+            hold.remaining_amount = 0
             hold.settled_at = now
             hold.updated_at = now
             await self._session.flush()
@@ -526,18 +536,24 @@ class BillingService:
                 await self._session.commit()
             return CoinHoldStatus.CAPTURED
 
-        amount = int(hold.amount)
-        if amount > 0:
+        if remaining > 0:
             try:
                 await self._wallet_service().refund_coins_in_transaction(
                     user_id=hold.user_id,
-                    amount=amount,
+                    amount=remaining,
                 )
             except BillingNotFoundError as exc:
                 raise PricingNotFoundError(str(exc)) from exc
-        hold.status = CoinHoldStatus.REFUNDED.value
+        hold.remaining_amount = 0
         hold.settled_at = now
         hold.updated_at = now
+        if captured > 0:
+            hold.status = CoinHoldStatus.PARTIALLY_SETTLED.value
+            await self._session.flush()
+            if commit:
+                await self._session.commit()
+            return CoinHoldStatus.PARTIALLY_SETTLED
+        hold.status = CoinHoldStatus.REFUNDED.value
         await self._session.flush()
         if commit:
             await self._session.commit()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
 from typing import Any
 
@@ -68,7 +69,19 @@ async def telegram_webhook(
 
     settings = get_settings()
     expected = (settings.telegram_bot_webhook_secret or "").strip()
-    if expected and (x_telegram_bot_api_secret_token or "").strip() != expected:
+    supplied = (x_telegram_bot_api_secret_token or "").strip()
+
+    if settings.app_env == "production" and not expected:
+        logger.error("TELEGRAM_BOT_WEBHOOK_SECRET is required in production")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid Telegram webhook secret.",
+        )
+
+    if expected and not hmac.compare_digest(
+        supplied.encode("utf-8"),
+        expected.encode("utf-8"),
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Invalid Telegram webhook secret.",

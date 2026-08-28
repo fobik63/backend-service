@@ -84,3 +84,28 @@ def test_production_accepts_strong_security_secrets() -> None:
 def test_dev_allows_jwt_fallback_for_admin_secret() -> None:
     settings = Settings(**_base(ADMIN_PANEL_TOKEN_SECRET=""))
     assert settings.effective_admin_panel_token_secret == "j" * 64
+
+
+def test_production_requires_yookassa_webhook_ip_enforcement() -> None:
+    with pytest.raises(ValidationError, match="YOOKASSA_WEBHOOK_IP_ENFORCEMENT"):
+        Settings(
+            **_base(
+                APP_ENV="production",
+                ADMIN_PANEL_TOKEN_SECRET="a" * 32,
+                PASSWORD_PEPPER="p" * 32,
+                YOOKASSA_WEBHOOK_IP_ENFORCEMENT=False,
+            )
+        )
+
+
+def test_production_requires_telegram_webhook_secret_when_url_set() -> None:
+    with pytest.raises(ValidationError, match="TELEGRAM_BOT_WEBHOOK_SECRET"):
+        Settings(
+            **_base(
+                APP_ENV="production",
+                ADMIN_PANEL_TOKEN_SECRET="a" * 32,
+                PASSWORD_PEPPER="p" * 32,
+                TELEGRAM_BOT_WEBHOOK_URL="https://api.example.com/api/v1/telegram/webhook",
+                TELEGRAM_BOT_WEBHOOK_SECRET="",
+            )
+        )

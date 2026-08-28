@@ -201,6 +201,8 @@ async def test_hold_commit_and_refund_flow() -> None:
     tx_id = await billing.hold_coins(user_id, 30, service_type="three_d")
     assert balances[user_id] == 10
     assert holds[tx_id].status == CoinHoldStatus.HELD.value
+    assert holds[tx_id].remaining_amount == 30
+    assert holds[tx_id].captured_amount == 0
 
     status = await billing.commit_or_refund(tx_id, True)
     assert status is CoinHoldStatus.CAPTURED

@@ -295,7 +295,7 @@ def test_user_prompt_includes_fenced_instruction_and_base_canvas() -> None:
         "Сделай заголовок синим",
         base_canvas=base,
     )
-    assert "<<<UNTRUSTED_USER_DATA>>>" in message
+    assert "<untrusted_input" in message
     assert "Сделай заголовок синим" in message
     assert "11111111-1111-1111-1111-111111111111" in message
     assert '"layer_type":"image"' in message or '"layer_type": "image"' in message

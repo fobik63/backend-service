@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
@@ -58,7 +58,7 @@ class LoginRequest(StrictAPIModel):
 
 
 class RefreshRequest(StrictAPIModel):
-    refresh_token: str = Field(..., min_length=20, max_length=4096)
+    refresh_token: str | None = Field(default=None, min_length=20, max_length=4096)
 
 
 class OtpRequestBody(StrictAPIModel):
@@ -137,12 +137,46 @@ def _user_response(view) -> AuthUserResponse:
     )
 
 
-def _session_response(view, tokens) -> AuthSessionResponse:
+REFRESH_COOKIE_NAME = "refresh_token"
+
+
+def _refresh_cookie_secure() -> bool:
+    return get_settings().app_env != "development"
+
+
+def _refresh_cookie_max_age() -> int:
+    return max(60, int(get_settings().jwt_refresh_token_ttl_days) * 24 * 3600)
+
+
+def _set_refresh_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        key=REFRESH_COOKIE_NAME,
+        value=token,
+        max_age=_refresh_cookie_max_age(),
+        path="/api/v1/auth",
+        httponly=True,
+        secure=_refresh_cookie_secure(),
+        samesite="lax",
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=REFRESH_COOKIE_NAME,
+        path="/api/v1/auth",
+        httponly=True,
+        secure=_refresh_cookie_secure(),
+        samesite="lax",
+    )
+
+
+def _session_response(view, tokens, response: Response) -> AuthSessionResponse:
+    _set_refresh_cookie(response, tokens.refresh_token)
     return AuthSessionResponse(
         user=_user_response(view),
         tokens=TokenResponse(
             access_token=tokens.access_token,
-            refresh_token=tokens.refresh_token,
+            refresh_token="",
             token_type=tokens.token_type,
         ),
     )
@@ -181,6 +215,7 @@ def _device_abuse_context(request: Request) -> SignupAbuseContext:
 async def register(
     payload: RegisterRequest,
     request: Request,
+    response: Response,
     auth: AuthService = Depends(get_auth_service),
 ) -> AuthSessionResponse:
     try:
@@ -209,7 +244,7 @@ async def register(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
         ) from exc
-    return _session_response(view, tokens)
+    return _session_response(view, tokens, response)
 
 
 @router.post(
@@ -221,6 +256,7 @@ async def register(
 async def login(
     payload: LoginRequest,
     request: Request,
+    response: Response,
     auth: AuthService = Depends(get_auth_service),
 ) -> AuthSessionResponse:
     try:
@@ -240,7 +276,7 @@ async def login(
             detail=str(exc),
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
-    return _session_response(view, tokens)
+    return _session_response(view, tokens, response)
 
 
 async def _send_otp_handler(
@@ -287,6 +323,7 @@ async def _send_otp_handler(
 async def _verify_otp_handler(
     payload: OtpVerifyBody,
     request: Request,
+    response: Response,
     auth: AuthService,
 ) -> AuthSessionResponse:
     try:
@@ -326,7 +363,7 @@ async def _verify_otp_handler(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
         ) from exc
-    return _session_response(view, tokens)
+    return _session_response(view, tokens, response)
 
 
 @router.post(
@@ -366,9 +403,10 @@ async def send_otp(
 async def otp_verify(
     payload: OtpVerifyBody,
     request: Request,
+    response: Response,
     auth: AuthService = Depends(get_auth_service),
 ) -> AuthSessionResponse:
-    return await _verify_otp_handler(payload, request, auth)
+    return await _verify_otp_handler(payload, request, response, auth)
 
 
 @router.post(
@@ -380,9 +418,10 @@ async def otp_verify(
 async def verify_otp(
     payload: OtpVerifyBody,
     request: Request,
+    response: Response,
     auth: AuthService = Depends(get_auth_service),
 ) -> AuthSessionResponse:
-    return await _verify_otp_handler(payload, request, auth)
+    return await _verify_otp_handler(payload, request, response, auth)
 
 
 @auth_alias_router.post(
@@ -408,9 +447,10 @@ async def send_otp_alias(
 async def verify_otp_alias(
     payload: OtpVerifyBody,
     request: Request,
+    response: Response,
     auth: AuthService = Depends(get_auth_service),
 ) -> AuthSessionResponse:
-    return await _verify_otp_handler(payload, request, auth)
+    return await _verify_otp_handler(payload, request, response, auth)
 
 
 @router.post(
@@ -422,6 +462,7 @@ async def verify_otp_alias(
 async def telegram_login(
     payload: TelegramLoginRequest,
     request: Request,
+    response: Response,
     auth: AuthService = Depends(get_auth_service),
 ) -> AuthSessionResponse:
     settings = get_settings()
@@ -457,7 +498,7 @@ async def telegram_login(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(exc),
         ) from exc
-    return _session_response(view, tokens)
+    return _session_response(view, tokens, response)
 
 
 @router.post(
@@ -467,25 +508,40 @@ async def telegram_login(
 )
 @auth_bruteforce_limit
 async def refresh(
-    payload: RefreshRequest,
     request: Request,
+    response: Response,
+    payload: RefreshRequest | None = Body(default=None),
     auth: AuthService = Depends(get_auth_service),
 ) -> AuthSessionResponse:
+    refresh_token = (
+        (payload.refresh_token if payload is not None else None)
+        or request.cookies.get(REFRESH_COOKIE_NAME)
+        or ""
+    ).strip()
+    if not refresh_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing refresh token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     try:
-        view, tokens = await auth.refresh(payload.refresh_token)
+        view, tokens = await auth.refresh(refresh_token)
     except AuthTokenFamilyRevokedError as exc:
+        _clear_refresh_cookie(response)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(exc),
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
     except (AuthRefreshError, AuthNotFoundError) as exc:
+        _clear_refresh_cookie(response)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(exc),
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
     except AuthCredentialsError as exc:
+        _clear_refresh_cookie(response)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(exc),
@@ -496,7 +552,16 @@ async def refresh(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
         ) from exc
-    return _session_response(view, tokens)
+    return _session_response(view, tokens, response)
+
+
+@router.post(
+    "/logout",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Clear the HttpOnly refresh cookie",
+)
+async def logout(response: Response) -> None:
+    _clear_refresh_cookie(response)
 
 
 @router.get(

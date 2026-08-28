@@ -6,15 +6,14 @@ WinbackService, and YooKassa adapters inline.
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
 from app.application.winback_service import WinbackService
+from app.application.yookassa_webhook_ingress import YooKassaWebhookIngress
 from app.models.enums import TariffCode
 from app.models.payment import Payment
 from app.models.user import User
@@ -139,51 +138,47 @@ class PaymentApplicationService:
     async def process_yookassa_webhook(
         self, payload: dict[str, Any]
     ) -> WebhookProcessResult:
-        event = str(payload.get("event") or "").strip()
-        obj = payload.get("object")
-        if not isinstance(obj, dict):
-            raise ValueError("Webhook payload missing payment object.")
+        yookassa = self._require_yookassa()
+        verified = await YooKassaWebhookIngress(yookassa).verify(payload)
 
-        yookassa_payment_id = str(obj.get("id") or "").strip()
-        if not yookassa_payment_id:
-            raise ValueError("Webhook payment id is missing.")
-
-        raw_payload = json.dumps(payload, ensure_ascii=False)
-
-        if event == "payment.canceled":
+        if verified.event == "payment.canceled":
+            if verified.upstream_status != "canceled":
+                return WebhookProcessResult(
+                    detail=(
+                        f"Upstream payment status is '{verified.found.get('status')}', "
+                        "cancel was not applied."
+                    )
+                )
             await self._billing.mark_payment_canceled(
-                yookassa_payment_id=yookassa_payment_id,
-                raw_payload=raw_payload,
+                yookassa_payment_id=verified.payment_id,
+                raw_payload=verified.raw_payload,
             )
             return WebhookProcessResult(detail="Payment marked as canceled.")
 
-        if event != "payment.succeeded":
+        if verified.event != "payment.succeeded":
             return WebhookProcessResult(
-                detail=f"Ignored event '{event or 'unknown'}'."
+                detail=f"Ignored event '{verified.event or 'unknown'}'."
             )
 
-        yookassa = self._require_yookassa()
-        verified = await yookassa.get_payment(yookassa_payment_id)
-        if str(verified.get("status") or "").lower() != "succeeded":
+        if verified.upstream_status != "succeeded":
             return WebhookProcessResult(
                 detail=(
-                    f"Upstream payment status is '{verified.get('status')}', "
+                    f"Upstream payment status is '{verified.found.get('status')}', "
                     "billing was not applied."
                 )
             )
-
-        amount_block = verified.get("amount") or {}
-        expected_amount = Decimal(str(amount_block.get("value")))
+        if verified.amount is None:
+            raise ValueError("Verified YooKassa payment is missing amount.")
 
         result: BillingResult = await self._billing.apply_successful_payment(
-            yookassa_payment_id=yookassa_payment_id,
-            expected_amount=expected_amount,
-            raw_payload=raw_payload,
+            yookassa_payment_id=verified.payment_id,
+            expected_amount=verified.amount,
+            raw_payload=verified.raw_payload,
         )
 
         if not result.already_processed:
             payment = await self._billing.get_payment_by_yookassa_id(
-                yookassa_payment_id
+                verified.payment_id
             )
             catalog_price = get_tariff_plan(result.tariff_code).price_rub
             if payment is not None and payment.amount_rub != catalog_price:

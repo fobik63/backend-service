@@ -15,16 +15,21 @@ export {
   fetchCurrentUser,
   loginWithPassword,
   loginWithTelegram,
+  logoutSession,
   registerWithPassword,
   sendOtp,
   verifyOtp,
 } from "./auth";
 export type { AuthSessionResponse, OtpRequestResponse } from "./auth";
 export {
+  createCoinPayment,
   createPayment,
+  listCoinPacks,
   listTariffs,
 } from "./billing";
 export type {
+  CoinPackDTO,
+  CreateCoinPaymentResponse,
   CreatePaymentResponse,
   TariffCode,
   TariffDTO,

@@ -13,7 +13,12 @@ from typing import Any
 import httpx
 from pydantic import ValidationError
 
-from app.core.prompt_safety import fence_untrusted_text, harden_system_prompt
+from app.core.prompt_safety import (
+    LlmOutputLeakError,
+    ensure_llm_output_safe,
+    fence_untrusted_text,
+    harden_system_prompt,
+)
 from app.domain.competitor_pains_llm import (
     CompetitorPainsAnalysisRequest,
     CompetitorPainsAnalysisResult,
@@ -143,6 +148,12 @@ class OpenAiCompetitorPainsClient:
             ) from exc
         if not isinstance(content, str) or not content.strip():
             raise CompetitorPainsUpstreamError("OpenAI returned empty text.")
+        try:
+            ensure_llm_output_safe(content)
+        except LlmOutputLeakError as exc:
+            raise CompetitorPainsUpstreamError(
+                "Model output rejected by safety filter."
+            ) from exc
 
         usage = body.get("usage") if isinstance(body, dict) else None
         in_tok = _safe_int(usage.get("prompt_tokens") if isinstance(usage, dict) else 0)

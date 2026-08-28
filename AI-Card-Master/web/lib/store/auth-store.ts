@@ -5,9 +5,11 @@ import {
   getAccessToken,
   getStoredUser,
   persistSession,
+  persistUser,
   type AuthTokens,
   type AuthUser,
 } from "@/lib/auth/session"
+import { logoutSession } from "@/lib/api/auth"
 import {
   IS_MOCK,
   MOCK_AUTH_TOKENS,
@@ -21,6 +23,8 @@ type AuthState = {
   setAccessToken: (token: string | null) => void
   setUser: (user: AuthUser | null) => void
   setSession: (tokens: AuthTokens, user: AuthUser) => void
+  /** Local-first coin credit while YooKassa webhook may still be in flight. */
+  creditAiCoins: (delta: number) => void
   hydrateFromStorage: () => void
   clearAuth: () => void
 }
@@ -46,6 +50,16 @@ export const useAuthStore = create<AuthState>((set) => ({
     persistSession(tokens, user)
     set({ accessToken: tokens.access_token, user })
   },
+  creditAiCoins: (delta) =>
+    set((state) => {
+      if (!state.user || !Number.isFinite(delta) || delta <= 0) return state
+      const user = {
+        ...state.user,
+        ai_coins: state.user.ai_coins + Math.trunc(delta),
+      }
+      persistUser(user)
+      return { user }
+    }),
   hydrateFromStorage: () => {
     if (IS_MOCK) {
       applyMockSession(set)
@@ -62,6 +76,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       return
     }
     clearSession()
+    void logoutSession().catch(() => undefined)
     set({ accessToken: null, user: null })
   },
 }))

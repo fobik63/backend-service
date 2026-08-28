@@ -181,6 +181,12 @@ class User(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    coin_purchases = relationship(
+        "CoinPurchase",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
     referred_by = relationship(
         "User",
         remote_side=[id],

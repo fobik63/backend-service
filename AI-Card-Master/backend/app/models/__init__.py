@@ -14,6 +14,7 @@ from app.models.bulk_generation import (
 )
 from app.models.claude_reasoning import ClaudeReasoningJob, ClaudeReasoningOutbox
 from app.models.coin_hold import CoinHold
+from app.models.coin_purchase import CoinPurchase
 from app.models.competitor_audit import CompetitorAuditJob
 from app.models.eye_of_god import EyeOfGodJob
 from app.models.generation import Generation
@@ -85,6 +86,7 @@ __all__ = [
     "MarketplaceExport",
     "MarketplacePublication",
     "Payment",
+    "CoinPurchase",
     "CoinHold",
     "IdempotencyRecord",
     "SmartVariantItem",

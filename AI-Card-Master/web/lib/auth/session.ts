@@ -1,4 +1,4 @@
-/** Client-side session: localStorage + cookies (JWT access/refresh + user profile). */
+/** Client-side session: access token in localStorage; refresh is HttpOnly cookie. */
 
 export type AuthUser = {
   id: string
@@ -11,7 +11,7 @@ export type AuthUser = {
 
 export type AuthTokens = {
   access_token: string
-  refresh_token: string
+  refresh_token?: string
   token_type?: string
 }
 
@@ -19,46 +19,27 @@ const ACCESS_KEY = "access_token"
 const REFRESH_KEY = "refresh_token"
 const USER_KEY = "auth_user"
 
-/** ~30 days — aligns with typical refresh JWT TTL. */
-const COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30
-
-function setCookie(name: string, value: string, maxAge = COOKIE_MAX_AGE_SECONDS) {
-  if (typeof document === "undefined") return
-  const secure =
-    typeof window !== "undefined" && window.location.protocol === "https:"
-      ? "; Secure"
-      : ""
-  document.cookie = `${encodeURIComponent(name)}=${encodeURIComponent(value)}; Path=/; Max-Age=${maxAge}; SameSite=Lax${secure}`
-}
-
-function deleteCookie(name: string) {
+function deleteLegacyCookie(name: string) {
   if (typeof document === "undefined") return
   document.cookie = `${encodeURIComponent(name)}=; Path=/; Max-Age=0; SameSite=Lax`
-}
-
-function readCookie(name: string): string | null {
-  if (typeof document === "undefined") return null
-  const prefix = `${encodeURIComponent(name)}=`
-  const parts = document.cookie.split("; ")
-  for (const part of parts) {
-    if (part.startsWith(prefix)) {
-      return decodeURIComponent(part.slice(prefix.length))
-    }
-  }
-  return null
 }
 
 export function persistSession(tokens: AuthTokens, user?: AuthUser | null) {
   if (typeof window === "undefined") return
 
   window.localStorage.setItem(ACCESS_KEY, tokens.access_token)
-  window.localStorage.setItem(REFRESH_KEY, tokens.refresh_token)
-  setCookie(ACCESS_KEY, tokens.access_token)
-  setCookie(REFRESH_KEY, tokens.refresh_token)
+  window.localStorage.removeItem(REFRESH_KEY)
+  deleteLegacyCookie(ACCESS_KEY)
+  deleteLegacyCookie(REFRESH_KEY)
 
   if (user) {
-    window.localStorage.setItem(USER_KEY, JSON.stringify(user))
+    persistUser(user)
   }
+}
+
+export function persistUser(user: AuthUser) {
+  if (typeof window === "undefined") return
+  window.localStorage.setItem(USER_KEY, JSON.stringify(user))
 }
 
 export function clearSession() {
@@ -66,16 +47,13 @@ export function clearSession() {
   window.localStorage.removeItem(ACCESS_KEY)
   window.localStorage.removeItem(REFRESH_KEY)
   window.localStorage.removeItem(USER_KEY)
-  deleteCookie(ACCESS_KEY)
-  deleteCookie(REFRESH_KEY)
+  deleteLegacyCookie(ACCESS_KEY)
+  deleteLegacyCookie(REFRESH_KEY)
 }
 
 export function getAccessToken(): string | null {
   if (typeof window === "undefined") return null
-  return (
-    window.localStorage.getItem(ACCESS_KEY) ||
-    readCookie(ACCESS_KEY)
-  )
+  return window.localStorage.getItem(ACCESS_KEY)
 }
 
 export function getStoredUser(): AuthUser | null {

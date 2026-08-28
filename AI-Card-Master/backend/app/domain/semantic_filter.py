@@ -14,6 +14,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.core.prompt_safety import fence_untrusted_text
 from app.domain.competitor_audit import (
     CompetitorCardScrapeResult,
     CompetitorReview,
@@ -27,6 +28,7 @@ DELTA_MAX_REVIEW_CHARS = 400
 BASELINE_MAX_REVIEWS_PER_BUCKET = 10
 BASELINE_MAX_SPECS = 25
 BASELINE_MAX_DESCRIPTION_CHARS = 1800
+_ISOLATION_TAG_RE = re.compile(r"</?untrusted_input\b[^>]*>", re.IGNORECASE)
 
 
 class StrictDomainModel(BaseModel):
@@ -128,6 +130,12 @@ def estimate_text_tokens(text: str) -> int:
     if not text:
         return 0
     return max(1, (len(text) + 3) // 4)
+
+
+def estimate_fenced_prompt_tokens(text: str) -> int:
+    """Token estimate for marketplace content, ignoring XML isolation markup."""
+
+    return estimate_text_tokens(_ISOLATION_TAG_RE.sub("", text))
 
 
 def estimate_card_prompt_tokens(card: CompetitorCardScrapeResult) -> int:
@@ -358,7 +366,7 @@ def compute_competitor_context_delta(
         estimated_tokens_after=0,
         compression_ratio=1.0,
     )
-    after = estimate_text_tokens(render_competitor_delta_prompt_body(delta))
+    after = estimate_fenced_prompt_tokens(render_competitor_delta_prompt_body(delta))
     return delta.model_copy(
         update={
             "estimated_tokens_after": after,
@@ -413,7 +421,11 @@ def render_competitor_delta_prompt_body(delta: CompetitorContextDelta) -> str:
     )
     if delta.notes:
         lines.append("notes: " + "; ".join(delta.notes))
-    return "\n".join(lines)
+    return fence_untrusted_text(
+        "\n".join(lines),
+        label="semantic_filter_delta",
+        max_length=40_000,
+    )
 
 
 def build_competitor_delta_analysis_prompt(
@@ -485,7 +497,7 @@ def _baseline_compress(
         estimated_tokens_after=0,
         compression_ratio=1.0,
     )
-    after = estimate_text_tokens(render_competitor_delta_prompt_body(delta))
+    after = estimate_fenced_prompt_tokens(render_competitor_delta_prompt_body(delta))
     return delta.model_copy(
         update={
             "estimated_tokens_after": after,

@@ -130,6 +130,11 @@ class YooKassaService:
         )
         return self._parse_json_object(response, operation="get payment")
 
+    async def find_payment(self, payment_id: str) -> dict[str, Any]:
+        """SDK-named alias of ``get_payment`` (YooKassa ``Payment.find``)."""
+
+        return await self.get_payment(payment_id)
+
     async def _request_with_retry(
         self,
         *,

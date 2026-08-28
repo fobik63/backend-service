@@ -17,6 +17,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.core.prompt_safety import fence_untrusted_text
+
 
 class PainAnalysisJobStatus(StrEnum):
     """Lifecycle of an async pain-analysis job."""
@@ -282,7 +284,8 @@ def build_pain_analysis_prompt(*, request: PainAnalysisRequest) -> str:
     """User prompt with product context and raw competitor negatives."""
 
     reviews_block = "\n".join(
-        f"{idx}. {text}" for idx, text in enumerate(request.raw_negative_reviews, start=1)
+        f"{idx}. {fence_untrusted_text(text, label=f'review_{idx}', max_length=8000)}"
+        for idx, text in enumerate(request.raw_negative_reviews, start=1)
     )
     platform_label = (
         "Wildberries" if request.platform == "wildberries" else "Ozon"
@@ -290,8 +293,8 @@ def build_pain_analysis_prompt(*, request: PainAnalysisRequest) -> str:
     specs = request.product_specs.strip() or "не указаны"
     return (
         "ВХОДНЫЕ ДАННЫЕ:\n"
-        f"- Товар: {request.product_name}\n"
-        f"- Характеристики: {specs}\n"
+        f"- Товар: {fence_untrusted_text(request.product_name, label='product_name')}\n"
+        f"- Характеристики: {fence_untrusted_text(specs, label='product_specs')}\n"
         f"- Маркетплейс: {platform_label}\n"
         "- Необработанные отрицательные отзывы конкурентов:\n"
         f"{reviews_block}\n\n"

@@ -80,6 +80,10 @@ export async function loginWithTelegram(
   return data
 }
 
+export async function logoutSession(): Promise<void> {
+  await apiClient.post("/auth/logout", {}, { skipErrorToast: true })
+}
+
 export async function changePassword(
   currentPassword: string,
   newPassword: string,

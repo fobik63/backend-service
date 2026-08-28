@@ -4,10 +4,14 @@ import { useRouter } from "next/navigation"
 import { useEffect, type ReactNode } from "react"
 
 import { AppHeader } from "@/components/layout/app-header"
+import {
+  BuyCoinsProvider,
+  useBuyCoins,
+} from "@/components/layout/buy-coins-provider"
 import { fetchCurrentUser } from "@/lib/api/auth"
 import {
   displayNameFromEmail,
-  persistSession,
+  persistUser,
 } from "@/lib/auth/session"
 import { IS_MOCK, MOCK_AUTH_USER } from "@/lib/constants/mock"
 import { useAuthStore } from "@/lib/store"
@@ -20,6 +24,14 @@ type AppShellProps = {
 }
 
 function AppShell({ children, variant = "workspace" }: AppShellProps) {
+  return (
+    <BuyCoinsProvider>
+      <AppShellFrame variant={variant}>{children}</AppShellFrame>
+    </BuyCoinsProvider>
+  )
+}
+
+function AppShellFrame({ children, variant = "workspace" }: AppShellProps) {
   const router = useRouter()
   const user = useAuthStore((s) => s.user)
   const accessToken = useAuthStore((s) => s.accessToken)
@@ -51,16 +63,7 @@ function AppShell({ children, variant = "workspace" }: AppShellProps) {
         const profile = await fetchCurrentUser()
         if (cancelled) return
         setUser(profile)
-        const refresh =
-          typeof window !== "undefined"
-            ? window.localStorage.getItem("refresh_token")
-            : null
-        if (refresh) {
-          persistSession(
-            { access_token: accessToken, refresh_token: refresh },
-            profile,
-          )
-        }
+        persistUser(profile)
       } catch {
         if (cancelled) return
         clearAuth()
@@ -91,6 +94,8 @@ function AppShell({ children, variant = "workspace" }: AppShellProps) {
     router.push("/login")
   }
 
+  const { openBuyCoins } = useBuyCoins()
+
   const profileUser = user
     ? {
         name: displayNameFromEmail(user.email),
@@ -110,6 +115,8 @@ function AppShell({ children, variant = "workspace" }: AppShellProps) {
         user={profileUser}
         onLogout={handleLogout}
         showBreadcrumbs={variant === "workspace"}
+        coins={user?.ai_coins}
+        onBuyCoins={openBuyCoins}
       />
       <main
         className={cn(

@@ -41,6 +41,7 @@ from app.api import (
     auth_alias_router,
     auth_router,
     bg_removal_router,
+    billing_router,
     brand_dna_router,
     brand_loras_router,
     bulk_generations_router,
@@ -76,6 +77,7 @@ from app.api import (
     workspaces_router,
 )
 from app.api.images import ensure_uploads_dir
+from app.application.generation_errors import GenerationSubmissionError
 from app.core.admin_middleware import AdminOnlyMiddleware
 from app.core.cloudflare_middleware import CloudflareProtectionMiddleware
 from app.core.config import get_settings
@@ -83,13 +85,15 @@ from app.core.dead_mans_switch_middleware import DeadMansSwitchMiddleware
 from app.core.http_errors import shape_error_envelope, shape_http_exception_body
 from app.core.idempotency_middleware import IdempotencyMiddleware
 from app.core.input_sanitization_middleware import InputSanitizationMiddleware
+from app.core.llm_output_filter_middleware import LlmOutputFilterMiddleware
 from app.core.logging_config import configure_logging
 from app.core.payload_size_limiter_middleware import PayloadSizeLimiterMiddleware
 from app.core.rate_limit import limiter, rate_limit_exceeded_handler
 from app.core.request_context_middleware import RequestContextMiddleware
 from app.core.security_headers_middleware import SecurityHeadersMiddleware
 from app.core.suspicious_activity_middleware import SuspiciousActivityMiddleware
-from app.application.generation_errors import GenerationSubmissionError
+from app.domain.coin_guard import CoinGuardError
+from app.domain.llm_coin_guard import InsufficientCoinsError
 from app.infrastructure.observability.sentry import (
     capture_unhandled_exception,
     init_sentry,
@@ -285,9 +289,16 @@ async def _start_telegram_bot_runtime():
 
     webhook_url = (settings.telegram_bot_webhook_url or "").strip()
     if webhook_url:
+        secret = (settings.telegram_bot_webhook_secret or "").strip()
+        if not secret:
+            logger.error(
+                "Refusing to register Telegram webhook without "
+                "TELEGRAM_BOT_WEBHOOK_SECRET"
+            )
+            return None
         ok = await client.set_webhook(
             url=webhook_url,
-            secret_token=(settings.telegram_bot_webhook_secret or "").strip() or None,
+            secret_token=secret,
             drop_pending_updates=False,
         )
         if ok:
@@ -425,11 +436,12 @@ if settings.cors_allow_origin_regex:
 app.add_middleware(CORSMiddleware, **_cors_middleware_kwargs)
 # Security stack (Starlette: last added = outermost).
 # Order: SlowAPI → DeadMans → SecurityHeaders → Cloudflare → PayloadSize
-#        → RequestContext → Great Wall → Sanitization → Idempotency
-#        → AdminOnly → CORS → route.
+#        → RequestContext → Great Wall → LlmOutputFilter → Sanitization
+#        → Idempotency → AdminOnly → CORS → route.
 app.add_middleware(AdminOnlyMiddleware)
 app.add_middleware(IdempotencyMiddleware)
 app.add_middleware(InputSanitizationMiddleware)
+app.add_middleware(LlmOutputFilterMiddleware)
 app.add_middleware(SuspiciousActivityMiddleware)
 app.add_middleware(RequestContextMiddleware)
 app.add_middleware(PayloadSizeLimiterMiddleware)
@@ -459,6 +471,7 @@ app.include_router(legal_router)
 app.include_router(account_router)
 app.include_router(captcha_router)
 app.include_router(payments_router)
+app.include_router(billing_router)
 app.include_router(referrals_router)
 app.include_router(relighting_router)
 app.include_router(bg_removal_router)
@@ -515,6 +528,62 @@ async def generation_submission_exception_handler(
             "success": False,
             "detail": {"code": exc.code, "message": exc.message},
             **shape_error_envelope(code=exc.code, message=exc.message),
+        },
+    )
+
+
+@app.exception_handler(CoinGuardError)
+async def coin_guard_exception_handler(
+    _: Request, exc: CoinGuardError
+) -> JSONResponse:
+    """Map CoinGuard domain errors to 400 / 402 / 409 / 429 JSON envelopes."""
+
+    detail = exc.to_http_detail()
+    extra = {
+        key: value
+        for key, value in detail.items()
+        if key not in {"code", "message", "status_code"}
+    }
+    return JSONResponse(
+        status_code=int(exc.status_code),
+        content={
+            "success": False,
+            "detail": detail["message"],
+            "code": detail["code"],
+            **extra,
+            **shape_error_envelope(
+                code=str(detail["code"]),
+                message=str(detail["message"]),
+                **extra,
+            ),
+        },
+    )
+
+
+@app.exception_handler(InsufficientCoinsError)
+async def insufficient_coins_exception_handler(
+    _: Request, exc: InsufficientCoinsError
+) -> JSONResponse:
+    """HTTP 402 with payment-modal deep link when the wallet cannot cover LLM spend."""
+
+    detail = exc.to_http_detail()
+    return JSONResponse(
+        status_code=status.HTTP_402_PAYMENT_REQUIRED,
+        content={
+            "success": False,
+            "detail": detail["message"],
+            "code": detail["code"],
+            "payment_modal": detail["payment_modal"],
+            "payment_modal_href": detail["payment_modal_href"],
+            "min_pack_coins": detail["min_pack_coins"],
+            "required_coins": detail["required_coins"],
+            "balance": detail["balance"],
+            **shape_error_envelope(
+                code=str(detail["code"]),
+                message=str(detail["message"]),
+                payment_modal=detail["payment_modal"],
+                payment_modal_href=detail["payment_modal_href"],
+            ),
         },
     )
 

@@ -234,6 +234,21 @@ class Settings(BaseSettings):
         alias="IDEMPOTENCY_RESPONSE_TTL_SECONDS",
         description="TTL for cached successful responses (15 minutes).",
     )
+    coin_guard_max_operation_coins: int = Field(
+        default=1_000_000,
+        alias="COIN_GUARD_MAX_OPERATION_COINS",
+        description="Hard cap for a single AI-coin debit, credit, or hold.",
+    )
+    coin_guard_spend_per_minute: int = Field(
+        default=30,
+        alias="COIN_GUARD_SPEND_PER_MINUTE",
+        description="Max CoinGuard hold/spend transactions per account per window.",
+    )
+    coin_guard_rate_window_seconds: int = Field(
+        default=60,
+        alias="COIN_GUARD_RATE_WINDOW_SECONDS",
+        description="Sliding/fixed window length for CoinGuard spend rate limits.",
+    )
     security_api_key_rate_limit_per_minute: int = Field(
         default=300,
         alias="SECURITY_API_KEY_RATE_LIMIT_PER_MINUTE",
@@ -1419,6 +1434,15 @@ class Settings(BaseSettings):
     )
     # 1 = НДС не облагается (typical for digital services; adjust per your tax setup)
     yookassa_vat_code: int = Field(default=1, alias="YOOKASSA_VAT_CODE")
+    yookassa_webhook_ip_enforcement: bool = Field(
+        default=True,
+        alias="YOOKASSA_WEBHOOK_IP_ENFORCEMENT",
+        description=(
+            "Reject YooKassa webhooks (coin packs and tariffs) whose source IP is "
+            "outside the official notification ranges. Forced on in production; "
+            "disable only for local tests."
+        ),
+    )
 
     # Selectel S3-compatible object storage
     s3_endpoint_url: str | None = Field(default=None, alias="S3_ENDPOINT_URL")
@@ -1973,6 +1997,9 @@ class Settings(BaseSettings):
         "slowapi_three_d_per_minute",
         "idempotency_processing_ttl_seconds",
         "idempotency_response_ttl_seconds",
+        "coin_guard_max_operation_coins",
+        "coin_guard_spend_per_minute",
+        "coin_guard_rate_window_seconds",
         "security_auto_block_threat_score",
         "security_ip_block_ttl_seconds",
         "security_max_json_body_bytes",
@@ -2314,6 +2341,19 @@ class Settings(BaseSettings):
         if any(header.strip() == "*" for header in self.cors_allow_headers.split(",")):
             raise ValueError(
                 "CORS_ALLOW_HEADERS must not contain '*' in production."
+            )
+
+        if not self.yookassa_webhook_ip_enforcement:
+            raise ValueError(
+                "YOOKASSA_WEBHOOK_IP_ENFORCEMENT must be true in production."
+            )
+
+        webhook_url = (self.telegram_bot_webhook_url or "").strip()
+        webhook_secret = (self.telegram_bot_webhook_secret or "").strip()
+        if webhook_url and not webhook_secret:
+            raise ValueError(
+                "TELEGRAM_BOT_WEBHOOK_SECRET must be set in production when "
+                "TELEGRAM_BOT_WEBHOOK_URL is configured."
             )
 
         return self

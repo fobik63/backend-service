@@ -11,6 +11,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies.auth import get_current_user
+from app.api.dependencies.yookassa_webhook import (
+    YOOKASSA_WEBHOOK_ACK_DETAIL,
+    log_yookassa_webhook_failure,
+    require_yookassa_webhook_source,
+)
 from app.application.payment_service import PaymentApplicationService
 from app.application.winback_service import WinbackService
 from app.core.config import get_settings
@@ -26,7 +31,6 @@ from app.models.enums import TariffCode
 from app.models.user import User
 from app.services.billing_service import (
     BillingError,
-    BillingNotFoundError,
     BillingService,
     BillingValidationError,
     DailyBonusResult,
@@ -318,57 +322,19 @@ async def create_payment(
 async def yookassa_webhook(
     payload: dict[str, Any],
     payments: PaymentApplicationService = Depends(get_payment_application_service),
+    _: None = Depends(require_yookassa_webhook_source),
 ) -> WebhookAckResponse:
     """Receive asynchronous YooKassa notifications about payment status.
 
-    Security: the webhook body is not trusted blindly. On ``payment.succeeded``
-    we re-fetch the payment from YooKassa API and only then apply billing.
+    Security: source IP must be a published YooKassa range, and every event
+    is applied only after ``Payment.find`` confirms upstream status.
     """
 
     try:
         result = await payments.process_yookassa_webhook(payload)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
-    except YooKassaConfigurationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(exc),
-        ) from exc
-    except (YooKassaUpstreamError, YooKassaError) as exc:
-        logger.exception("Failed to verify YooKassa payment webhook")
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"YooKassa verification failed: {exc}",
-        ) from exc
-    except BillingNotFoundError as exc:
-        logger.warning("Webhook for unknown payment: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(exc),
-        ) from exc
-    except BillingValidationError as exc:
-        logger.exception("Billing validation failed for webhook")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
-    except BillingError as exc:
-        logger.exception("Billing failed for webhook")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(exc),
-        ) from exc
     except Exception as exc:
-        # Invalid Decimal / unexpected payload shape from verified amount.
-        if "amount" in str(exc).lower() or isinstance(exc, (TypeError, ArithmeticError)):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid amount in verified YooKassa payment.",
-            ) from exc
-        raise
+        log_yookassa_webhook_failure(exc, scope="tariff")
+        return WebhookAckResponse(detail=YOOKASSA_WEBHOOK_ACK_DETAIL)
 
     return WebhookAckResponse(
         detail=result.detail,

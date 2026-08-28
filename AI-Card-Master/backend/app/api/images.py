@@ -11,10 +11,14 @@ from functools import lru_cache
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
+from app.api.dependencies.auth import get_current_user
+from app.application.generation_errors import GenerationSubmissionError
+from app.application.generation_image_validation import validate_image
 from app.core.config import get_settings
+from app.models.user import User
 
 logger = logging.getLogger(__name__)
 
@@ -56,9 +60,8 @@ class UploadImageResponse(BaseModel):
     file_id: str = Field(..., description="Server-side unique file identifier")
     original_filename: str = Field(..., description="Original client filename")
     stored_filename: str = Field(..., description="Stored filename on the server")
-    content_type: str = Field(..., description="Detected MIME type")
+    content_type: str = Field(..., description="MIME type from file signature")
     size_bytes: int = Field(..., description="Stored file size in bytes")
-    location: str = Field(..., description="Absolute storage path")
     public_path: str = Field(
         ...,
         description="Relative API path for referencing the uploaded asset",
@@ -139,12 +142,13 @@ async def get_uploaded_image(filename: str):
 )
 async def upload_image(
     file: UploadFile = File(..., description="Product image file"),
+    current_user: User = Depends(get_current_user),
 ) -> UploadImageResponse:
-    """Upload a single image file with MIME allowlist and size cap."""
+    """Upload a single image file with signature checks and size cap."""
 
+    _ = current_user  # auth gate; ownership column not on uploads yet
     file_uuid = uuid4().hex
     stored_file_path: Path | None = None
-    total_size = 0
     uploads_dir = get_uploads_dir()
     max_bytes = _max_upload_bytes()
 
@@ -155,51 +159,49 @@ async def upload_image(
                 detail="Filename is required.",
             )
 
-        if file.content_type not in ALLOWED_IMAGE_TYPES:
-            raise HTTPException(
-                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-                detail=(
-                    "Unsupported image type. Allowed types: "
-                    f"{', '.join(sorted(ALLOWED_IMAGE_TYPES))}."
-                ),
-            )
+        payload = bytearray()
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            payload.extend(chunk)
+            if len(payload) > max_bytes:
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=(
+                        "File is too large. Maximum allowed size is "
+                        f"{max_bytes // (1024 * 1024)} MB."
+                    ),
+                )
 
-        extension = ALLOWED_IMAGE_TYPES[file.content_type]
-        stored_filename = f"{file_uuid}{extension}"
-        stored_file_path = uploads_dir / stored_filename
-
-        with stored_file_path.open("wb") as buffer:
-            while True:
-                chunk = await file.read(1024 * 1024)
-                if not chunk:
-                    break
-
-                total_size += len(chunk)
-                if total_size > max_bytes:
-                    raise HTTPException(
-                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                        detail=(
-                            "File is too large. Maximum allowed size is "
-                            f"{max_bytes // (1024 * 1024)} MB."
-                        ),
-                    )
-
-                buffer.write(chunk)
-
-        if total_size == 0:
+        if not payload:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Uploaded file is empty.",
             )
+
+        try:
+            mime_type, extension = await validate_image(
+                bytes(payload),
+                claimed_content_type=None,
+            )
+        except GenerationSubmissionError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail=str(exc),
+            ) from exc
+
+        stored_filename = f"{file_uuid}{extension}"
+        stored_file_path = uploads_dir / stored_filename
+        stored_file_path.write_bytes(payload)
 
         return UploadImageResponse(
             success=True,
             file_id=file_uuid,
             original_filename=file.filename,
             stored_filename=stored_filename,
-            content_type=file.content_type,
-            size_bytes=total_size,
-            location=str(stored_file_path.resolve()),
+            content_type=mime_type,
+            size_bytes=len(payload),
             public_path=f"/api/v1/images/files/{stored_filename}",
         )
 

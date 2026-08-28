@@ -93,6 +93,8 @@ def test_protected_path_matching() -> None:
     assert _is_protected_path("/api/v1/bulk-generations")
     assert _is_protected_path("/api/v1/payments/create")
     assert _is_protected_path("/api/v1/3d/generate")
+    assert _is_protected_path("/api/ai/generate-description")
+    assert _is_protected_path("/api/v1/billing/create-payment")
     assert not _is_protected_path("/api/v1/payments/balance")
     assert not _is_protected_path("/api/v1/auth/login")
     assert not _is_protected_path("/health")
@@ -213,3 +215,41 @@ def test_get_is_not_idempotent_gated(
     assert client.get("/api/v1/generations/history", headers=headers).status_code == 200
     assert client.get("/api/v1/generations/history", headers=headers).status_code == 200
     assert len(hits) == 2
+
+
+def test_payload_change_does_not_replay(
+    idempotent_app: tuple[FastAPI, list[int]],
+) -> None:
+    app, hits = idempotent_app
+    client = TestClient(app)
+    headers = {"X-Idempotency-Key": "client-key-001"}
+    first = client.post("/api/v1/generations", headers=headers, json={"title": "a"})
+    second = client.post("/api/v1/generations", headers=headers, json={"title": "b"})
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.headers.get("X-Idempotency-Replayed") is None
+    assert len(hits) == 2
+
+
+def test_redis_unavailable_fails_closed(
+    idempotent_app: tuple[FastAPI, list[int]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.infrastructure.redis import RedisUnavailableError
+
+    async def _boom(**_kwargs: object) -> bool:
+        raise RedisUnavailableError("down")
+
+    monkeypatch.setattr(
+        "app.core.idempotency_middleware.claim_processing",
+        _boom,
+    )
+    app, hits = idempotent_app
+    client = TestClient(app)
+    response = client.post(
+        "/api/v1/generations",
+        headers={"X-Idempotency-Key": "client-key-001"},
+    )
+    assert response.status_code == 503
+    assert response.json()["code"] == "IDEMPOTENCY_UNAVAILABLE"
+    assert hits == []

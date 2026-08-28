@@ -296,6 +296,32 @@ class BillingService:
         )
         await self._session.flush()
 
+    async def merge_idempotency_response_body(
+        self,
+        *,
+        user_id: UUID,
+        idempotency_key: str,
+        extra: Mapping[str, Any],
+    ) -> None:
+        """Attach extra fields (e.g. cached LLM output) to a ledger row."""
+
+        cleaned = idempotency_key.strip()
+        if not cleaned:
+            return
+        row = await self._session.get(IdempotencyRecord, cleaned)
+        if row is None or row.user_id != user_id:
+            return
+        body = dict(row.response_body or {})
+        body.update(dict(extra))
+        row.response_body = body
+        await self._session.flush()
+        await self._cache_idempotency_redis(
+            user_id=user_id,
+            idempotency_key=cleaned,
+            response_code=int(row.response_code),
+            response_body=body,
+        )
+
     async def _cache_idempotency_redis(
         self,
         *,
@@ -390,7 +416,11 @@ class BillingService:
     ) -> Payment | None:
         """Mark payment as canceled without mutating user balance."""
 
-        payment = await self.get_payment_by_yookassa_id(yookassa_payment_id)
+        payment = await self._session.scalar(
+            select(Payment)
+            .where(Payment.yookassa_payment_id == yookassa_payment_id)
+            .with_for_update()
+        )
         if payment is None:
             return None
         if payment.status == PaymentStatus.SUCCEEDED:

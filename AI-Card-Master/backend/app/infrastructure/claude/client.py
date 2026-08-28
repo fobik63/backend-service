@@ -21,7 +21,11 @@ from pydantic import BaseModel, ValidationError
 
 from app.application.ports.circuit_breaker import CircuitBreakerPort
 from app.core.config import Settings, get_settings
-from app.core.prompt_safety import harden_system_prompt
+from app.core.prompt_safety import (
+    LlmOutputLeakError,
+    ensure_llm_output_safe,
+    harden_system_prompt,
+)
 from app.domain.ab_test import (
     AB_HYPOTHESES_JSON_SCHEMA,
     AbProductBrief,
@@ -141,6 +145,13 @@ class ClaudeConfigurationError(ClaudeIntegrationError):
 
 class ClaudeUpstreamError(ClaudeIntegrationError):
     """Upstream Anthropic request/response cannot be trusted."""
+
+
+def _reject_leaked_llm_output(value: Any) -> None:
+    try:
+        ensure_llm_output_safe(value)
+    except LlmOutputLeakError as exc:
+        raise ClaudeUpstreamError("Model output rejected by safety filter.") from exc
 
 
 class Claude47VisionClient:
@@ -1098,6 +1109,7 @@ class Claude47VisionClient:
                 status="Success",
             )
             await self._record_circuit_success(track_primary=track_primary)
+            _reject_leaked_llm_output(response.parsed_output)
             return response.parsed_output, input_tokens, output_tokens
 
         await self._record_circuit_failure(
@@ -1136,12 +1148,20 @@ class Claude47VisionClient:
         if cached is not None:
             payload_hit = cached.get("payload")
             if isinstance(payload_hit, dict):
-                logger.info(
-                    "Claude analytics cache hit operation=%s model=%s",
-                    operation,
-                    model_override or self._model,
-                )
-                return payload_hit, 0, 0
+                try:
+                    _reject_leaked_llm_output(payload_hit)
+                except ClaudeUpstreamError:
+                    logger.warning(
+                        "Dropped leaked Claude analytics cache operation=%s",
+                        operation,
+                    )
+                else:
+                    logger.info(
+                        "Claude analytics cache hit operation=%s model=%s",
+                        operation,
+                        model_override or self._model,
+                    )
+                    return payload_hit, 0, 0
 
         primary_model = (model_override or self._model).strip() or self._model
         effective_model = resolve_model_for_circuit(
@@ -1234,6 +1254,22 @@ class Claude47VisionClient:
                 model_name=effective_model,
             )
             raise ClaudeUpstreamError("Anthropic returned empty text.")
+
+        try:
+            _reject_leaked_llm_output(text)
+        except ClaudeUpstreamError as exc:
+            await self._record_usage(
+                operation=operation,
+                input_tokens=0,
+                output_tokens=0,
+                user_id=user_id,
+                job_id=job_id,
+                usage=None,
+                duration_ms=duration_ms,
+                status="Error",
+                model_name=effective_model,
+            )
+            raise ClaudeUpstreamError("Model output rejected by safety filter.") from exc
 
         try:
             parsed = extract_json_object(text)

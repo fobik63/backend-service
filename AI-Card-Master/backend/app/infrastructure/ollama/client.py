@@ -12,6 +12,11 @@ from uuid import UUID
 
 import httpx
 
+from app.core.prompt_safety import (
+    LlmOutputLeakError,
+    ensure_llm_output_safe,
+    harden_system_prompt,
+)
 from app.domain.pain_analysis import (
     PainAnalysisRequest,
     PainAnalysisResult,
@@ -86,6 +91,7 @@ class OllamaClient:
         if not self._enabled:
             raise OllamaError("Ollama client is disabled.")
 
+        system = harden_system_prompt(system)
         user_payload = user
         if schema_hint:
             user_payload = f"{user}\n\nRespond with STRICT JSON matching:\n{schema_hint}"
@@ -146,6 +152,18 @@ class OllamaClient:
                 status="Error",
             )
             raise OllamaError("Ollama returned empty message content.")
+
+        try:
+            ensure_llm_output_safe(content)
+        except LlmOutputLeakError as exc:
+            await self._record_usage(
+                operation="ollama_complete_json",
+                input_tokens=0,
+                output_tokens=0,
+                duration_ms=int((time.perf_counter() - started) * 1000),
+                status="Error",
+            )
+            raise OllamaError("Model output rejected by safety filter.") from exc
 
         parsed = _parse_json_object(content)
         prompt_est = int(payload.get("prompt_eval_count") or 0) if isinstance(payload, dict) else 0

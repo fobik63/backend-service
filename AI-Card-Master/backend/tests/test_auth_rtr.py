@@ -205,20 +205,25 @@ def test_auth_refresh_endpoint_rotation_and_reuse_lockout(rtr_client: TestClient
     )
     assert register.status_code == 201, register.text
     body = register.json()
-    refresh_token = body["tokens"]["refresh_token"]
+    set_cookie = register.headers.get("set-cookie", "")
+    assert "HttpOnly" in set_cookie
+    assert "samesite=lax" in set_cookie.lower()
+    assert body["tokens"]["refresh_token"] == ""
+    refresh_token = register.cookies.get("refresh_token")
+    assert refresh_token
 
-    first_refresh = rtr_client.post(
-        "/api/v1/auth/refresh",
-        json={"refresh_token": refresh_token},
-    )
+    first_refresh = rtr_client.post("/api/v1/auth/refresh")
     assert first_refresh.status_code == 200, first_refresh.text
     rotated = first_refresh.json()["tokens"]
-    assert rotated["refresh_token"] != refresh_token
+    rotated_refresh = first_refresh.cookies.get("refresh_token")
+    assert rotated_refresh
+    assert rotated_refresh != refresh_token
     assert rotated["access_token"]
+    assert rotated["refresh_token"] == ""
 
     original_claims = decode_and_validate_token(refresh_token, expected_type="refresh")
     rotated_claims = decode_and_validate_token(
-        rotated["refresh_token"], expected_type="refresh"
+        rotated_refresh, expected_type="refresh"
     )
     assert rotated_claims["family_id"] == original_claims["family_id"]
     assert rotated_claims["jti"] != original_claims["jti"]
@@ -234,7 +239,7 @@ def test_auth_refresh_endpoint_rotation_and_reuse_lockout(rtr_client: TestClient
     # Successor token from the burned family is also rejected.
     successor = rtr_client.post(
         "/api/v1/auth/refresh",
-        json={"refresh_token": rotated["refresh_token"]},
+        json={"refresh_token": rotated_refresh},
     )
     assert successor.status_code == 401
     assert successor.json()["detail"] == FAMILY_REUSE_DETAIL

@@ -37,6 +37,8 @@ _MUTATING_METHODS = frozenset({"POST", "PUT"})
 
 # Coin-charging / generation-task surfaces (method filter already applied).
 _PROTECTED_PATH_PREFIXES: tuple[str, ...] = (
+    "/api/ai",
+    "/api/v1/billing",
     "/api/v1/generations",
     "/api/v1/bulk-generations",
     "/api/v1/smart-variants",
@@ -101,7 +103,8 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
                 },
             )
 
-        scope = _build_scope(request)
+        body = await request.body()
+        scope = _build_scope(request, body)
         try:
             owned = await _try_claim_or_replay(
                 scope=scope,
@@ -112,10 +115,17 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
             return replay.response
         except RedisUnavailableError:
             logger.warning(
-                "Idempotency Redis unavailable; failing open",
+                "Idempotency Redis unavailable; failing closed",
                 exc_info=True,
             )
-            return await call_next(request)
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content={
+                    "success": False,
+                    "code": "IDEMPOTENCY_UNAVAILABLE",
+                    "detail": "Сервис временно недоступен. Повторите запрос позже.",
+                },
+            )
 
         if not owned:
             return _conflict_in_progress()
@@ -216,15 +226,20 @@ def _is_valid_key(key: str) -> bool:
     return bool(_KEY_PATTERN.fullmatch(key))
 
 
-def _build_scope(request: Request) -> str:
-    """Scope keys by route + caller fingerprint to avoid cross-user collisions."""
+def _build_scope(request: Request, body: bytes) -> str:
+    """Scope keys as ``user_id + route + sha256(body)`` so a payload change is a new key."""
 
     path = (request.url.path.rstrip("/") or "/").lower()
-    auth = request.headers.get("authorization") or request.headers.get("x-api-key") or ""
-    fingerprint = hashlib.sha256(
-        f"{request.method}:{path}:{auth}".encode()
-    ).hexdigest()[:32]
-    return fingerprint
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        auth = (
+            request.headers.get("authorization")
+            or request.headers.get("x-api-key")
+            or ""
+        )
+        user_id = hashlib.sha256(auth.encode()).hexdigest() if auth else "anon"
+    body_hash = hashlib.sha256(body).hexdigest()
+    return hashlib.sha256(f"{user_id}:{path}:{body_hash}".encode()).hexdigest()[:32]
 
 
 def _replay_completed(record: dict[str, object]) -> Response:

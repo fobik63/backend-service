@@ -15,6 +15,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.core.prompt_safety import fence_untrusted_text
+
 
 class StrictDomainModel(BaseModel):
     """Strict Pydantic v2 base for Zero-Hallucination payloads."""
@@ -243,13 +245,15 @@ def build_cross_check_user_prompt(
         "specs": specs[:40],
         "images_attached": image_count,
     }
+    listing_blob = json.dumps(payload, ensure_ascii=False)
     return (
         "Zero-Hallucination Cross-Check (двойная проверка).\n"
         "Сверь OCR-данные с картинок конкурента с его текстовым описанием.\n"
         "Если найдены противоречия — перечисли их в contradictions "
         "(severity=hard|soft).\n"
         "Сначала reasoning_trace, затем строго JSON по схеме.\n"
-        f"Входные текстовые данные:\n{json.dumps(payload, ensure_ascii=False)}"
+        "Входные текстовые данные:\n"
+        f"{fence_untrusted_text(listing_blob, label='listing_text', max_length=40_000)}"
     )
 
 

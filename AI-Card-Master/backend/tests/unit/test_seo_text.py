@@ -11,6 +11,7 @@ import httpx
 import pytest
 
 from app.application.seo_text_service import SEO_TEXT_COST_COINS, SeoTextService
+from app.domain.llm_coin_guard import InsufficientCoinsError
 from app.domain.seo_text import (
     SeoTargetPlatform,
     SeoTextConfigurationError,
@@ -80,10 +81,10 @@ async def test_seo_text_service_charges_one_coin_and_returns_usage() -> None:
     result = await service.generate(user_id=user_id, request=_request())
 
     billing.debit_coins_in_transaction.assert_awaited_once()
-    assert billing.debit_coins_in_transaction.await_args.kwargs["amount"] == 1
+    assert billing.debit_coins_in_transaction.await_args.kwargs["amount"] == 2
     session.commit.assert_awaited_once()
     billing.refund_coins_in_transaction.assert_not_awaited()
-    assert result.coins_charged == 1
+    assert result.coins_charged == 2
     assert result.new_balance == 11
     assert result.usage.total_tokens == 300
     assert len(result.content.benefits) == 4
@@ -134,7 +135,7 @@ async def test_seo_text_service_insufficient_balance() -> None:
         billing=billing,
         charge_coins=True,
     )
-    with pytest.raises(BillingValidationError):
+    with pytest.raises(InsufficientCoinsError):
         await service.generate(user_id=user_id, request=_request())
     provider.generate.assert_not_called()
 

@@ -7,7 +7,6 @@ from typing import Any, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-
 WB_DESCRIPTION_MAX_CHARS = 5000
 OZON_DESCRIPTION_MAX_CHARS = 10_000
 TITLE_MAX_CHARS = 180
@@ -126,6 +125,16 @@ class SeoTextGenerateResult(DomainModel):
     usage: SeoTokenUsage
     coins_charged: int = Field(..., ge=0)
     new_balance: int = Field(..., ge=0)
+
+
+class SeoTextBatchGenerateResult(DomainModel):
+    """Partial batch outcome when coins run out mid-generation."""
+
+    items: tuple[SeoTextGenerateResult, ...] = ()
+    coins_charged: int = Field(..., ge=0)
+    new_balance: int = Field(..., ge=0)
+    skipped_count: int = Field(default=0, ge=0)
+    stopped_reason: str | None = None
 
 
 def description_limit_for(platform: SeoTargetPlatform) -> int:

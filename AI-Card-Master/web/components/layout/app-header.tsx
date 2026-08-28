@@ -2,6 +2,7 @@
 
 import {
   ChevronDown,
+  Coins,
   FolderKanban,
   Home,
   Languages,
@@ -23,6 +24,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { formatCoins } from "@/lib/billing/coin-pricing"
 import { useI18n, type Locale } from "@/lib/i18n"
 import { cn } from "@/lib/utils"
 
@@ -40,6 +42,8 @@ type AppHeaderProps = {
   /** Hide breadcrumbs (useful in editor). */
   showBreadcrumbs?: boolean
   className?: string
+  coins?: number
+  onBuyCoins?: () => void
 }
 
 const DEFAULT_USER: AppHeaderUser = {
@@ -62,6 +66,8 @@ function AppHeader({
   trailing,
   showBreadcrumbs = true,
   className,
+  coins,
+  onBuyCoins,
 }: AppHeaderProps) {
   const router = useRouter()
   const pathname = usePathname()
@@ -155,6 +161,24 @@ function AppHeader({
 
       <div className="ml-auto flex items-center gap-1 sm:gap-2">
         {trailing}
+
+        {typeof coins === "number" && onBuyCoins ? (
+          <button
+            type="button"
+            onClick={onBuyCoins}
+            className={cn(
+              "inline-flex h-11 min-w-11 cursor-pointer items-center gap-1.5 rounded-lg px-2.5 text-sm text-foreground",
+              "transition-colors hover:bg-muted outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            )}
+            aria-label={`${t("nav.topUp")}, ${formatCoins(coins)} ${t("nav.coins")}`}
+          >
+            <Coins className="size-4 text-amber" aria-hidden />
+            <span className="tabular-nums">{formatCoins(coins)}</span>
+            <span className="hidden text-text-muted sm:inline">
+              {t("nav.topUp")}
+            </span>
+          </button>
+        ) : null}
 
         <DropdownMenu>
           <DropdownMenuTrigger

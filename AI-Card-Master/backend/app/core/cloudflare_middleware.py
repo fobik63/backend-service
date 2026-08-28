@@ -12,6 +12,10 @@ from starlette.responses import Response
 from app.core.client_ip import is_cloudflare_edge_ip, resolve_client_ip
 from app.core.config import get_settings
 from app.core.security_headers import apply_security_headers
+from app.core.yookassa_webhook_ips import (
+    is_yookassa_notification_ip,
+    is_yookassa_webhook_path,
+)
 from app.services.dead_mans_switch import get_dead_mans_switch
 
 
@@ -37,8 +41,13 @@ class CloudflareProtectionMiddleware(BaseHTTPMiddleware):
         if settings.cloudflare_enabled and settings.cloudflare_enforce_edge:
             if path not in {"/health", "/health/live", "/healthz", "/healthz/deep", "/readyz"}:
                 peer = request.client.host if request.client is not None else ""
+                yookassa_direct = (
+                    is_yookassa_webhook_path(path)
+                    and bool(peer)
+                    and is_yookassa_notification_ip(peer)
+                )
                 vpn_ok = get_dead_mans_switch().peer_is_vpn_allowlisted(peer or None)
-                if not vpn_ok:
+                if not vpn_ok and not yookassa_direct:
                     has_cf_ray = bool((request.headers.get("CF-Ray") or "").strip())
                     has_cf_ip = bool(
                         (request.headers.get("CF-Connecting-IP") or "").strip()

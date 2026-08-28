@@ -11,6 +11,7 @@ from app.api.analytics import router as analytics_router
 from app.api.auth import auth_alias_router
 from app.api.auth import router as auth_router
 from app.api.bg_removal import router as bg_removal_router
+from app.api.billing import router as billing_router
 from app.api.brand_dna import router as brand_dna_router
 from app.api.brand_loras import router as brand_loras_router
 from app.api.bulk_generations import router as bulk_generations_router
@@ -35,6 +36,7 @@ from app.api.payments import router as payments_router
 from app.api.referrals import router as referrals_router
 from app.api.relighting import router as relighting_router
 from app.api.smart_variants import router as smart_variants_router
+from app.api.telegram_bot import router as telegram_bot_router
 from app.api.templates import designs_router, templates_router
 from app.api.text_generation import router as text_generation_router
 from app.api.three_d import router as three_d_router
@@ -45,7 +47,6 @@ from app.api.visual_audit import router as visual_audit_router
 from app.api.webhooks import midjourney_webhook_router
 from app.api.winback import router as winback_router
 from app.api.workspaces import router as workspaces_router
-from app.api.telegram_bot import router as telegram_bot_router
 
 __all__ = [
     "account_router",
@@ -59,6 +60,7 @@ __all__ = [
     "auth_alias_router",
     "auth_router",
     "bg_removal_router",
+    "billing_router",
     "brand_loras_router",
     "brand_dna_router",
     "bulk_generations_router",

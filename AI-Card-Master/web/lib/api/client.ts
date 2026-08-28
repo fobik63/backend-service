@@ -37,6 +37,7 @@ declare module "axios" {
 
 export const apiClient = axios.create({
   baseURL: resolvedBaseUrl,
+  withCredentials: true,
   headers: {
     "Content-Type": "application/json",
   },
@@ -49,20 +50,9 @@ apiClient.interceptors.request.use((config) => {
     resolveApiBaseUrl(API_BASE_URL) || DEFAULT_API_BASE_URL;
 
   if (typeof window !== "undefined") {
-    const token =
-      window.localStorage.getItem("access_token") ||
-      document.cookie
-        .split("; ")
-        .find((row) => row.startsWith("access_token="))
-        ?.split("=")
-        .slice(1)
-        .join("=");
+    const token = window.localStorage.getItem("access_token");
     if (token) {
-      try {
-        config.headers.Authorization = `Bearer ${decodeURIComponent(token)}`;
-      } catch {
-        config.headers.Authorization = `Bearer ${token}`;
-      }
+      config.headers.Authorization = `Bearer ${token}`;
     }
   }
   return config;

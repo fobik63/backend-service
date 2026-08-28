@@ -28,6 +28,7 @@ from app.models import bulk_generation as _bulk_generation  # noqa: F401
 from app.models import brand_lora as _brand_lora  # noqa: F401
 from app.models import claude_reasoning as _claude_reasoning  # noqa: F401
 from app.models import coin_hold as _coin_hold  # noqa: F401
+from app.models import coin_purchase as _coin_purchase  # noqa: F401
 from app.models import competitor_audit as _competitor_audit  # noqa: F401
 from app.models import eye_of_god as _eye_of_god  # noqa: F401
 from app.models import generation as _generation  # noqa: F401
